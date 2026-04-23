@@ -2,6 +2,9 @@ import SwiftUI
 
 struct DispatchQueueView: View {
     @ObservedObject var store: ForemanSidebarStore
+    let onSend: (DispatchQueueItem) -> Void
+    let onSendAndNext: (DispatchQueueItem) -> Void
+    let onSkip: (DispatchQueueItem) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -29,6 +32,19 @@ struct DispatchQueueView: View {
                             .font(.system(size: 12))
                             .foregroundStyle(.primary)
                             .fixedSize(horizontal: false, vertical: true)
+
+                        HStack(spacing: 8) {
+                            Button("Send") { onSend(item) }
+                                .disabled(item.state != .pending)
+
+                            Button("Send + Next") { onSendAndNext(item) }
+                                .disabled(item.state != .pending)
+
+                            Button("Skip") { onSkip(item) }
+                                .disabled(item.state != .pending)
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
                     }
                     .padding(10)
                     .frame(maxWidth: .infinity, alignment: .leading)

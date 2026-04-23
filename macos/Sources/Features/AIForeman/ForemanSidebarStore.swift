@@ -94,4 +94,14 @@ final class ForemanSidebarStore: ObservableObject {
         selectedTerminalID = nextTerminalID
         return nextTerminalID
     }
+
+    func skipAndAdvance(currentTerminalID: String) -> String? {
+        if let currentIndex = dispatchQueue.firstIndex(where: { $0.terminalID == currentTerminalID && $0.state == .pending }) {
+            dispatchQueue[currentIndex].state = .skipped
+        }
+
+        let nextTerminalID = dispatchQueue.first(where: { $0.state == .pending })?.terminalID
+        selectedTerminalID = nextTerminalID
+        return nextTerminalID
+    }
 }
