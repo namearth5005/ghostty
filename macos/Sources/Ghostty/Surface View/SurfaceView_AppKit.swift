@@ -234,43 +234,13 @@ extension Ghostty {
             // Our cache of screen data
             cachedScreenContents = .init(duration: .milliseconds(500)) { [weak self] in
                 guard let self else { return "" }
-                guard let surface = self.surface else { return "" }
-                var text = ghostty_text_s()
-                let sel = ghostty_selection_s(
-                    top_left: ghostty_point_s(
-                        tag: GHOSTTY_POINT_SCREEN,
-                        coord: GHOSTTY_POINT_COORD_TOP_LEFT,
-                        x: 0,
-                        y: 0),
-                    bottom_right: ghostty_point_s(
-                        tag: GHOSTTY_POINT_SCREEN,
-                        coord: GHOSTTY_POINT_COORD_BOTTOM_RIGHT,
-                        x: 0,
-                        y: 0),
-                    rectangle: false)
-                guard ghostty_surface_read_text(surface, sel, &text) else { return "" }
-                defer { ghostty_surface_free_text(surface, &text) }
-                return String(cString: text.text)
+                guard let surfaceModel = self.surfaceModel else { return "" }
+                return surfaceModel.screenText()
             }
             cachedVisibleContents = .init(duration: .milliseconds(500)) { [weak self] in
                 guard let self else { return "" }
-                guard let surface = self.surface else { return "" }
-                var text = ghostty_text_s()
-                let sel = ghostty_selection_s(
-                    top_left: ghostty_point_s(
-                        tag: GHOSTTY_POINT_VIEWPORT,
-                        coord: GHOSTTY_POINT_COORD_TOP_LEFT,
-                        x: 0,
-                        y: 0),
-                    bottom_right: ghostty_point_s(
-                        tag: GHOSTTY_POINT_VIEWPORT,
-                        coord: GHOSTTY_POINT_COORD_BOTTOM_RIGHT,
-                        x: 0,
-                        y: 0),
-                    rectangle: false)
-                guard ghostty_surface_read_text(surface, sel, &text) else { return "" }
-                defer { ghostty_surface_free_text(surface, &text) }
-                return String(cString: text.text)
+                guard let surfaceModel = self.surfaceModel else { return "" }
+                return surfaceModel.visibleText()
             }
 
             // Set a timer to show the ghost emoji after 500ms if no title is set
@@ -2225,6 +2195,47 @@ extension Ghostty.SurfaceView {
     }
 
 }
+
+#if canImport(AppKit)
+extension Ghostty.SurfaceView: TerminalSnapshotSource {
+    var terminalSnapshotTerminalID: String { id.uuidString }
+
+    var terminalSnapshotWindowID: String {
+        guard let window else { return terminalSnapshotTerminalID }
+        if let identifier = window.identifier?.rawValue, !identifier.isEmpty {
+            return identifier
+        }
+        return "window-\(window.windowNumber)"
+    }
+
+    var terminalSnapshotTabID: String {
+        guard let window else { return terminalSnapshotTerminalID }
+        guard let tabGroup = window.tabGroup,
+              let tabIndex = tabGroup.windows.firstIndex(of: window) else {
+            return "tab-\(window.windowNumber)"
+        }
+        return "tab-\(window.windowNumber)-\(tabIndex)"
+    }
+
+    var terminalSnapshotTitle: String { title }
+
+    var terminalSnapshotWorkingDirectory: String? { pwd }
+
+    var terminalSnapshotIsFocused: Bool { focused }
+
+    var terminalSnapshotVisibleText: String { cachedVisibleContents.get() }
+
+    var terminalSnapshotRecentScrollbackLines: [String] {
+        Array(cachedScreenContents
+            .get()
+            .split(separator: "\n")
+            .map(String.init)
+            .suffix(250))
+    }
+
+    var terminalSnapshotLastInputPreview: String? { nil }
+}
+#endif
 
 /// Caches a value for some period of time, evicting it automatically when that time expires.
 /// We use this to cache our surface content. This probably should be extracted some day

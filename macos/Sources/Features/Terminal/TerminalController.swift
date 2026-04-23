@@ -1607,6 +1607,42 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
     }
 }
 
+protocol TerminalSnapshotSource {
+    var terminalSnapshotTerminalID: String { get }
+    var terminalSnapshotWindowID: String { get }
+    var terminalSnapshotTabID: String { get }
+    var terminalSnapshotTitle: String { get }
+    var terminalSnapshotWorkingDirectory: String? { get }
+    var terminalSnapshotIsFocused: Bool { get }
+    var terminalSnapshotVisibleText: String { get }
+    var terminalSnapshotRecentScrollbackLines: [String] { get }
+    var terminalSnapshotLastInputPreview: String? { get }
+}
+
+extension TerminalSnapshotSource {
+    @MainActor
+    func makeTerminalSnapshot() -> TerminalSnapshot {
+        TerminalSnapshot.makePreview(
+            terminalID: terminalSnapshotTerminalID,
+            windowID: terminalSnapshotWindowID,
+            tabID: terminalSnapshotTabID,
+            title: terminalSnapshotTitle,
+            cwd: terminalSnapshotWorkingDirectory,
+            isFocused: terminalSnapshotIsFocused,
+            visibleText: terminalSnapshotVisibleText,
+            recentScrollbackLines: terminalSnapshotRecentScrollbackLines,
+            lastInputPreview: terminalSnapshotLastInputPreview
+        )
+    }
+}
+
+extension TerminalController {
+    @MainActor
+    func captureTerminalSnapshot() -> TerminalSnapshot? {
+        focusedSurface?.makeTerminalSnapshot()
+    }
+}
+
 // MARK: NSMenuItemValidation
 
 extension TerminalController {

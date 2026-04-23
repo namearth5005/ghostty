@@ -169,5 +169,32 @@ extension Ghostty {
                 ghostty_surface_binding_action(surface, cString, UInt(len - 1))
             }
         }
+
+        func screenText() -> String {
+            Self.readText(surface: surface, tag: GHOSTTY_POINT_SCREEN)
+        }
+
+        func visibleText() -> String {
+            Self.readText(surface: surface, tag: GHOSTTY_POINT_VIEWPORT)
+        }
+
+        private static func readText(surface: ghostty_surface_t, tag: ghostty_point_tag_e) -> String {
+            var text = ghostty_text_s()
+            let selection = ghostty_selection_s(
+                top_left: ghostty_point_s(
+                    tag: tag,
+                    coord: GHOSTTY_POINT_COORD_TOP_LEFT,
+                    x: 0,
+                    y: 0),
+                bottom_right: ghostty_point_s(
+                    tag: tag,
+                    coord: GHOSTTY_POINT_COORD_BOTTOM_RIGHT,
+                    x: 0,
+                    y: 0),
+                rectangle: false)
+            guard ghostty_surface_read_text(surface, selection, &text) else { return "" }
+            defer { ghostty_surface_free_text(surface, &text) }
+            return String(cString: text.text)
+        }
     }
 }
