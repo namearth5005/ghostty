@@ -1653,6 +1653,27 @@ extension TerminalController {
         guard let focusedSurface else { return nil }
         return captureTerminalSnapshot(for: focusedSurface)
     }
+
+    @MainActor
+    func sendForemanText(_ text: String, to terminalID: String) -> Bool {
+        guard let surfaceView = surfaceTree.first(where: { $0.id.uuidString == terminalID }),
+              let surfaceModel = surfaceView.surfaceModel else {
+            return false
+        }
+
+        surfaceModel.sendText(text)
+        return true
+    }
+
+    @MainActor
+    func focusTerminal(withID terminalID: String) -> Bool {
+        guard let surfaceView = surfaceTree.first(where: { $0.id.uuidString == terminalID }) else {
+            return false
+        }
+
+        focusSurface(surfaceView)
+        return true
+    }
 }
 
 // MARK: NSMenuItemValidation

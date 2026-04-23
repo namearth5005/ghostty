@@ -108,6 +108,7 @@ class AppDelegate: NSObject,
         guard let aiForemanAPIKey, !aiForemanAPIKey.isEmpty else { return nil }
         return ForemanService(client: OpenAIClient(apiKey: aiForemanAPIKey))
     }()
+    lazy var dispatchQueueCoordinator = DispatchQueueCoordinator()
 
     /// The current state of the quick terminal.
     private var quickTerminalControllerState: QuickTerminalState = .uninitialized
@@ -155,6 +156,8 @@ class AppDelegate: NSObject,
 
     /// The observer for the app appearance.
     private var appearanceObserver: NSKeyValueObservation?
+
+    private var aiForemanRefreshTimer: Timer?
 
     /// Signals
     private var signals: [DispatchSourceSignal] = []
@@ -228,6 +231,16 @@ class AppDelegate: NSObject,
 
         // Register our service provider. This must happen after everything is initialized.
         NSApp.servicesProvider = ServiceProvider()
+
+        aiForemanRefreshTimer = Timer.scheduledTimer(
+            withTimeInterval: 2.0,
+            repeats: true
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.refreshAIForemanSidebar()
+            }
+        }
+        refreshAIForemanSidebar()
 
         // This registers the Ghostty => Services menu to exist.
         NSApp.servicesMenu = menuServices
@@ -1099,6 +1112,74 @@ extension AppDelegate {
     /// This is called for the dock right-click menu.
     func applicationDockMenu(_ sender: NSApplication) -> NSMenu? {
         return dockMenu
+    }
+
+    @MainActor
+    func sendForemanQueueItem(_ item: DispatchQueueItem, store: ForemanSidebarStore, advance: Bool) {
+        guard !dispatchQueueCoordinator.requiresConfirmation(item) else { return }
+        guard let controller = terminalController(for: item.terminalID) else { return }
+        guard dispatchQueueCoordinator.send(item, through: controller) else { return }
+
+        let nextTerminalID = store.sendAndAdvance(currentTerminalID: item.terminalID)
+        if advance, let nextTerminalID, let nextController = terminalController(for: nextTerminalID) {
+            _ = nextController.focusTerminal(withID: nextTerminalID)
+        }
+
+        refreshAIForemanSidebar()
+    }
+
+    @MainActor
+    func skipForemanQueueItem(_ item: DispatchQueueItem, store: ForemanSidebarStore) {
+        _ = store.skipAndAdvance(currentTerminalID: item.terminalID)
+        refreshAIForemanSidebar()
+    }
+
+    @MainActor
+    private func refreshAIForemanSidebar() {
+        for controller in TerminalController.all {
+            let snapshots = controller.captureTerminalSnapshots()
+            controller.foremanSidebarStore.terminalRows = snapshots.map { snapshot in
+                TerminalSummaryRowModel(
+                    terminalID: snapshot.terminalID,
+                    title: snapshot.title,
+                    cwd: snapshot.cwd,
+                    state: snapshotState(for: snapshot),
+                    summary: snapshotSummary(for: snapshot),
+                    isFocused: snapshot.isFocused
+                )
+            }
+
+            if controller.foremanSidebarStore.selectedTerminalID == nil {
+                controller.foremanSidebarStore.selectedTerminalID =
+                    controller.foremanSidebarStore.dispatchQueue.first(where: { $0.state == .pending })?.terminalID
+                    ?? snapshots.first(where: { $0.isFocused })?.terminalID
+                    ?? snapshots.first?.terminalID
+            }
+        }
+    }
+
+    @MainActor
+    private func terminalController(for terminalID: String) -> TerminalController? {
+        TerminalController.all.first(where: { controller in
+            controller.surfaceTree.contains(where: { $0.id.uuidString == terminalID })
+        })
+    }
+
+    private func snapshotState(for snapshot: TerminalSnapshot) -> String {
+        if snapshot.signals.likelyErrorState { return "blocked" }
+        if snapshot.signals.likelyLongRunning { return "running" }
+        if snapshot.signals.likelyWaitingForInput { return "waiting" }
+        if snapshot.signals.likelyTUI { return "unsupported" }
+        return "idle"
+    }
+
+    private func snapshotSummary(for snapshot: TerminalSnapshot) -> String {
+        let lines = snapshot.visibleText
+            .split(separator: "\n")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+
+        return lines.last ?? "Waiting for terminal output."
     }
 
     private func reloadDockMenu() {

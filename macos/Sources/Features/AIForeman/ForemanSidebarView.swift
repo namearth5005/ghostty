@@ -36,7 +36,18 @@ struct ForemanSidebarView: View {
                         }
                     }
 
-                    DispatchQueueView(store: store)
+                    DispatchQueueView(
+                        store: store,
+                        onSend: { item in
+                            (NSApp.delegate as? AppDelegate)?.sendForemanQueueItem(item, store: store, advance: false)
+                        },
+                        onSendAndNext: { item in
+                            (NSApp.delegate as? AppDelegate)?.sendForemanQueueItem(item, store: store, advance: true)
+                        },
+                        onSkip: { item in
+                            (NSApp.delegate as? AppDelegate)?.skipForemanQueueItem(item, store: store)
+                        }
+                    )
                 }
                 .padding(16)
             }
