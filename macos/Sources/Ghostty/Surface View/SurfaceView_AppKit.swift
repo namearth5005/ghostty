@@ -2198,39 +2198,35 @@ extension Ghostty.SurfaceView {
 
 #if canImport(AppKit)
 extension Ghostty.SurfaceView: TerminalSnapshotSource {
+    private var terminalSnapshotController: BaseTerminalController? {
+        window?.windowController as? BaseTerminalController
+    }
+
     var terminalSnapshotTerminalID: String { id.uuidString }
 
     var terminalSnapshotWindowID: String {
-        guard let window else { return terminalSnapshotTerminalID }
-        if let identifier = window.identifier?.rawValue, !identifier.isEmpty {
-            return identifier
-        }
-        return "window-\(window.windowNumber)"
+        guard let controller = terminalSnapshotController else { return terminalSnapshotTerminalID }
+        return ScriptWindow.stableID(primaryController: controller)
     }
 
     var terminalSnapshotTabID: String {
-        guard let window else { return terminalSnapshotTerminalID }
-        guard let tabGroup = window.tabGroup,
-              let tabIndex = tabGroup.windows.firstIndex(of: window) else {
-            return "tab-\(window.windowNumber)"
-        }
-        return "tab-\(window.windowNumber)-\(tabIndex)"
+        guard let controller = terminalSnapshotController else { return terminalSnapshotTerminalID }
+        return ScriptTab.stableID(controller: controller)
     }
 
     var terminalSnapshotTitle: String { title }
 
     var terminalSnapshotWorkingDirectory: String? { pwd }
 
-    var terminalSnapshotIsFocused: Bool { focused }
+    var terminalSnapshotIsFocused: Bool {
+        guard let controller = terminalSnapshotController else { return focused }
+        return controller.focusedSurface === self
+    }
 
     var terminalSnapshotVisibleText: String { cachedVisibleContents.get() }
 
     var terminalSnapshotRecentScrollbackLines: [String] {
-        Array(cachedScreenContents
-            .get()
-            .split(separator: "\n")
-            .map(String.init)
-            .suffix(250))
+        Array(cachedScreenContents.get().components(separatedBy: .newlines).suffix(250))
     }
 
     var terminalSnapshotLastInputPreview: String? { nil }
