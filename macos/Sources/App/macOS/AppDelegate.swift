@@ -97,9 +97,17 @@ class AppDelegate: NSObject,
 
     /// The ghostty global state. Only one per process.
     let ghostty: Ghostty.App
+    private let aiForemanAPIKey: String?
+
+    @Published private(set) var aiForemanIsConfigured: Bool = false
 
     /// The global undo manager for app-level state such as window restoration.
     lazy var undoManager = ExpiringUndoManager()
+
+    lazy var foremanService: ForemanService? = {
+        guard let aiForemanAPIKey, !aiForemanAPIKey.isEmpty else { return nil }
+        return ForemanService(client: OpenAIClient(apiKey: aiForemanAPIKey))
+    }()
 
     /// The current state of the quick terminal.
     private var quickTerminalControllerState: QuickTerminalState = .uninitialized
@@ -156,6 +164,9 @@ class AppDelegate: NSObject,
     @MainActor private lazy var menuShortcutManager = Ghostty.MenuShortcutManager()
 
     override init() {
+        let apiKey = ProcessInfo.processInfo.environment["OPENAI_API_KEY"]
+        self.aiForemanAPIKey = apiKey
+        self.aiForemanIsConfigured = !(apiKey?.isEmpty ?? true)
 #if DEBUG
         ghostty = Ghostty.App(configPath: ProcessInfo.processInfo.environment["GHOSTTY_CONFIG_PATH"])
 #else
