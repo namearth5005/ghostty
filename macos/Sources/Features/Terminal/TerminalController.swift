@@ -1638,8 +1638,20 @@ extension TerminalSnapshotSource {
 
 extension TerminalController {
     @MainActor
+    func captureTerminalSnapshots() -> [TerminalSnapshot] {
+        surfaceTree.map { $0.makeTerminalSnapshot() }
+    }
+
+    @MainActor
+    func captureTerminalSnapshot(for surfaceView: Ghostty.SurfaceView) -> TerminalSnapshot? {
+        guard surfaceTree.contains(surfaceView) else { return nil }
+        return surfaceView.makeTerminalSnapshot()
+    }
+
+    @MainActor
     func captureTerminalSnapshot() -> TerminalSnapshot? {
-        focusedSurface?.makeTerminalSnapshot()
+        guard let focusedSurface else { return nil }
+        return captureTerminalSnapshot(for: focusedSurface)
     }
 }
 
