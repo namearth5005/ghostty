@@ -43,17 +43,29 @@ final class ForemanSidebarStore: ObservableObject {
     @Published var dispatchQueue: [DispatchQueueItem]
     @Published var userInstruction: String
     @Published var selectedTerminalID: String?
+    @Published var isSidebarVisible: Bool
+    @Published var planSummary: String?
+    @Published var errorMessage: String?
+    @Published var isGeneratingDrafts: Bool
 
     init(
         terminalRows: [TerminalSummaryRowModel] = [],
         dispatchQueue: [DispatchQueueItem] = [],
         userInstruction: String = "",
-        selectedTerminalID: String? = nil
+        selectedTerminalID: String? = nil,
+        isSidebarVisible: Bool = false,
+        planSummary: String? = nil,
+        errorMessage: String? = nil,
+        isGeneratingDrafts: Bool = false
     ) {
         self.terminalRows = terminalRows
         self.dispatchQueue = dispatchQueue
         self.userInstruction = userInstruction
         self.selectedTerminalID = selectedTerminalID
+        self.isSidebarVisible = isSidebarVisible
+        self.planSummary = planSummary
+        self.errorMessage = errorMessage
+        self.isGeneratingDrafts = isGeneratingDrafts
     }
 
     static var preview: ForemanSidebarStore {
@@ -81,8 +93,84 @@ final class ForemanSidebarStore: ObservableObject {
                 .init(terminalID: "term-2", message: "Post a short progress update and keep running.")
             ],
             userInstruction: "Ask the blocked one to retry and the running one to report status.",
-            selectedTerminalID: "term-1"
+            selectedTerminalID: "term-1",
+            isSidebarVisible: true,
+            planSummary: "Two terminals need input."
         )
+    }
+
+    func showSidebar() {
+        isSidebarVisible = true
+    }
+
+    func hideSidebar() {
+        isSidebarVisible = false
+    }
+
+    func applySnapshots(
+        _ snapshots: [TerminalSnapshot],
+        summariesByTerminalID: [String: TerminalSummary] = [:]
+    ) {
+        terminalRows = snapshots.map { snapshot in
+            if let summary = summariesByTerminalID[snapshot.terminalID] {
+                return TerminalSummaryRowModel(
+                    terminalID: snapshot.terminalID,
+                    title: snapshot.title,
+                    cwd: snapshot.cwd,
+                    state: summary.state,
+                    summary: summary.summary,
+                    isFocused: snapshot.isFocused
+                )
+            }
+
+            return TerminalSummaryRowModel(
+                terminalID: snapshot.terminalID,
+                title: snapshot.title,
+                cwd: snapshot.cwd,
+                state: Self.snapshotState(for: snapshot),
+                summary: Self.snapshotSummary(for: snapshot),
+                isFocused: snapshot.isFocused
+            )
+        }
+
+        let nextPendingTerminalID = dispatchQueue.first(where: { $0.state == .pending })?.terminalID
+        let focusedTerminalID = snapshots.first(where: { $0.isFocused })?.terminalID
+        let firstTerminalID = snapshots.first?.terminalID
+
+        if let selectedTerminalID,
+           terminalRows.contains(where: { $0.terminalID == selectedTerminalID }) {
+            return
+        }
+
+        selectedTerminalID = nextPendingTerminalID ?? focusedTerminalID ?? firstTerminalID
+    }
+
+    func applyDispatchPlan(
+        _ plan: DispatchPlan,
+        validTerminalIDs: Set<String>? = nil
+    ) {
+        let allowedTerminalIDs = validTerminalIDs ?? Set(terminalRows.map(\.terminalID))
+        let filteredDrafts = plan.drafts.filter { allowedTerminalIDs.contains($0.terminalID) }
+        let skippedDraftCount = plan.drafts.count - filteredDrafts.count
+
+        planSummary = plan.planSummary
+        dispatchQueue = filteredDrafts.map {
+            DispatchQueueItem(terminalID: $0.terminalID, message: $0.message)
+        }
+
+        if let firstPendingTerminalID = dispatchQueue.first(where: { $0.state == .pending })?.terminalID {
+            selectedTerminalID = firstPendingTerminalID
+        } else if !terminalRows.contains(where: { $0.terminalID == selectedTerminalID }) {
+            selectedTerminalID = terminalRows.first?.terminalID
+        }
+
+        if skippedDraftCount == 0 {
+            errorMessage = nil
+        } else if skippedDraftCount == 1 {
+            errorMessage = "Skipped 1 draft for a terminal that is no longer available."
+        } else {
+            errorMessage = "Skipped \(skippedDraftCount) drafts for terminals that are no longer available."
+        }
     }
 
     func sendAndAdvance(currentTerminalID: String) -> String? {
@@ -103,5 +191,22 @@ final class ForemanSidebarStore: ObservableObject {
         let nextTerminalID = dispatchQueue.first(where: { $0.state == .pending })?.terminalID
         selectedTerminalID = nextTerminalID
         return nextTerminalID
+    }
+
+    private static func snapshotState(for snapshot: TerminalSnapshot) -> String {
+        if snapshot.signals.likelyErrorState { return "blocked" }
+        if snapshot.signals.likelyLongRunning { return "running" }
+        if snapshot.signals.likelyWaitingForInput { return "waiting" }
+        if snapshot.signals.likelyTUI { return "unsupported" }
+        return "idle"
+    }
+
+    private static func snapshotSummary(for snapshot: TerminalSnapshot) -> String {
+        let lines = snapshot.visibleText
+            .split(separator: "\n")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+
+        return lines.last ?? "Waiting for terminal output."
     }
 }

@@ -158,6 +158,8 @@ class AppDelegate: NSObject,
     private var appearanceObserver: NSKeyValueObservation?
 
     private var aiForemanRefreshTimer: Timer?
+    private var aiForemanSummaryCache: [String: TerminalSummary] = [:]
+    private var aiForemanSnapshotFingerprints: [String: Int] = [:]
 
     /// Signals
     private var signals: [DispatchSourceSignal] = []
@@ -1116,9 +1118,23 @@ extension AppDelegate {
 
     @MainActor
     func sendForemanQueueItem(_ item: DispatchQueueItem, store: ForemanSidebarStore, advance: Bool) {
-        guard !dispatchQueueCoordinator.requiresConfirmation(item) else { return }
-        guard let controller = terminalController(for: item.terminalID) else { return }
-        guard dispatchQueueCoordinator.send(item, through: controller) else { return }
+        guard !dispatchQueueCoordinator.requiresConfirmation(item) else {
+            store.errorMessage = "Review required before sending a risky draft."
+            store.selectedTerminalID = item.terminalID
+            return
+        }
+
+        guard let controller = terminalController(for: item.terminalID) else {
+            store.errorMessage = "This draft targets a terminal that is no longer available."
+            return
+        }
+
+        guard dispatchQueueCoordinator.send(item, through: controller) else {
+            store.errorMessage = "Unable to send the draft to \(item.terminalID)."
+            return
+        }
+
+        store.errorMessage = nil
 
         let nextTerminalID = store.sendAndAdvance(currentTerminalID: item.terminalID)
         if advance, let nextTerminalID, let nextController = terminalController(for: nextTerminalID) {
@@ -1135,26 +1151,55 @@ extension AppDelegate {
     }
 
     @MainActor
+    func generateForemanDispatchQueue(for store: ForemanSidebarStore) {
+        guard let controller = terminalController(for: store) else { return }
+
+        let instruction = store.userInstruction.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !instruction.isEmpty else { return }
+        guard let foremanService else {
+            store.errorMessage = OpenAIClientError.missingAPIKey.localizedDescription
+            return
+        }
+
+        let snapshots = controller.captureTerminalSnapshots()
+        let validTerminalIDs = Set(snapshots.map(\.terminalID))
+        store.isGeneratingDrafts = true
+        store.errorMessage = nil
+
+        Task { [weak self] in
+            guard let self else { return }
+
+            do {
+                let summaries = try await summarizeSnapshots(snapshots, using: foremanService)
+                let plan = try await foremanService.planDispatch(instruction: instruction, summaries: summaries)
+
+                await MainActor.run {
+                    for summary in summaries {
+                        self.aiForemanSummaryCache[summary.terminalID] = summary
+                    }
+
+                    store.showSidebar()
+                    store.applySnapshots(snapshots, summariesByTerminalID: self.currentAISummaries(for: snapshots))
+                    store.applyDispatchPlan(plan, validTerminalIDs: validTerminalIDs)
+                    store.isGeneratingDrafts = false
+                }
+            } catch {
+                await MainActor.run {
+                    store.errorMessage = error.localizedDescription
+                    store.isGeneratingDrafts = false
+                }
+            }
+        }
+    }
+
+    @MainActor
     private func refreshAIForemanSidebar() {
         for controller in TerminalController.all {
             let snapshots = controller.captureTerminalSnapshots()
-            controller.foremanSidebarStore.terminalRows = snapshots.map { snapshot in
-                TerminalSummaryRowModel(
-                    terminalID: snapshot.terminalID,
-                    title: snapshot.title,
-                    cwd: snapshot.cwd,
-                    state: snapshotState(for: snapshot),
-                    summary: snapshotSummary(for: snapshot),
-                    isFocused: snapshot.isFocused
-                )
-            }
-
-            if controller.foremanSidebarStore.selectedTerminalID == nil {
-                controller.foremanSidebarStore.selectedTerminalID =
-                    controller.foremanSidebarStore.dispatchQueue.first(where: { $0.state == .pending })?.terminalID
-                    ?? snapshots.first(where: { $0.isFocused })?.terminalID
-                    ?? snapshots.first?.terminalID
-            }
+            controller.foremanSidebarStore.applySnapshots(
+                snapshots,
+                summariesByTerminalID: currentAISummaries(for: snapshots)
+            )
         }
     }
 
@@ -1165,21 +1210,73 @@ extension AppDelegate {
         })
     }
 
-    private func snapshotState(for snapshot: TerminalSnapshot) -> String {
-        if snapshot.signals.likelyErrorState { return "blocked" }
-        if snapshot.signals.likelyLongRunning { return "running" }
-        if snapshot.signals.likelyWaitingForInput { return "waiting" }
-        if snapshot.signals.likelyTUI { return "unsupported" }
-        return "idle"
+    @MainActor
+    private func terminalController(for store: ForemanSidebarStore) -> TerminalController? {
+        TerminalController.all.first(where: { $0.foremanSidebarStore === store })
     }
 
-    private func snapshotSummary(for snapshot: TerminalSnapshot) -> String {
-        let lines = snapshot.visibleText
-            .split(separator: "\n")
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
+    @MainActor
+    private func currentAISummaries(for snapshots: [TerminalSnapshot]) -> [String: TerminalSummary] {
+        var summaries: [String: TerminalSummary] = [:]
 
-        return lines.last ?? "Waiting for terminal output."
+        for snapshot in snapshots {
+            let fingerprint = snapshotFingerprint(for: snapshot)
+            guard aiForemanSnapshotFingerprints[snapshot.terminalID] == fingerprint,
+                  let summary = aiForemanSummaryCache[snapshot.terminalID] else {
+                continue
+            }
+
+            summaries[snapshot.terminalID] = summary
+        }
+
+        return summaries
+    }
+
+    private func summarizeSnapshots(
+        _ snapshots: [TerminalSnapshot],
+        using foremanService: ForemanService
+    ) async throws -> [TerminalSummary] {
+        var summaries: [TerminalSummary] = []
+
+        for snapshot in snapshots {
+            let fingerprint = snapshotFingerprint(for: snapshot)
+
+            if await MainActor.run(
+                body: {
+                    aiForemanSnapshotFingerprints[snapshot.terminalID] == fingerprint
+                    && aiForemanSummaryCache[snapshot.terminalID] != nil
+                }
+            ),
+               let cachedSummary = await MainActor.run(body: { aiForemanSummaryCache[snapshot.terminalID] }) {
+                summaries.append(cachedSummary)
+                continue
+            }
+
+            let summary = try await foremanService.summarize(snapshot: snapshot)
+            await MainActor.run {
+                aiForemanSnapshotFingerprints[snapshot.terminalID] = fingerprint
+                aiForemanSummaryCache[snapshot.terminalID] = summary
+            }
+            summaries.append(summary)
+        }
+
+        return summaries
+    }
+
+    private func snapshotFingerprint(for snapshot: TerminalSnapshot) -> Int {
+        var hasher = Hasher()
+        hasher.combine(snapshot.terminalID)
+        hasher.combine(snapshot.title)
+        hasher.combine(snapshot.cwd)
+        hasher.combine(snapshot.captureMode)
+        hasher.combine(snapshot.visibleText)
+        hasher.combine(snapshot.recentScrollback)
+        hasher.combine(snapshot.lastInputPreview)
+        hasher.combine(snapshot.signals.likelyWaitingForInput)
+        hasher.combine(snapshot.signals.likelyLongRunning)
+        hasher.combine(snapshot.signals.likelyErrorState)
+        hasher.combine(snapshot.signals.likelyTUI)
+        return hasher.finalize()
     }
 
     private func reloadDockMenu() {
