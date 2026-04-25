@@ -38,6 +38,9 @@ protocol TerminalViewModel: ObservableObject {
 
     /// The AI foreman sidebar store for this terminal window.
     var foremanSidebarStore: ForemanSidebarStore { get }
+
+    /// Whether this controller should offer the AI foreman sidebar.
+    var supportsForemanSidebar: Bool { get }
 }
 
 /// The main terminal view. This terminal view supports splits.
@@ -67,6 +70,11 @@ struct TerminalView<ViewModel: TerminalViewModel>: View {
         return URL(fileURLWithPath: surfacePwd)
     }
 
+    private var foremanSidebarIsAvailable: Bool {
+        guard let appDelegate = NSApp.delegate as? AppDelegate else { return false }
+        return appDelegate.aiForemanIsConfigured && viewModel.supportsForemanSidebar
+    }
+
     var body: some View {
         switch ghostty.readiness {
         case .loading:
@@ -75,7 +83,7 @@ struct TerminalView<ViewModel: TerminalViewModel>: View {
             ErrorView()
         case .ready:
             HStack(spacing: 0) {
-                ZStack {
+                ZStack(alignment: .topTrailing) {
                     VStack(spacing: 0) {
                         // If we're running in debug mode we show a warning so that users
                         // know that performance will be degraded.
@@ -125,12 +133,31 @@ struct TerminalView<ViewModel: TerminalViewModel>: View {
                     if viewModel.updateOverlayIsVisible {
                         UpdateOverlay()
                     }
+
+                    if foremanSidebarIsAvailable && !viewModel.foremanSidebarStore.isSidebarVisible {
+                        Button("AI Foreman") {
+                            viewModel.foremanSidebarStore.showSidebar()
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                        .padding(12)
+                    }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-                Divider()
+                if foremanSidebarIsAvailable && viewModel.foremanSidebarStore.isSidebarVisible {
+                    Divider()
 
-                ForemanSidebarView(store: viewModel.foremanSidebarStore)
+                    ForemanSidebarView(
+                        store: viewModel.foremanSidebarStore,
+                        onDraftQueue: {
+                            (NSApp.delegate as? AppDelegate)?.generateForemanDispatchQueue(for: viewModel.foremanSidebarStore)
+                        },
+                        onClose: {
+                            viewModel.foremanSidebarStore.hideSidebar()
+                        }
+                    )
+                }
             }
             .frame(maxWidth: .greatestFiniteMagnitude, maxHeight: .greatestFiniteMagnitude)
         }

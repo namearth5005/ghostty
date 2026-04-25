@@ -4,6 +4,67 @@ import Testing
 struct ForemanSidebarStoreTests {
     @MainActor
     @Test
+    func sidebarStartsHiddenUntilUserOpensIt() {
+        let store = ForemanSidebarStore()
+
+        #expect(store.isSidebarVisible == false)
+
+        store.showSidebar()
+        #expect(store.isSidebarVisible == true)
+
+        store.hideSidebar()
+        #expect(store.isSidebarVisible == false)
+    }
+
+    @MainActor
+    @Test
+    func applyingSummariesUsesAISummaryAndKeepsSnapshotMetadata() {
+        let store = ForemanSidebarStore()
+        let snapshots = [
+            TerminalSnapshot(
+                terminalID: "term-1",
+                windowID: "win-1",
+                tabID: "tab-1",
+                title: "api tests",
+                cwd: "/tmp/project",
+                isFocused: true,
+                captureMode: "shell",
+                visibleText: "raw shell text",
+                recentScrollback: "line one\nline two",
+                lastInputPreview: "pnpm test",
+                signals: .init(
+                    likelyWaitingForInput: false,
+                    likelyLongRunning: false,
+                    likelyErrorState: true,
+                    likelyTUI: false
+                )
+            )
+        ]
+        let summariesByTerminalID = [
+            "term-1": TerminalSummary(
+                terminalID: "term-1",
+                summary: "Blocked on auth middleware assertion.",
+                state: "blocked",
+                confidence: 0.94,
+                needsUserAttention: true,
+                suggestedNextStep: "Rerun the targeted auth test."
+            )
+        ]
+
+        store.applySnapshots(snapshots, summariesByTerminalID: summariesByTerminalID)
+
+        #expect(store.terminalRows.count == 1)
+        #expect(store.terminalRows[0].terminalID == "term-1")
+        #expect(store.terminalRows[0].title == "api tests")
+        #expect(store.terminalRows[0].cwd == "/tmp/project")
+        #expect(store.terminalRows[0].isFocused == true)
+        #expect(store.terminalRows[0].state == "blocked")
+        #expect(store.terminalRows[0].summary == "Blocked on auth middleware assertion.")
+        #expect(store.selectedTerminalID == "term-1")
+    }
+
+    @MainActor
+    @Test
     func storeBuildsVisibleRowsAndSelectsNextPendingDraft() {
         let store = ForemanSidebarStore.preview
         store.dispatchQueue = [
@@ -15,6 +76,62 @@ struct ForemanSidebarStoreTests {
 
         #expect(store.dispatchQueue[0].state == .sent)
         #expect(next == "term-2")
+        #expect(store.selectedTerminalID == "term-2")
+    }
+
+    @MainActor
+    @Test
+    func applyingDispatchPlanReplacesQueueAndSelectsFirstDraft() {
+        let store = ForemanSidebarStore.preview
+
+        store.applyDispatchPlan(
+            DispatchPlan(
+                planSummary: "One terminal needs a retry.",
+                drafts: [
+                    .init(
+                        terminalID: "term-2",
+                        reason: "Blocked run",
+                        message: "Rerun the targeted test and report what changed."
+                    )
+                ]
+            ),
+            validTerminalIDs: ["term-1", "term-2"]
+        )
+
+        #expect(store.dispatchQueue.count == 1)
+        #expect(store.dispatchQueue[0].terminalID == "term-2")
+        #expect(store.dispatchQueue[0].message == "Rerun the targeted test and report what changed.")
+        #expect(store.dispatchQueue[0].state == .pending)
+        #expect(store.selectedTerminalID == "term-2")
+    }
+
+    @MainActor
+    @Test
+    func applyingDispatchPlanDropsUnknownTerminalDraftsAndExplainsWhy() {
+        let store = ForemanSidebarStore.preview
+
+        store.applyDispatchPlan(
+            DispatchPlan(
+                planSummary: "Two terminals need input.",
+                drafts: [
+                    .init(
+                        terminalID: "term-2",
+                        reason: "Blocked run",
+                        message: "Rerun the targeted test and report what changed."
+                    ),
+                    .init(
+                        terminalID: "term-99",
+                        reason: "Hallucinated target",
+                        message: "This should not stay in the queue."
+                    )
+                ]
+            ),
+            validTerminalIDs: ["term-1", "term-2"]
+        )
+
+        #expect(store.dispatchQueue.count == 1)
+        #expect(store.dispatchQueue[0].terminalID == "term-2")
+        #expect(store.errorMessage == "Skipped 1 draft for a terminal that is no longer available.")
         #expect(store.selectedTerminalID == "term-2")
     }
 }

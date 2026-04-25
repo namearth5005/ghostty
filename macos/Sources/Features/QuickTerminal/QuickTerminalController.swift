@@ -6,6 +6,7 @@ import GhosttyKit
 /// Controller for the "quick" terminal.
 class QuickTerminalController: BaseTerminalController {
     override var windowNibName: NSNib.Name? { "QuickTerminal" }
+    override var supportsForemanSidebar: Bool { false }
 
     /// The position for the quick terminal.
     let position: QuickTerminalPosition
