@@ -28,10 +28,24 @@ struct DispatchQueueView: View {
                                 .foregroundStyle(stateColor(for: item.state))
                         }
 
-                        Text(item.message)
+                        if item.state == .pending {
+                            TextField(
+                                "Review draft before sending",
+                                text: Binding(
+                                    get: { item.message },
+                                    set: { store.updateDraftMessage(itemID: item.id, message: $0) }
+                                ),
+                                axis: .vertical
+                            )
+                            .textFieldStyle(.roundedBorder)
+                            .lineLimit(2...6)
                             .font(.system(size: 12))
-                            .foregroundStyle(.primary)
-                            .fixedSize(horizontal: false, vertical: true)
+                        } else {
+                            Text(item.message)
+                                .font(.system(size: 12))
+                                .foregroundStyle(.primary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
 
                         HStack(spacing: 8) {
                             Button("Send") { onSend(item) }
