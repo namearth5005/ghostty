@@ -193,6 +193,15 @@ final class ForemanSidebarStore: ObservableObject {
         return nextTerminalID
     }
 
+    func updateDraftMessage(itemID: UUID, message: String) {
+        guard let index = dispatchQueue.firstIndex(where: { $0.id == itemID }),
+              dispatchQueue[index].state == .pending else {
+            return
+        }
+
+        dispatchQueue[index].message = message
+    }
+
     private static func snapshotState(for snapshot: TerminalSnapshot) -> String {
         if snapshot.signals.likelyErrorState { return "blocked" }
         if snapshot.signals.likelyLongRunning { return "running" }

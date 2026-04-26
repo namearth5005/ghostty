@@ -81,6 +81,29 @@ struct ForemanSidebarStoreTests {
 
     @MainActor
     @Test
+    func updatingDraftMessageEditsPendingQueueItem() {
+        let store = ForemanSidebarStore.preview
+        let itemID = try! #require(store.dispatchQueue.first?.id)
+
+        store.updateDraftMessage(itemID: itemID, message: "Ask for a concise blocker update.")
+
+        #expect(store.dispatchQueue[0].message == "Ask for a concise blocker update.")
+    }
+
+    @MainActor
+    @Test
+    func updatingDraftMessageLeavesSentQueueItemUnchanged() {
+        let store = ForemanSidebarStore.preview
+        let sentItemID = try! #require(store.dispatchQueue.last?.id)
+        store.dispatchQueue[1].state = .sent
+
+        store.updateDraftMessage(itemID: sentItemID, message: "Do not overwrite sent copy.")
+
+        #expect(store.dispatchQueue[1].message == "Post a short progress update and keep running.")
+    }
+
+    @MainActor
+    @Test
     func applyingDispatchPlanReplacesQueueAndSelectsFirstDraft() {
         let store = ForemanSidebarStore.preview
 
