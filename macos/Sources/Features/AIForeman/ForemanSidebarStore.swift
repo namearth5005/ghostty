@@ -37,6 +37,28 @@ struct DispatchQueueItem: Identifiable, Equatable, Sendable {
     }
 }
 
+struct DispatchActivityLogEntry: Identifiable, Equatable, Sendable {
+    let id: UUID
+    let terminalID: String
+    let message: String
+    let state: DispatchQueueItemState
+    let timestamp: Date
+
+    init(
+        id: UUID = UUID(),
+        terminalID: String,
+        message: String,
+        state: DispatchQueueItemState,
+        timestamp: Date = Date()
+    ) {
+        self.id = id
+        self.terminalID = terminalID
+        self.message = message
+        self.state = state
+        self.timestamp = timestamp
+    }
+}
+
 @MainActor
 final class ForemanSidebarStore: ObservableObject {
     @Published var terminalRows: [TerminalSummaryRowModel]
@@ -47,6 +69,8 @@ final class ForemanSidebarStore: ObservableObject {
     @Published var planSummary: String?
     @Published var errorMessage: String?
     @Published var isGeneratingDrafts: Bool
+    @Published var activityLog: [DispatchActivityLogEntry]
+    @Published var lastActionMessage: String?
 
     init(
         terminalRows: [TerminalSummaryRowModel] = [],
@@ -56,7 +80,9 @@ final class ForemanSidebarStore: ObservableObject {
         isSidebarVisible: Bool = false,
         planSummary: String? = nil,
         errorMessage: String? = nil,
-        isGeneratingDrafts: Bool = false
+        isGeneratingDrafts: Bool = false,
+        activityLog: [DispatchActivityLogEntry] = [],
+        lastActionMessage: String? = nil
     ) {
         self.terminalRows = terminalRows
         self.dispatchQueue = dispatchQueue
@@ -66,6 +92,8 @@ final class ForemanSidebarStore: ObservableObject {
         self.planSummary = planSummary
         self.errorMessage = errorMessage
         self.isGeneratingDrafts = isGeneratingDrafts
+        self.activityLog = activityLog
+        self.lastActionMessage = lastActionMessage
     }
 
     static var preview: ForemanSidebarStore {
@@ -176,6 +204,12 @@ final class ForemanSidebarStore: ObservableObject {
     func sendAndAdvance(currentTerminalID: String) -> String? {
         if let currentIndex = dispatchQueue.firstIndex(where: { $0.terminalID == currentTerminalID && $0.state == .pending }) {
             dispatchQueue[currentIndex].state = .sent
+            appendActivityLog(
+                terminalID: dispatchQueue[currentIndex].terminalID,
+                message: dispatchQueue[currentIndex].message,
+                state: .sent
+            )
+            lastActionMessage = "Sent to \(dispatchQueue[currentIndex].terminalID)."
         }
 
         let nextTerminalID = dispatchQueue.first(where: { $0.state == .pending })?.terminalID
@@ -186,11 +220,37 @@ final class ForemanSidebarStore: ObservableObject {
     func skipAndAdvance(currentTerminalID: String) -> String? {
         if let currentIndex = dispatchQueue.firstIndex(where: { $0.terminalID == currentTerminalID && $0.state == .pending }) {
             dispatchQueue[currentIndex].state = .skipped
+            appendActivityLog(
+                terminalID: dispatchQueue[currentIndex].terminalID,
+                message: dispatchQueue[currentIndex].message,
+                state: .skipped
+            )
+            lastActionMessage = "Skipped \(dispatchQueue[currentIndex].terminalID)."
         }
 
         let nextTerminalID = dispatchQueue.first(where: { $0.state == .pending })?.terminalID
         selectedTerminalID = nextTerminalID
         return nextTerminalID
+    }
+
+    func clearActivityLog() {
+        activityLog.removeAll()
+    }
+
+    func clearLastActionMessage() {
+        lastActionMessage = nil
+    }
+
+    private func appendActivityLog(terminalID: String, message: String, state: DispatchQueueItemState) {
+        let entry = DispatchActivityLogEntry(
+            terminalID: terminalID,
+            message: message,
+            state: state
+        )
+        activityLog.append(entry)
+        if activityLog.count > 50 {
+            activityLog.removeFirst(activityLog.count - 50)
+        }
     }
 
     func updateDraftMessage(itemID: UUID, message: String) {

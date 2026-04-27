@@ -157,4 +157,115 @@ struct ForemanSidebarStoreTests {
         #expect(store.errorMessage == "Skipped 1 draft for a terminal that is no longer available.")
         #expect(store.selectedTerminalID == "term-2")
     }
+
+    @MainActor
+    @Test
+    func sendAndAdvanceAppendsActivityLogEntry() {
+        let store = ForemanSidebarStore.preview
+        store.dispatchQueue = [
+            .init(terminalID: "term-1", message: "first", state: .pending),
+            .init(terminalID: "term-2", message: "second", state: .pending)
+        ]
+
+        _ = store.sendAndAdvance(currentTerminalID: "term-1")
+
+        #expect(store.activityLog.count == 1)
+        #expect(store.activityLog[0].terminalID == "term-1")
+        #expect(store.activityLog[0].message == "first")
+        #expect(store.activityLog[0].state == .sent)
+    }
+
+    @MainActor
+    @Test
+    func skipAndAdvanceAppendsSkippedActivityLogEntry() {
+        let store = ForemanSidebarStore.preview
+        store.dispatchQueue = [
+            .init(terminalID: "term-1", message: "first", state: .pending)
+        ]
+
+        _ = store.skipAndAdvance(currentTerminalID: "term-1")
+
+        #expect(store.activityLog.count == 1)
+        #expect(store.activityLog[0].terminalID == "term-1")
+        #expect(store.activityLog[0].state == .skipped)
+    }
+
+    @MainActor
+    @Test
+    func activityLogTrimsToMaxEntries() {
+        let store = ForemanSidebarStore()
+        for i in 0..<55 {
+            store.activityLog.append(
+                DispatchActivityLogEntry(
+                    terminalID: "term-\(i)",
+                    message: "msg-\(i)",
+                    state: .sent
+                )
+            )
+        }
+
+        store.dispatchQueue = [
+            .init(terminalID: "term-extra", message: "extra", state: .pending)
+        ]
+        _ = store.sendAndAdvance(currentTerminalID: "term-extra")
+
+        #expect(store.activityLog.count == 50)
+        #expect(store.activityLog.last?.terminalID == "term-extra")
+    }
+
+    @MainActor
+    @Test
+    func clearActivityLogRemovesAllEntries() {
+        let store = ForemanSidebarStore.preview
+        store.dispatchQueue = [
+            .init(terminalID: "term-1", message: "first", state: .pending)
+        ]
+        _ = store.sendAndAdvance(currentTerminalID: "term-1")
+        #expect(store.activityLog.count == 1)
+
+        store.clearActivityLog()
+
+        #expect(store.activityLog.isEmpty)
+    }
+
+    @MainActor
+    @Test
+    func sendAndAdvanceSetsLastActionMessage() {
+        let store = ForemanSidebarStore.preview
+        store.dispatchQueue = [
+            .init(terminalID: "term-1", message: "first", state: .pending)
+        ]
+
+        _ = store.sendAndAdvance(currentTerminalID: "term-1")
+
+        #expect(store.lastActionMessage == "Sent to term-1.")
+    }
+
+    @MainActor
+    @Test
+    func skipAndAdvanceSetsLastActionMessage() {
+        let store = ForemanSidebarStore.preview
+        store.dispatchQueue = [
+            .init(terminalID: "term-1", message: "first", state: .pending)
+        ]
+
+        _ = store.skipAndAdvance(currentTerminalID: "term-1")
+
+        #expect(store.lastActionMessage == "Skipped term-1.")
+    }
+
+    @MainActor
+    @Test
+    func clearLastActionMessageRemovesIt() {
+        let store = ForemanSidebarStore.preview
+        store.dispatchQueue = [
+            .init(terminalID: "term-1", message: "first", state: .pending)
+        ]
+        _ = store.sendAndAdvance(currentTerminalID: "term-1")
+        #expect(store.lastActionMessage != nil)
+
+        store.clearLastActionMessage()
+
+        #expect(store.lastActionMessage == nil)
+    }
 }
