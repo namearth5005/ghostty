@@ -55,6 +55,7 @@ struct TerminalSnapshot: Codable, Equatable, Sendable {
             .compactMap { $0 }
             .joined(separator: "\n")
             .lowercased()
+        let trimmedVisible = normalizedVisible.trimmingCharacters(in: .whitespacesAndNewlines)
         return TerminalSnapshot(
             terminalID: terminalID,
             windowID: windowID,
@@ -67,9 +68,9 @@ struct TerminalSnapshot: Codable, Equatable, Sendable {
             recentScrollback: normalizedScrollback,
             lastInputPreview: lastInputPreview,
             signals: .init(
-                likelyWaitingForInput: normalizedVisible.trimmingCharacters(in: .whitespacesAndNewlines).hasSuffix("$"),
+                likelyWaitingForInput: isLikelyWaitingForInput(trimmedVisible),
                 likelyLongRunning: isLikelyLongRunning(commandSignals),
-                likelyErrorState: normalizedVisible.localizedCaseInsensitiveContains("error"),
+                likelyErrorState: isLikelyErrorState(normalizedVisible),
                 likelyTUI: isLikelyTUI(commandSignals)
             )
         )
@@ -166,6 +167,8 @@ struct TerminalSnapshot: Codable, Equatable, Sendable {
             "htop",
             "fzf",
             "tmux",
+            "nano",
+            "emacs",
         ].contains { commandSignals.contains($0) }
     }
 
@@ -175,6 +178,8 @@ struct TerminalSnapshot: Codable, Equatable, Sendable {
             "compiling",
             "running",
             "watching",
+            "bundling",
+            "transpiling",
             "make ",
             "cargo ",
             "npm ",
@@ -183,6 +188,31 @@ struct TerminalSnapshot: Codable, Equatable, Sendable {
             "pytest",
             "xcodebuild",
             "swift test",
+            "docker build",
+            "docker compose",
+            "webpack",
+            "vite ",
+            "jest",
+            "vitest",
+            "playwright",
+            "cypress",
         ].contains { commandSignals.contains($0) }
+    }
+
+    private static func isLikelyWaitingForInput(_ visibleText: String) -> Bool {
+        guard !visibleText.isEmpty else { return false }
+        let promptChars: [Character] = ["$", "%", "#", ">", "λ", "❯", "➜", "→", "⇒"]
+        let lastLine = visibleText.split(separator: "\n").last?.trimmingCharacters(in: .whitespaces) ?? visibleText
+        return promptChars.contains(where: { lastLine.hasSuffix(String($0)) })
+    }
+
+    private static func isLikelyErrorState(_ visibleText: String) -> Bool {
+        let errorMarkers = [
+            "error", "fail", "fatal", "panic", "assertion",
+            "exception", "segfault", "timeout", "denied",
+            "unauthorized", "not found", "cannot", "could not",
+        ]
+        let lowered = visibleText.lowercased()
+        return errorMarkers.contains { lowered.contains($0) }
     }
 }

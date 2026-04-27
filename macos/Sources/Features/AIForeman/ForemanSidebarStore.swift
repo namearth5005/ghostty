@@ -241,7 +241,7 @@ final class ForemanSidebarStore: ObservableObject {
         lastActionMessage = nil
     }
 
-    private func appendActivityLog(terminalID: String, message: String, state: DispatchQueueItemState) {
+    func appendActivityLog(terminalID: String, message: String, state: DispatchQueueItemState) {
         let entry = DispatchActivityLogEntry(
             terminalID: terminalID,
             message: message,
@@ -276,6 +276,26 @@ final class ForemanSidebarStore: ObservableObject {
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
 
-        return lines.last ?? "Waiting for terminal output."
+        guard !lines.isEmpty else { return "Waiting for terminal output." }
+
+        // Prefer the most informative recent line
+        if let informative = lines.reversed().first(where: { isInformativeLine($0) }) {
+            return String(informative.prefix(120))
+        }
+
+        return String(lines.last!.prefix(120))
+    }
+
+    private static func isInformativeLine(_ line: String) -> Bool {
+        let lowered = line.lowercased()
+        let informativePatterns = [
+            "error", "fail", "fatal", "panic", "assertion",
+            "success", "done", "finished", "completed",
+            "warning", "deprecated", "build",
+            "test", "pass", "skip",
+            "merge", "conflict", "branch",
+            "deploy", "publish", "release",
+        ]
+        return informativePatterns.contains { lowered.contains($0) }
     }
 }

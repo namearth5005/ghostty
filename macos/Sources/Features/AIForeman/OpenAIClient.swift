@@ -209,8 +209,15 @@ struct URLSessionResponsesTransport: OpenAIResponsesTransport {
     private let session: URLSession
     private let decoder = JSONDecoder()
 
-    init(session: URLSession = .shared) {
+    init(session: URLSession = URLSession(configuration: URLSessionResponsesTransport.makeConfiguration())) {
         self.session = session
+    }
+
+    private static func makeConfiguration() -> URLSessionConfiguration {
+        let config = URLSessionConfiguration.default
+        config.timeoutIntervalForRequest = 30
+        config.timeoutIntervalForResource = 60
+        return config
     }
 
     func send(_ request: OpenAIClient.Request, apiKey: String) async throws -> String {
@@ -223,7 +230,7 @@ struct URLSessionResponsesTransport: OpenAIResponsesTransport {
         urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
         urlRequest.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
 
-        let (data, response) = try await session.data(for: urlRequest)
+        let (data, response) = try await performWithRetry(request: urlRequest)
         guard let httpResponse = response as? HTTPURLResponse else {
             throw OpenAIClientError.invalidResponse
         }
@@ -234,7 +241,7 @@ struct URLSessionResponsesTransport: OpenAIResponsesTransport {
         }
 
         guard (200..<300).contains(httpResponse.statusCode) else {
-            throw OpenAIClientError.responseFailed("OpenAI request failed with status \(httpResponse.statusCode).")
+            throw OpenAIClientError.responseFailed(mapStatusCode(httpResponse.statusCode, provider: "OpenAI"))
         }
 
         if let outputText = envelope.outputText?.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -256,6 +263,30 @@ struct URLSessionResponsesTransport: OpenAIResponsesTransport {
         }
 
         return fallback
+    }
+
+    private func performWithRetry(request: URLRequest, attempts: Int = 2) async throws -> (Data, URLResponse) {
+        var lastError: Error?
+        for attempt in 0..<attempts {
+            do {
+                return try await session.data(for: request)
+            } catch {
+                lastError = error
+                if attempt < attempts - 1 {
+                    try await Task.sleep(nanoseconds: 1_000_000_000)
+                }
+            }
+        }
+        throw lastError ?? OpenAIClientError.invalidResponse
+    }
+
+    private func mapStatusCode(_ code: Int, provider: String) -> String {
+        switch code {
+        case 401: return "\(provider) API key is invalid or expired."
+        case 429: return "\(provider) rate limit reached. Please wait a moment."
+        case 500...599: return "\(provider) server error (status \(code)). Try again shortly."
+        default: return "\(provider) request failed with status \(code)."
+        }
     }
 }
 

@@ -72,4 +72,57 @@ struct TerminalSnapshotTests {
 
         #expect(snapshot.signals.likelyLongRunning == true)
     }
+
+    @Test
+    func snapshotDetectsVariousShellPrompts() {
+        let prompts = ["$", "%", "#", ">", "λ", "❯", "➜"]
+        for prompt in prompts {
+            let snapshot = TerminalSnapshot.makePreview(
+                terminalID: "term-\(prompt)",
+                windowID: "win-1",
+                tabID: "tab-1",
+                title: "shell",
+                cwd: "/tmp",
+                isFocused: true,
+                visibleText: "user@host \(prompt)",
+                recentScrollbackLines: ["ready"],
+                lastInputPreview: nil
+            )
+            #expect(snapshot.signals.likelyWaitingForInput == true, "Prompt '\(prompt)' should be detected")
+        }
+    }
+
+    @Test
+    func snapshotFlagsErrorStateForFailureMarkers() {
+        let snapshot = TerminalSnapshot.makePreview(
+            terminalID: "term-4",
+            windowID: "win-4",
+            tabID: "tab-4",
+            title: "test",
+            cwd: "/tmp/project",
+            isFocused: false,
+            visibleText: "Test suite failed with 3 assertions",
+            recentScrollbackLines: ["panic"],
+            lastInputPreview: nil
+        )
+
+        #expect(snapshot.signals.likelyErrorState == true)
+    }
+
+    @Test
+    func snapshotFlagsDockerBuildAsLongRunning() {
+        let snapshot = TerminalSnapshot.makePreview(
+            terminalID: "term-5",
+            windowID: "win-5",
+            tabID: "tab-5",
+            title: "docker",
+            cwd: "/tmp/project",
+            isFocused: false,
+            visibleText: "docker build -t myapp .",
+            recentScrollbackLines: ["Step 1/10"],
+            lastInputPreview: nil
+        )
+
+        #expect(snapshot.signals.likelyLongRunning == true)
+    }
 }

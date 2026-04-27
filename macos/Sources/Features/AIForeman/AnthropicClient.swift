@@ -189,8 +189,15 @@ struct URLSessionAnthropicTransport: AnthropicMessagesTransport {
     private let session: URLSession
     private let decoder = JSONDecoder()
 
-    init(session: URLSession = .shared) {
+    init(session: URLSession = URLSession(configuration: URLSessionAnthropicTransport.makeConfiguration())) {
         self.session = session
+    }
+
+    private static func makeConfiguration() -> URLSessionConfiguration {
+        let config = URLSessionConfiguration.default
+        config.timeoutIntervalForRequest = 30
+        config.timeoutIntervalForResource = 60
+        return config
     }
 
     func send(_ request: AnthropicClient.Request, apiKey: String) async throws -> String {
@@ -204,7 +211,7 @@ struct URLSessionAnthropicTransport: AnthropicMessagesTransport {
         urlRequest.setValue(apiKey, forHTTPHeaderField: "x-api-key")
         urlRequest.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
 
-        let (data, response) = try await session.data(for: urlRequest)
+        let (data, response) = try await performWithRetry(request: urlRequest)
         guard let httpResponse = response as? HTTPURLResponse else {
             throw AnthropicClientError.invalidResponse
         }
@@ -215,7 +222,7 @@ struct URLSessionAnthropicTransport: AnthropicMessagesTransport {
         }
 
         guard (200..<300).contains(httpResponse.statusCode) else {
-            throw AnthropicClientError.responseFailed("Anthropic request failed with status \(httpResponse.statusCode).")
+            throw AnthropicClientError.responseFailed(mapStatusCode(httpResponse.statusCode, provider: "Anthropic"))
         }
 
         let text = envelope.content?
@@ -231,6 +238,30 @@ struct URLSessionAnthropicTransport: AnthropicMessagesTransport {
         }
 
         return text
+    }
+
+    private func performWithRetry(request: URLRequest, attempts: Int = 2) async throws -> (Data, URLResponse) {
+        var lastError: Error?
+        for attempt in 0..<attempts {
+            do {
+                return try await session.data(for: request)
+            } catch {
+                lastError = error
+                if attempt < attempts - 1 {
+                    try await Task.sleep(nanoseconds: 1_000_000_000)
+                }
+            }
+        }
+        throw lastError ?? AnthropicClientError.invalidResponse
+    }
+
+    private func mapStatusCode(_ code: Int, provider: String) -> String {
+        switch code {
+        case 401: return "\(provider) API key is invalid or expired."
+        case 429: return "\(provider) rate limit reached. Please wait a moment."
+        case 500...599: return "\(provider) server error (status \(code)). Try again shortly."
+        default: return "\(provider) request failed with status \(code)."
+        }
     }
 }
 
