@@ -31,6 +31,22 @@ struct ForemanSidebarView: View {
 
             Divider()
 
+            let isConfigured = (NSApp.delegate as? AppDelegate)?.aiForemanIsConfigured ?? false
+            if !isConfigured {
+                HStack(spacing: 8) {
+                    Image(systemName: "key.fill")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.orange)
+                    Text("Set ANTHROPIC_API_KEY or OPENAI_API_KEY to enable AI drafting.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer()
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 12)
+            }
+
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     VStack(alignment: .leading, spacing: 10) {

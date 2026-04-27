@@ -71,8 +71,7 @@ struct TerminalView<ViewModel: TerminalViewModel>: View {
     }
 
     private var foremanSidebarIsAvailable: Bool {
-        guard let appDelegate = NSApp.delegate as? AppDelegate else { return false }
-        return appDelegate.aiForemanIsConfigured && viewModel.supportsForemanSidebar
+        viewModel.supportsForemanSidebar
     }
 
     var body: some View {
