@@ -97,7 +97,8 @@ class AppDelegate: NSObject,
 
     /// The ghostty global state. Only one per process.
     let ghostty: Ghostty.App
-    private let aiForemanAPIKey: String?
+    private let openAIAPIKey: String?
+    private let anthropicAPIKey: String?
 
     @Published private(set) var aiForemanIsConfigured: Bool = false
 
@@ -105,8 +106,15 @@ class AppDelegate: NSObject,
     lazy var undoManager = ExpiringUndoManager()
 
     lazy var foremanService: ForemanService? = {
-        guard let aiForemanAPIKey, !aiForemanAPIKey.isEmpty else { return nil }
-        return ForemanService(client: OpenAIClient(apiKey: aiForemanAPIKey))
+        if let anthropicAPIKey, !anthropicAPIKey.isEmpty {
+            return ForemanService(client: AnthropicClient(apiKey: anthropicAPIKey))
+        }
+
+        if let openAIAPIKey, !openAIAPIKey.isEmpty {
+            return ForemanService(client: OpenAIClient(apiKey: openAIAPIKey))
+        }
+
+        return nil
     }()
     lazy var dispatchQueueCoordinator = DispatchQueueCoordinator()
 
@@ -169,9 +177,11 @@ class AppDelegate: NSObject,
     @MainActor private lazy var menuShortcutManager = Ghostty.MenuShortcutManager()
 
     override init() {
-        let apiKey = ProcessInfo.processInfo.environment["OPENAI_API_KEY"]
-        self.aiForemanAPIKey = apiKey
-        self.aiForemanIsConfigured = !(apiKey?.isEmpty ?? true)
+        let openAIAPIKey = ProcessInfo.processInfo.environment["OPENAI_API_KEY"]
+        let anthropicAPIKey = ProcessInfo.processInfo.environment["ANTHROPIC_API_KEY"]
+        self.openAIAPIKey = openAIAPIKey
+        self.anthropicAPIKey = anthropicAPIKey
+        self.aiForemanIsConfigured = !((anthropicAPIKey?.isEmpty ?? true) && (openAIAPIKey?.isEmpty ?? true))
 #if DEBUG
         ghostty = Ghostty.App(configPath: ProcessInfo.processInfo.environment["GHOSTTY_CONFIG_PATH"])
 #else
@@ -1157,7 +1167,7 @@ extension AppDelegate {
         let instruction = store.userInstruction.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !instruction.isEmpty else { return }
         guard let foremanService else {
-            store.errorMessage = OpenAIClientError.missingAPIKey.localizedDescription
+            store.errorMessage = missingForemanAPIKeyMessage
             return
         }
 
@@ -1230,6 +1240,10 @@ extension AppDelegate {
         }
 
         return summaries
+    }
+
+    private var missingForemanAPIKeyMessage: String {
+        "Set ANTHROPIC_API_KEY or OPENAI_API_KEY to enable AI Foreman."
     }
 
     private func summarizeSnapshots(

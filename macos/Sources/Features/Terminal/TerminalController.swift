@@ -1662,6 +1662,8 @@ extension TerminalController {
         }
 
         surfaceModel.sendText(text)
+        surfaceModel.sendKeyEvent(.init(key: .enter))
+        surfaceView.highlight()
         return true
     }
 

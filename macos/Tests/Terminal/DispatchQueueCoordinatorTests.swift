@@ -14,4 +14,11 @@ struct DispatchQueueCoordinatorTests {
 
         #expect(coordinator.requiresConfirmation(item) == true)
     }
+
+    @Test
+    func sendPayloadStripsTrailingNewlinesBeforeReturnKeySubmission() {
+        let payload = DispatchQueueCoordinator.sendPayload(for: "pnpm test\n\n")
+
+        #expect(payload == "pnpm test")
+    }
 }

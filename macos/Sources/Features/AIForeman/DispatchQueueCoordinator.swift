@@ -13,9 +13,17 @@ final class DispatchQueueCoordinator {
         riskyPatterns.contains { item.message.localizedCaseInsensitiveContains($0) }
     }
 
+    static func sendPayload(for message: String) -> String {
+        var payload = message
+        while payload.last?.isNewline == true {
+            payload.removeLast()
+        }
+        return payload
+    }
+
     @MainActor
     @discardableResult
     func send(_ item: DispatchQueueItem, through controller: TerminalController) -> Bool {
-        controller.sendForemanText(item.message, to: item.terminalID)
+        controller.sendForemanText(Self.sendPayload(for: item.message), to: item.terminalID)
     }
 }

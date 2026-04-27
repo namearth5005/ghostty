@@ -61,6 +61,8 @@ struct ForemanSidebarView: View {
                             (NSApp.delegate as? AppDelegate)?.skipForemanQueueItem(item, store: store)
                         }
                     )
+
+                    ActivityLogView(store: store)
                 }
                 .padding(16)
             }
@@ -91,6 +93,24 @@ struct ForemanSidebarView: View {
                     }
                 }
 
+                if let lastActionMessage = store.lastActionMessage, !lastActionMessage.isEmpty {
+                    HStack(spacing: 4) {
+                        Image(systemName: "checkmark.circle.fill")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.green)
+                        Text(lastActionMessage)
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Button(action: { store.clearLastActionMessage() }) {
+                            Image(systemName: "xmark")
+                                .font(.system(size: 9))
+                                .foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+
                 if let errorMessage = store.errorMessage, !errorMessage.isEmpty {
                     Text(errorMessage)
                         .font(.system(size: 11))
@@ -117,5 +137,96 @@ struct ForemanSidebarView: View {
                 endPoint: .bottom
             )
         )
+    }
+}
+
+
+struct ActivityLogView: View {
+    @ObservedObject var store: ForemanSidebarStore
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("Activity Log")
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(.secondary)
+
+                Spacer(minLength: 8)
+
+                if !store.activityLog.isEmpty {
+                    Button("Clear") {
+                        store.clearActivityLog()
+                    }
+                    .font(.system(size: 11))
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                }
+            }
+
+            if store.activityLog.isEmpty {
+                Text("No dispatches yet.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+            } else {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(store.activityLog.suffix(10).reversed()) { entry in
+                        HStack(spacing: 6) {
+                            Image(systemName: iconName(for: entry.state))
+                                .font(.system(size: 10, weight: .bold))
+                                .foregroundStyle(stateColor(for: entry.state))
+
+                            Text(entry.terminalID)
+                                .font(.system(size: 11, weight: .semibold, design: .monospaced))
+
+                            Text(entry.message)
+                                .font(.system(size: 11))
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+
+                            Spacer(minLength: 4)
+
+                            Text(relativeTime(from: entry.timestamp))
+                                .font(.system(size: 10))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func iconName(for state: DispatchQueueItemState) -> String {
+        switch state {
+        case .sent:
+            return "paperplane.fill"
+        case .skipped:
+            return "arrow.uturn.forward"
+        case .pending:
+            return "circle"
+        }
+    }
+
+    private func stateColor(for state: DispatchQueueItemState) -> Color {
+        switch state {
+        case .pending:
+            return .orange
+        case .sent:
+            return .green
+        case .skipped:
+            return .secondary
+        }
+    }
+
+    private func relativeTime(from date: Date) -> String {
+        let interval = Date().timeIntervalSince(date)
+        if interval < 10 {
+            return "just now"
+        } else if interval < 60 {
+            return "\(Int(interval))s ago"
+        } else if interval < 3600 {
+            return "\(Int(interval / 60))m ago"
+        } else {
+            return "\(Int(interval / 3600))h ago"
+        }
     }
 }

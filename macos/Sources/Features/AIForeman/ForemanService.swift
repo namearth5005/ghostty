@@ -1,9 +1,14 @@
 import Foundation
 
-actor ForemanService {
-    private let client: OpenAIClient
+protocol ForemanLLMClient: Sendable {
+    func summarize(snapshot: TerminalSnapshot) async throws -> TerminalSummary
+    func planDispatch(instruction: String, summaries: [TerminalSummary]) async throws -> DispatchPlan
+}
 
-    init(client: OpenAIClient) {
+actor ForemanService {
+    private let client: any ForemanLLMClient
+
+    init(client: any ForemanLLMClient) {
         self.client = client
     }
 

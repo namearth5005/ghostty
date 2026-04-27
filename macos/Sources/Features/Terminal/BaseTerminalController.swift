@@ -92,6 +92,9 @@ class BaseTerminalController: NSWindowController,
     /// Cancellable for aggregating bell state across all surfaces in this controller.
     private var bellStateCancellable: AnyCancellable?
 
+    /// Relay nested foreman sidebar store changes back through this controller so SwiftUI updates.
+    private var foremanSidebarStoreChangeRelay: AnyCancellable?
+
     /// An override title for the tab/window set by the user via prompt_tab_title.
     /// When set, this takes precedence over the computed title from the terminal.
     var titleOverride: String? {
@@ -143,6 +146,9 @@ class BaseTerminalController: NSWindowController,
         // Initialize our initial surface.
         guard let ghostty_app = ghostty.app else { preconditionFailure("app must be loaded") }
         self.surfaceTree = tree ?? .init(view: Ghostty.SurfaceView(ghostty_app, baseConfig: base))
+        self.foremanSidebarStoreChangeRelay = Self.makeForemanSidebarStoreChangeRelay(for: foremanSidebarStore) { [weak self] in
+            self?.objectWillChange.send()
+        }
 
         // Setup our bell state for the window
         setupBellNotificationPublisher()
@@ -229,6 +235,15 @@ class BaseTerminalController: NSWindowController,
         undoManager?.removeAllActions(withTarget: self)
         if let eventMonitor {
             NSEvent.removeMonitor(eventMonitor)
+        }
+    }
+
+    static func makeForemanSidebarStoreChangeRelay(
+        for store: ForemanSidebarStore,
+        onChange: @escaping () -> Void
+    ) -> AnyCancellable {
+        store.objectWillChange.sink { _ in
+            onChange()
         }
     }
 
