@@ -85,6 +85,15 @@ struct ForemanSidebarView: View {
                     .buttonStyle(.borderedProminent)
                     .disabled(store.isGeneratingDrafts || store.userInstruction.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
 
+                    let hasPending = store.dispatchQueue.contains(where: { $0.state == .pending })
+                    if hasPending {
+                        Button("Send All") {
+                            (NSApp.delegate as? AppDelegate)?.sendAllForemanQueueItems(store: store)
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                    }
+
                     if let planSummary = store.planSummary, !planSummary.isEmpty {
                         Text(planSummary)
                             .font(.system(size: 11))

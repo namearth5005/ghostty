@@ -1161,6 +1161,48 @@ extension AppDelegate {
     }
 
     @MainActor
+    func sendAllForemanQueueItems(store: ForemanSidebarStore) {
+        let pendingItems = store.dispatchQueue.filter { $0.state == .pending }
+        guard !pendingItems.isEmpty else { return }
+
+        var sentCount = 0
+        var skippedRiskyCount = 0
+
+        for item in pendingItems {
+            if dispatchQueueCoordinator.requiresConfirmation(item) {
+                skippedRiskyCount += 1
+                continue
+            }
+
+            guard let controller = terminalController(for: item.terminalID) else { continue }
+            guard dispatchQueueCoordinator.send(item, through: controller) else { continue }
+
+            if let index = store.dispatchQueue.firstIndex(where: { $0.id == item.id && $0.state == .pending }) {
+                store.dispatchQueue[index].state = .sent
+                store.appendActivityLog(
+                    terminalID: store.dispatchQueue[index].terminalID,
+                    message: store.dispatchQueue[index].message,
+                    state: .sent
+                )
+            }
+            sentCount += 1
+        }
+
+        store.selectedTerminalID = store.dispatchQueue.first(where: { $0.state == .pending })?.terminalID
+
+        if sentCount > 0 && skippedRiskyCount > 0 {
+            store.lastActionMessage = "Sent \(sentCount) drafts. \(skippedRiskyCount) risky drafts require review."
+        } else if sentCount > 0 {
+            store.lastActionMessage = "Sent \(sentCount) drafts."
+        } else if skippedRiskyCount > 0 {
+            store.lastActionMessage = "\(skippedRiskyCount) risky drafts require review before sending."
+        }
+
+        store.errorMessage = nil
+        refreshAIForemanSidebar()
+    }
+
+    @MainActor
     func generateForemanDispatchQueue(for store: ForemanSidebarStore) {
         guard let controller = terminalController(for: store) else { return }
 
