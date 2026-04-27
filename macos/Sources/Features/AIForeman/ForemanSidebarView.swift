@@ -194,6 +194,12 @@ struct ActivityLogView: View {
 
                             Spacer(minLength: 4)
 
+                            if let outcome = entry.outcome {
+                                Text(outcome.rawValue.uppercased())
+                                    .font(.system(size: 9, weight: .bold))
+                                    .foregroundStyle(outcomeColor(for: outcome))
+                            }
+
                             Text(relativeTime(from: entry.timestamp))
                                 .font(.system(size: 10))
                                 .foregroundStyle(.secondary)
@@ -222,6 +228,23 @@ struct ActivityLogView: View {
         case .sent:
             return .green
         case .skipped:
+            return .secondary
+        }
+    }
+
+    private func outcomeColor(for outcome: TerminalOutcome) -> Color {
+        switch outcome {
+        case .success:
+            return .green
+        case .failure:
+            return .red
+        case .hung:
+            return .orange
+        case .needsInput:
+            return .blue
+        case .stillRunning:
+            return .yellow
+        case .unknown:
             return .secondary
         }
     }

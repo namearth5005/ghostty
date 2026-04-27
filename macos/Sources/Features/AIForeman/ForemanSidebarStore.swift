@@ -43,19 +43,22 @@ struct DispatchActivityLogEntry: Identifiable, Equatable, Sendable {
     let message: String
     let state: DispatchQueueItemState
     let timestamp: Date
+    var outcome: TerminalOutcome?
 
     init(
         id: UUID = UUID(),
         terminalID: String,
         message: String,
         state: DispatchQueueItemState,
-        timestamp: Date = Date()
+        timestamp: Date = Date(),
+        outcome: TerminalOutcome? = nil
     ) {
         self.id = id
         self.terminalID = terminalID
         self.message = message
         self.state = state
         self.timestamp = timestamp
+        self.outcome = outcome
     }
 }
 
