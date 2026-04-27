@@ -105,6 +105,19 @@ class AppDelegate: NSObject,
     /// The global undo manager for app-level state such as window restoration.
     lazy var undoManager = ExpiringUndoManager()
 
+    lazy var terminalOutcomeEngine: TerminalOutcomeEngine = {
+        TerminalOutcomeEngine(
+            captureSnapshot: { [weak self] terminalID in
+                guard let self else { return nil }
+                return self.terminalController(for: terminalID)?.captureTerminalSnapshot(forID: terminalID)
+            },
+            onOutcome: { [weak self] report in
+                guard let self else { return }
+                self.handleTerminalOutcome(report)
+            }
+        )
+    }()
+
     lazy var foremanService: ForemanService? = {
         if let anthropicAPIKey, !anthropicAPIKey.isEmpty {
             return ForemanService(client: AnthropicClient(apiKey: anthropicAPIKey))
@@ -1145,6 +1158,7 @@ extension AppDelegate {
         }
 
         store.errorMessage = nil
+        terminalOutcomeEngine.register(terminalID: item.terminalID, sentCommand: item.message)
 
         let nextTerminalID = store.sendAndAdvance(currentTerminalID: item.terminalID)
         if advance, let nextTerminalID, let nextController = terminalController(for: nextTerminalID) {
@@ -1152,6 +1166,26 @@ extension AppDelegate {
         }
 
         refreshAIForemanSidebar()
+    }
+
+    @MainActor
+    private func handleTerminalOutcome(_ report: TerminalOutcomeReport) {
+        for controller in TerminalController.all {
+            let store = controller.foremanSidebarStore
+            if let index = store.activityLog.firstIndex(where: {
+                $0.terminalID == report.terminalID && $0.outcome == nil
+            }) {
+                store.activityLog[index].outcome = report.outcome
+            }
+            if store.activityLog.isEmpty || store.activityLog.last?.terminalID != report.terminalID {
+                store.appendActivityLog(
+                    terminalID: report.terminalID,
+                    message: report.sentCommand,
+                    state: .sent
+                )
+                store.activityLog[store.activityLog.count - 1].outcome = report.outcome
+            }
+        }
     }
 
     @MainActor
@@ -1176,6 +1210,8 @@ extension AppDelegate {
 
             guard let controller = terminalController(for: item.terminalID) else { continue }
             guard dispatchQueueCoordinator.send(item, through: controller) else { continue }
+
+            terminalOutcomeEngine.register(terminalID: item.terminalID, sentCommand: item.message)
 
             if let index = store.dispatchQueue.firstIndex(where: { $0.id == item.id && $0.state == .pending }) {
                 store.dispatchQueue[index].state = .sent

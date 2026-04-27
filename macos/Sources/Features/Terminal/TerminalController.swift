@@ -1655,6 +1655,14 @@ extension TerminalController {
     }
 
     @MainActor
+    func captureTerminalSnapshot(forID terminalID: String) -> TerminalSnapshot? {
+        guard let surfaceView = surfaceTree.first(where: { $0.id.uuidString == terminalID }) else {
+            return nil
+        }
+        return surfaceView.makeTerminalSnapshot()
+    }
+
+    @MainActor
     func sendForemanText(_ text: String, to terminalID: String) -> Bool {
         guard let surfaceView = surfaceTree.first(where: { $0.id.uuidString == terminalID }),
               let surfaceModel = surfaceView.surfaceModel else {

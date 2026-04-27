@@ -206,7 +206,7 @@ struct TerminalSnapshot: Codable, Equatable, Sendable {
         return promptChars.contains(where: { lastLine.hasSuffix(String($0)) })
     }
 
-    private static func isLikelyErrorState(_ visibleText: String) -> Bool {
+    static func isLikelyErrorState(_ visibleText: String) -> Bool {
         let errorMarkers = [
             "error", "fail", "fatal", "panic", "assertion",
             "exception", "segfault", "timeout", "denied",
