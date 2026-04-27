@@ -24,7 +24,10 @@ struct GitStatusParser: TerminalOutputParser {
         if let untrackedRange = combined.firstRange(of: "Untracked files:") {
             let after = String(combined[untrackedRange.upperBound...])
             let nextSection = after.split(separator: "\n\n").first ?? ""
-            untrackedFiles = nextSection.split(separator: "\n").filter { $0.hasPrefix("\t") }.count
+            untrackedFiles = nextSection.split(separator: "\n").filter {
+                let trimmed = $0.trimmingCharacters(in: .whitespaces)
+                return !trimmed.isEmpty && !trimmed.hasPrefix("(")
+            }.count
         } else {
             untrackedFiles = 0
         }
