@@ -150,6 +150,32 @@ class BaseTerminalController: NSWindowController,
             self?.objectWillChange.send()
         }
 
+        // Wire up agent callbacks
+        foremanSidebarStore.onStartAgent = { [weak self] goal, mode in
+            guard let self else { return }
+            (NSApp.delegate as? AppDelegate)?.startForemanAgent(
+                goal: goal,
+                mode: mode,
+                store: self.foremanSidebarStore
+            )
+        }
+        foremanSidebarStore.onSendChatMessage = { [weak self] text in
+            guard let self else { return }
+            (NSApp.delegate as? AppDelegate)?.sendChatMessage(text, store: self.foremanSidebarStore)
+        }
+        foremanSidebarStore.onStopAgent = { [weak self] in
+            guard let self else { return }
+            (NSApp.delegate as? AppDelegate)?.stopForemanAgent(store: self.foremanSidebarStore)
+        }
+        foremanSidebarStore.onApproveAction = { [weak self] in
+            guard let self else { return }
+            (NSApp.delegate as? AppDelegate)?.approveForemanAction()
+        }
+        foremanSidebarStore.onSkipAction = { [weak self] in
+            guard let self else { return }
+            (NSApp.delegate as? AppDelegate)?.skipForemanAction()
+        }
+
         // Setup our bell state for the window
         setupBellNotificationPublisher()
 
@@ -1414,6 +1440,14 @@ class BaseTerminalController: NSWindowController,
 
     @IBAction func toggleCommandPalette(_ sender: Any?) {
         commandPaletteIsShowing.toggle()
+    }
+
+    @IBAction func toggleForemanSidebar(_ sender: Any?) {
+        if foremanSidebarStore.isSidebarVisible {
+            foremanSidebarStore.hideSidebar()
+        } else {
+            foremanSidebarStore.showSidebar()
+        }
     }
 
     @IBAction func find(_ sender: Any) {

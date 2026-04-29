@@ -29,4 +29,26 @@ struct AnthropicClientTests {
         #expect(result.drafts[0].terminalID == "term-1")
         #expect(result.planSummary == "One terminal needs input.")
     }
+
+    @Test
+    func anthropicClientAgentStepAcceptsReasonStuckAlias() async throws {
+        let transport = MockAnthropicTransport(
+            payload: """
+            {"thought":"I cannot continue without a valid shell command.","action":{"type":"declare_stuck","reason_stuck":"The previous command is invalid and there is no safe fallback."}}
+            """
+        )
+        let client = AnthropicClient(apiKey: "test-key", transport: transport)
+        let conversation = await MainActor.run { ForemanConversation() }
+        await MainActor.run {
+            conversation.start(goal: "list all files", mode: .interactive)
+        }
+
+        let response = try await client.agentStep(
+            conversation: conversation,
+            terminals: [],
+            lastOutcome: nil
+        )
+
+        #expect(response.action == .declareStuck(reason: "The previous command is invalid and there is no safe fallback."))
+    }
 }

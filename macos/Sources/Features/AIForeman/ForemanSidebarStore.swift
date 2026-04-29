@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import Combine
 
 struct TerminalSummaryRowModel: Identifiable, Equatable, Sendable {
     let terminalID: String
@@ -75,17 +76,31 @@ final class ForemanSidebarStore: ObservableObject {
     @Published var activityLog: [DispatchActivityLogEntry]
     @Published var lastActionMessage: String?
 
+    // Agentic conversation state
+    @Published var conversation: ForemanConversation
+    @Published var chatInput: String = ""
+    @Published var isAgentRunning: Bool = false
+    var onStartAgent: ((String, AgentMode) -> Void)?
+    var onSendChatMessage: ((String) -> Void)?
+    var onStopAgent: (() -> Void)?
+    var onApproveAction: (() -> Void)?
+    var onSkipAction: (() -> Void)?
+
+    private var cancellables = Set<AnyCancellable>()
+
+    @MainActor
     init(
         terminalRows: [TerminalSummaryRowModel] = [],
         dispatchQueue: [DispatchQueueItem] = [],
         userInstruction: String = "",
         selectedTerminalID: String? = nil,
-        isSidebarVisible: Bool = false,
+        isSidebarVisible: Bool = true,
         planSummary: String? = nil,
         errorMessage: String? = nil,
         isGeneratingDrafts: Bool = false,
         activityLog: [DispatchActivityLogEntry] = [],
-        lastActionMessage: String? = nil
+        lastActionMessage: String? = nil,
+        conversation: ForemanConversation? = nil
     ) {
         self.terminalRows = terminalRows
         self.dispatchQueue = dispatchQueue
@@ -97,6 +112,12 @@ final class ForemanSidebarStore: ObservableObject {
         self.isGeneratingDrafts = isGeneratingDrafts
         self.activityLog = activityLog
         self.lastActionMessage = lastActionMessage
+        self.conversation = conversation ?? ForemanConversation()
+
+        // Forward conversation changes so SwiftUI re-renders the sidebar
+        self.conversation.objectWillChange.sink { [weak self] _ in
+            self?.objectWillChange.send()
+        }.store(in: &cancellables)
     }
 
     static var preview: ForemanSidebarStore {
@@ -136,6 +157,34 @@ final class ForemanSidebarStore: ObservableObject {
 
     func hideSidebar() {
         isSidebarVisible = false
+    }
+
+    func startAgent(goal: String, mode: AgentMode) {
+        chatInput = ""
+        isAgentRunning = true
+        guard onStartAgent != nil else {
+            conversation.errorMessage = "Agent not initialized. Close and reopen the window."
+            return
+        }
+        onStartAgent?(goal, mode)
+    }
+
+    func sendChatMessage(_ text: String) {
+        chatInput = ""
+        onSendChatMessage?(text)
+    }
+
+    func stopAgent() {
+        isAgentRunning = false
+        onStopAgent?()
+    }
+
+    func approveAction() {
+        onApproveAction?()
+    }
+
+    func skipAction() {
+        onSkipAction?()
     }
 
     func applySnapshots(
@@ -274,31 +323,6 @@ final class ForemanSidebarStore: ObservableObject {
     }
 
     private static func snapshotSummary(for snapshot: TerminalSnapshot) -> String {
-        let lines = snapshot.visibleText
-            .split(separator: "\n")
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
-
-        guard !lines.isEmpty else { return "Waiting for terminal output." }
-
-        // Prefer the most informative recent line
-        if let informative = lines.reversed().first(where: { isInformativeLine($0) }) {
-            return String(informative.prefix(120))
-        }
-
-        return String(lines.last!.prefix(120))
-    }
-
-    private static func isInformativeLine(_ line: String) -> Bool {
-        let lowered = line.lowercased()
-        let informativePatterns = [
-            "error", "fail", "fatal", "panic", "assertion",
-            "success", "done", "finished", "completed",
-            "warning", "deprecated", "build",
-            "test", "pass", "skip",
-            "merge", "conflict", "branch",
-            "deploy", "publish", "release",
-        ]
-        return informativePatterns.contains { lowered.contains($0) }
+        TerminalContentAnalyzer.analyze(snapshot).summary
     }
 }

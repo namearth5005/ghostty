@@ -33,15 +33,19 @@ struct ForemanSidebarView: View {
 
             let isConfigured = (NSApp.delegate as? AppDelegate)?.aiForemanIsConfigured ?? false
             if !isConfigured {
-                HStack(spacing: 8) {
-                    Image(systemName: "key.fill")
-                        .font(.system(size: 12))
-                        .foregroundStyle(.orange)
-                    Text("Set ANTHROPIC_API_KEY or OPENAI_API_KEY to enable AI drafting.")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                    Spacer()
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 8) {
+                        Image(systemName: "key.fill")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.orange)
+                        Text("Add API keys to enable AI drafting:")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                    }
+
+                    APIKeyInputRow(label: "Anthropic", defaultsKey: "foreman.api.anthropic")
+                    APIKeyInputRow(label: "OpenAI", defaultsKey: "foreman.api.openai")
                 }
                 .padding(.horizontal, 16)
                 .padding(.top, 12)
@@ -275,6 +279,50 @@ struct ActivityLogView: View {
             return "\(Int(interval / 60))m ago"
         } else {
             return "\(Int(interval / 3600))h ago"
+        }
+    }
+}
+
+struct APIKeyInputRow: View {
+    let label: String
+    let defaultsKey: String
+    @State private var value: String = ""
+    @State private var isVisible: Bool = false
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Text(label)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.secondary)
+                .frame(width: 60, alignment: .leading)
+
+            if isVisible {
+                TextField("sk-...", text: $value)
+                    .font(.system(size: 11))
+                    .textFieldStyle(.roundedBorder)
+            } else {
+                SecureField("sk-...", text: $value)
+                    .font(.system(size: 11))
+                    .textFieldStyle(.roundedBorder)
+            }
+
+            Button(action: { isVisible.toggle() }) {
+                Image(systemName: isVisible ? "eye.slash" : "eye")
+                    .font(.system(size: 10))
+            }
+            .buttonStyle(.plain)
+
+            Button("Save") {
+                UserDefaults.standard.set(value, forKey: defaultsKey)
+                // Notify AppDelegate to re-check configuration
+                NotificationCenter.default.post(name: .init("ForemanAPIKeyChanged"), object: nil)
+            }
+            .font(.system(size: 11, weight: .medium))
+            .buttonStyle(.plain)
+            .disabled(value.isEmpty)
+        }
+        .onAppear {
+            value = UserDefaults.standard.string(forKey: defaultsKey) ?? ""
         }
     }
 }

@@ -133,29 +133,14 @@ struct TerminalView<ViewModel: TerminalViewModel>: View {
                         UpdateOverlay()
                     }
 
-                    if foremanSidebarIsAvailable && !viewModel.foremanSidebarStore.isSidebarVisible {
-                        Button("AI Foreman") {
-                            viewModel.foremanSidebarStore.showSidebar()
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.small)
-                        .padding(12)
-                    }
+
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
 
                 if foremanSidebarIsAvailable && viewModel.foremanSidebarStore.isSidebarVisible {
                     Divider()
 
-                    ForemanSidebarView(
-                        store: viewModel.foremanSidebarStore,
-                        onDraftQueue: {
-                            (NSApp.delegate as? AppDelegate)?.generateForemanDispatchQueue(for: viewModel.foremanSidebarStore)
-                        },
-                        onClose: {
-                            viewModel.foremanSidebarStore.hideSidebar()
-                        }
-                    )
+                    ForemanChatView(store: viewModel.foremanSidebarStore)
                 }
             }
             .frame(maxWidth: .greatestFiniteMagnitude, maxHeight: .greatestFiniteMagnitude)

@@ -3,6 +3,7 @@ import SwiftUI
 import UserNotifications
 import OSLog
 import Sparkle
+import StoreKit
 import GhosttyKit
 
 class AppDelegate: NSObject,
@@ -97,8 +98,8 @@ class AppDelegate: NSObject,
 
     /// The ghostty global state. Only one per process.
     let ghostty: Ghostty.App
-    private let openAIAPIKey: String?
-    private let anthropicAPIKey: String?
+    private var openAIAPIKey: String?
+    private var anthropicAPIKey: String?
 
     @Published private(set) var aiForemanIsConfigured: Bool = false
 
@@ -129,7 +130,10 @@ class AppDelegate: NSObject,
 
         return nil
     }()
+    var foremanAgent: ForemanAgent?
     lazy var dispatchQueueCoordinator = DispatchQueueCoordinator()
+    let storeManager = StoreManager.shared
+    let foremanNotifier = ForemanNotifier.shared
 
     /// The current state of the quick terminal.
     private var quickTerminalControllerState: QuickTerminalState = .uninitialized
@@ -190,8 +194,32 @@ class AppDelegate: NSObject,
     @MainActor private lazy var menuShortcutManager = Ghostty.MenuShortcutManager()
 
     override init() {
-        let openAIAPIKey = ProcessInfo.processInfo.environment["OPENAI_API_KEY"]
-        let anthropicAPIKey = ProcessInfo.processInfo.environment["ANTHROPIC_API_KEY"]
+        // Load API keys from ~/.config/ghostty/.env if present
+        let envPath = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".config/ghostty/.env")
+        var envVars: [String: String] = [:]
+        if let contents = try? String(contentsOf: envPath, encoding: .utf8) {
+            for line in contents.components(separatedBy: .newlines) {
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                guard !trimmed.isEmpty, !trimmed.hasPrefix("#") else { continue }
+                if let eqIndex = trimmed.firstIndex(of: "=") {
+                    let key = String(trimmed[..<eqIndex]).trimmingCharacters(in: .whitespaces)
+                    var value = String(trimmed[trimmed.index(after: eqIndex)...]).trimmingCharacters(in: .whitespaces)
+                    // Strip surrounding quotes if present
+                    if value.hasPrefix("\"") && value.hasSuffix("\"") {
+                        value = String(value.dropFirst().dropLast())
+                    }
+                    envVars[key] = value
+                }
+            }
+        }
+
+        let openAIAPIKey = envVars["OPENAI_API_KEY"]
+            ?? ProcessInfo.processInfo.environment["OPENAI_API_KEY"]
+            ?? UserDefaults.standard.string(forKey: "foreman.api.openai")
+        let anthropicAPIKey = envVars["ANTHROPIC_API_KEY"]
+            ?? ProcessInfo.processInfo.environment["ANTHROPIC_API_KEY"]
+            ?? UserDefaults.standard.string(forKey: "foreman.api.anthropic")
         self.openAIAPIKey = openAIAPIKey
         self.anthropicAPIKey = anthropicAPIKey
         self.aiForemanIsConfigured = !((anthropicAPIKey?.isEmpty ?? true) && (openAIAPIKey?.isEmpty ?? true))
@@ -201,6 +229,14 @@ class AppDelegate: NSObject,
         ghostty = Ghostty.App()
 #endif
         super.init()
+
+        // Listen for API key changes from sidebar
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(reloadAPIKeys),
+            name: .init("ForemanAPIKeyChanged"),
+            object: nil
+        )
 
         ghostty.delegate = self
     }
@@ -322,6 +358,18 @@ class AppDelegate: NSObject,
         let actions = [
             UNNotificationAction(identifier: Ghostty.userNotificationActionShow, title: "Show")
         ]
+
+        // Start StoreKit transaction listener
+        _ = storeManager.listenForTransactions()
+        Task {
+            await storeManager.updateEntitlements()
+            await storeManager.loadProducts()
+        }
+
+        // Initialize memory store
+        Task {
+            try? await ForemanMemoryStore.shared.open()
+        }
 
         let center = UNUserNotificationCenter.current()
 
@@ -455,9 +503,9 @@ class AppDelegate: NSObject,
 
         // We have some visible window. Show an app-wide modal to confirm quitting.
         let alert = NSAlert()
-        alert.messageText = "Quit Ghostty?"
+        alert.messageText = "Quit Foreman?"
         alert.informativeText = "All terminal sessions will be terminated."
-        alert.addButton(withTitle: "Close Ghostty")
+        alert.addButton(withTitle: "Close Foreman")
         alert.addButton(withTitle: "Cancel")
         alert.alertStyle = .warning
         switch alert.runModal() {
@@ -548,7 +596,7 @@ class AppDelegate: NSObject,
             // may want to show this as a sheet on the focused window (especially if we're
             // opening a tab). I'm not sure.
             let alert = NSAlert()
-            alert.messageText = "Allow Ghostty to execute \"\(filename)\"?"
+            alert.messageText = "Allow Foreman to execute \"\(filename)\"?"
             alert.addButton(withTitle: "Allow")
             alert.addButton(withTitle: "Cancel")
             alert.alertStyle = .warning
@@ -1031,6 +1079,11 @@ class AppDelegate: NSObject,
         setSecureInput(.toggle)
     }
 
+    @IBAction func toggleForemanSidebar(_ sender: Any?) {
+        guard let controller = NSApp.keyWindow?.windowController as? BaseTerminalController else { return }
+        controller.toggleForemanSidebar(sender)
+    }
+
     @IBAction func toggleQuickTerminal(_ sender: Any) {
         quickController.toggle()
     }
@@ -1186,6 +1239,30 @@ extension AppDelegate {
                 store.activityLog[store.activityLog.count - 1].outcome = report.outcome
             }
         }
+
+        // Forward to agent if running
+        Task {
+            await foremanAgent?.receiveOutcome(report)
+        }
+
+        // Notify user of outcome change
+        foremanNotifier.observe(report: report)
+
+        // Store in memory
+        Task {
+            let record = SituationOutcomeRecord(
+                id: UUID(),
+                terminalID: report.terminalID,
+                situationFingerprint: report.sentCommand.hashValue,
+                cwd: report.terminalID,
+                action: report.sentCommand,
+                outcome: report.outcome,
+                visibleText: report.summary,
+                timestamp: Date(),
+                projectPath: nil
+            )
+            try? await ForemanMemoryStore.shared.store(record: record)
+        }
     }
 
     @MainActor
@@ -1249,7 +1326,20 @@ extension AppDelegate {
             return
         }
 
+        // Feature gating: check Pro tier for multi-surface
         let snapshots = controller.captureTerminalSnapshots()
+        if snapshots.count > 1 && !FeatureGate.check(.multiSurface) {
+            store.errorMessage = "Multi-surface AI planning requires Foreman Pro."
+            return
+        }
+
+        // Feature gating: check daily quota for basic AI
+        if !FeatureGate.canUseBasicAI() {
+            store.errorMessage = "Daily AI plan limit reached. Upgrade to Foreman Pro for unlimited plans."
+            return
+        }
+        FeatureGate.recordBasicAIUsage()
+
         let validTerminalIDs = Set(snapshots.map(\.terminalID))
         store.isGeneratingDrafts = true
         store.errorMessage = nil
@@ -1277,6 +1367,102 @@ extension AppDelegate {
                     store.isGeneratingDrafts = false
                 }
             }
+        }
+    }
+
+    @MainActor
+    func startForemanAgent(goal: String, mode: AgentMode, store: ForemanSidebarStore) {
+        guard let foremanService else {
+            store.conversation.errorMessage = missingForemanAPIKeyMessage
+            return
+        }
+
+        // Feature gating: check daily quota for basic AI
+        if !FeatureGate.canUseBasicAI() {
+            store.conversation.errorMessage = "Daily AI plan limit reached. Upgrade to Foreman Pro for unlimited plans."
+            return
+        }
+        FeatureGate.recordBasicAIUsage()
+
+        // Cancel any existing agent
+        Task { [weak self] in
+            await self?.foremanAgent?.stop()
+        }
+
+        let conversation = store.conversation
+        let agent = ForemanAgent(
+            conversation: conversation,
+            foremanService: foremanService,
+            onSendCommand: { [weak self] terminalID, command in
+                guard let self else { return false }
+                guard let controller = self.terminalController(for: terminalID) else { return false }
+                let item = DispatchQueueItem(terminalID: terminalID, message: command)
+                guard self.dispatchQueueCoordinator.send(item, through: controller) else { return false }
+                self.terminalOutcomeEngine.register(terminalID: terminalID, sentCommand: command)
+                return true
+            },
+            onStatusChange: { status in
+                // Status is published through conversation
+            },
+            onAction: { action, thought in
+                // Action is added to conversation by agent
+            }
+        )
+
+        self.foremanAgent = agent
+
+        Task {
+            await agent.start(
+                goal: goal,
+                mode: mode,
+                captureSnapshots: { [weak self] in
+                    guard let self else { return [] }
+                    var allSnapshots: [TerminalSnapshot] = []
+                    for controller in TerminalController.all {
+                        allSnapshots.append(contentsOf: controller.captureTerminalSnapshots())
+                    }
+                    return allSnapshots
+                }
+            )
+        }
+    }
+
+    @MainActor
+    func sendChatMessage(_ text: String, store: ForemanSidebarStore) {
+        Task {
+            await foremanAgent?.receiveUserMessage(text)
+        }
+    }
+
+    @MainActor
+    func stopForemanAgent(store: ForemanSidebarStore) {
+        Task { [weak self] in
+            await self?.foremanAgent?.stop()
+            self?.foremanAgent = nil
+        }
+    }
+
+    @MainActor
+    func approveForemanAction() {
+        Task { [weak self] in
+            guard let self else { return }
+            await self.foremanAgent?.approvePendingAction(
+                captureSnapshots: { [weak self] in
+                    guard let self else { return [] }
+                    var allSnapshots: [TerminalSnapshot] = []
+                    for controller in TerminalController.all {
+                        allSnapshots.append(contentsOf: controller.captureTerminalSnapshots())
+                    }
+                    return allSnapshots
+                }
+            )
+        }
+    }
+
+    @MainActor
+    func skipForemanAction() {
+        Task { [weak self] in
+            await self?.foremanAgent?.skipPendingAction()
         }
     }
 
@@ -1318,6 +1504,23 @@ extension AppDelegate {
         }
 
         return summaries
+    }
+
+    @objc private func reloadAPIKeys() {
+        let openAI = UserDefaults.standard.string(forKey: "foreman.api.openai")
+        let anthropic = UserDefaults.standard.string(forKey: "foreman.api.anthropic")
+        self.openAIAPIKey = openAI
+        self.anthropicAPIKey = anthropic
+        self.aiForemanIsConfigured = !((anthropic?.isEmpty ?? true) && (openAI?.isEmpty ?? true))
+
+        // Recreate foreman service with new keys
+        if let anthropic, !anthropic.isEmpty {
+            self.foremanService = ForemanService(client: AnthropicClient(apiKey: anthropic))
+        } else if let openAI, !openAI.isEmpty {
+            self.foremanService = ForemanService(client: OpenAIClient(apiKey: openAI))
+        } else {
+            self.foremanService = nil
+        }
     }
 
     private var missingForemanAPIKeyMessage: String {

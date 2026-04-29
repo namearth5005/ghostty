@@ -153,6 +153,7 @@ class TerminalWindow: NSWindow {
                 addTitlebarAccessoryViewController(updateAccessory)
                 updateAccessory.view.translatesAutoresizingMaskIntoConstraints = false
             }
+
         }
 
         // Setup the accessory view for tabs that shows our keyboard shortcuts,

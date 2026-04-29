@@ -30,4 +30,44 @@ struct ForemanServiceTests {
         #expect(result.drafts[0].terminalID == "term-1")
         #expect(result.planSummary == "Two terminals need input.")
     }
+
+    @Test
+    func openAIClientAgentStepExtractsWrappedJSON() async throws {
+        let transport = MockResponsesTransport(
+            payload: """
+            Here is the next action.
+            {"thought":"The previous command was mistyped.","action":{"type":"send_command","terminal_id":"term-1","command":"find . -print","reason":"Retry with the correct command."}}
+            """
+        )
+        let client = OpenAIClient(apiKey: "test-key", transport: transport)
+        let conversation = await MainActor.run { ForemanConversation() }
+        await MainActor.run {
+            conversation.start(goal: "list all files", mode: .interactive)
+        }
+
+        let response = try await client.agentStep(
+            conversation: conversation,
+            terminals: [
+                .makePreview(
+                    terminalID: "term-1",
+                    windowID: "win-1",
+                    tabID: "tab-1",
+                    title: "shell",
+                    cwd: "/tmp/project",
+                    isFocused: true,
+                    visibleText: "$ ",
+                    recentScrollbackLines: [],
+                    lastInputPreview: "hfind . -print"
+                ),
+            ],
+            lastOutcome: nil
+        )
+
+        #expect(response.thought == "The previous command was mistyped.")
+        #expect(response.action == .sendCommand(
+            terminalID: "term-1",
+            command: "find . -print",
+            reason: "Retry with the correct command."
+        ))
+    }
 }

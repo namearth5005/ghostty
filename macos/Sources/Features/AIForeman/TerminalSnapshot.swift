@@ -155,21 +155,18 @@ struct TerminalSnapshot: Codable, Equatable, Sendable {
     }
 
     private static func isLikelyTUI(_ commandSignals: String) -> Bool {
+        // Check for alternate screen buffer escape sequence (TUI apps use this)
         if commandSignals.contains("\u{1b}[?1049h") {
             return true
         }
 
-        return [
-            "vim",
-            "nvim",
-            "less",
-            "top",
-            "htop",
-            "fzf",
-            "tmux",
-            "nano",
-            "emacs",
-        ].contains { commandSignals.contains($0) }
+        // Use word-boundary matching to avoid false positives like "Desktop" matching "top"
+        let tuiCommands = [
+            "vim", "nvim", "less", "top", "htop", "fzf", "tmux", "nano", "emacs"
+        ]
+        let words = commandSignals.components(separatedBy: CharacterSet.alphanumerics.inverted)
+        let wordSet = Set(words)
+        return tuiCommands.contains { wordSet.contains($0) }
     }
 
     private static func isLikelyLongRunning(_ commandSignals: String) -> Bool {
