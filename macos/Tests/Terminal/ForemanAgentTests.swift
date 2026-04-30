@@ -182,8 +182,50 @@ struct ForemanAgentTests {
         #expect(overviews.count == 1)
         #expect(overviews.first?.summary.contains("term-1") == true)
         #expect(overviews.first?.summary.contains("hfind") == true)
+        let lastOverview = await MainActor.run { conversation.lastOverview }
+        let lastUnderstandings = await MainActor.run { conversation.lastUnderstandings }
+        #expect(lastOverview?.summary.contains("term-1") == true)
+        #expect(lastUnderstandings.first?.state == .failed)
         let messages = await MainActor.run { conversation.messages }
         #expect(messages.contains { $0.content.contains("likely fix is `find . -print`") })
+    }
+
+    @Test
+    func startingAndStoppingConversationClearsStructuredTerminalContext() async {
+        let conversation = await MainActor.run { ForemanConversation() }
+        let overview = TerminalOverview(
+            summary: "term-1 failed",
+            changedTerminalIDs: ["term-1"],
+            primaryTerminalID: "term-1"
+        )
+        let understanding = TerminalUnderstanding.preview(
+            terminalID: "term-1",
+            state: .failed,
+            shortExplanation: "The terminal failed.",
+            lastMeaningfulEvent: "zsh: command not found: hfind",
+            importantDetails: ["The typed command was `hfind . -print`."],
+            suggestedNextActions: []
+        )
+
+        await MainActor.run {
+            conversation.updateTerminalContext(overview: overview, understandings: [understanding])
+            conversation.start(goal: "new session", mode: .interactive)
+        }
+
+        let clearedOnStart = await MainActor.run {
+            conversation.lastOverview == nil && conversation.lastUnderstandings.isEmpty
+        }
+        #expect(clearedOnStart)
+
+        await MainActor.run {
+            conversation.updateTerminalContext(overview: overview, understandings: [understanding])
+            conversation.stop()
+        }
+
+        let clearedOnStop = await MainActor.run {
+            conversation.lastOverview == nil && conversation.lastUnderstandings.isEmpty
+        }
+        #expect(clearedOnStop)
     }
 
     @Test

@@ -48,12 +48,16 @@ final class ForemanConversation: ObservableObject {
         self.status = .observing
         self.iterationCount = 0
         self.errorMessage = nil
+        self.lastOverview = nil
+        self.lastUnderstandings = []
         addMessage(role: .user, content: goal)
     }
 
     func stop() {
         isRunning = false
         status = .idle
+        lastOverview = nil
+        lastUnderstandings = []
     }
 
     func addMessage(role: ConversationMessageRole, content: String, action: AgentAction? = nil) {

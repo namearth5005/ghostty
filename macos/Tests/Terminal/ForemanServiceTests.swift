@@ -101,6 +101,37 @@ struct ForemanServiceTests {
         let recorded = await client.lastUnderstandings
         #expect(recorded == [understanding])
     }
+
+    @Test
+    func serviceUsesProtocolFallbackForLegacyClients() async throws {
+        let client = LegacyRecordingForemanClient()
+        let service = ForemanService(client: client)
+        let conversation = await MainActor.run { ForemanConversation() }
+        let understanding = TerminalUnderstanding.preview(
+            terminalID: "term-1",
+            state: .failed,
+            shortExplanation: "The terminal failed.",
+            lastMeaningfulEvent: "error: module not found",
+            importantDetails: ["module not found"],
+            suggestedNextActions: []
+        )
+        let overview = TerminalOverview(
+            summary: "term-1 failed",
+            changedTerminalIDs: ["term-1"],
+            primaryTerminalID: "term-1"
+        )
+
+        _ = try await service.agentStep(
+            conversation: conversation,
+            terminals: sampleSnapshots(),
+            understandings: [understanding],
+            overview: overview,
+            lastOutcome: nil
+        )
+
+        let forwarded = await client.didUseLegacyPath()
+        #expect(forwarded == true)
+    }
 }
 
 @MainActor
@@ -151,6 +182,34 @@ private actor RecordingForemanClient: ForemanLLMClient {
         lastOutcome: TerminalOutcomeReport?
     ) async throws -> AgentStepResponse {
         throw RecordingForemanClientError.unexpectedCall
+    }
+}
+
+private actor LegacyRecordingForemanClient: ForemanLLMClient {
+    private var legacyCallCount = 0
+
+    func summarize(snapshot: TerminalSnapshot) async throws -> TerminalSummary {
+        throw RecordingForemanClientError.unexpectedCall
+    }
+
+    func planDispatch(instruction: String, summaries: [TerminalSummary]) async throws -> DispatchPlan {
+        throw RecordingForemanClientError.unexpectedCall
+    }
+
+    func agentStep(
+        conversation: ForemanConversation,
+        terminals: [TerminalSnapshot],
+        lastOutcome: TerminalOutcomeReport?
+    ) async throws -> AgentStepResponse {
+        legacyCallCount += 1
+        return try makeStepResponse(
+            thought: "Falling back to the legacy path.",
+            action: .respond(message: "legacy")
+        )
+    }
+
+    func didUseLegacyPath() -> Bool {
+        legacyCallCount == 1
     }
 }
 
