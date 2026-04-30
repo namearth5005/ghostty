@@ -133,7 +133,14 @@ struct TerminalView<ViewModel: TerminalViewModel>: View {
                         UpdateOverlay()
                     }
 
-
+                    if foremanSidebarIsAvailable && !viewModel.foremanSidebarStore.isSidebarVisible {
+                        Button("AI Foreman") {
+                            viewModel.foremanSidebarStore.showSidebar()
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                        .padding(12)
+                    }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
 
