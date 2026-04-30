@@ -152,21 +152,6 @@ struct ForemanAgentTests {
     @Test
     func followUpQuestionUsesStructuredTerminalOverview() async throws {
         let conversation = await MainActor.run { ForemanConversation() }
-        let understanding = TerminalUnderstanding.preview(
-            terminalID: "term-1",
-            state: .failed,
-            shortExplanation: "The shell command failed because `hfind` is not installed.",
-            lastMeaningfulEvent: "zsh: command not found: hfind",
-            importantDetails: ["The typed command was `hfind . -print`."],
-            suggestedNextActions: [
-                .init(
-                    title: "Run the likely intended find command",
-                    command: "find . -print",
-                    reason: "Likely typo.",
-                    isRecommended: true
-                ),
-            ]
-        )
         let client = ScriptedForemanClient(
             responses: [
                 try makeStepResponse(
@@ -175,7 +160,6 @@ struct ForemanAgentTests {
                 ),
             ]
         )
-        await client.setCapturedUnderstandings([[understanding]])
 
         let commandRecorder = CommandRecorder()
         let agent = makeAgent(
@@ -184,14 +168,20 @@ struct ForemanAgentTests {
             commandRecorder: commandRecorder
         )
 
-        await agent.start(goal: "what happened here?", mode: .interactive, captureSnapshots: sampleSnapshots)
+        await agent.start(goal: "what happened here?", mode: .interactive, captureSnapshots: failedFindSnapshots)
 
         try await waitFor {
             await MainActor.run { conversation.iterationCount >= 1 && conversation.status == .idle }
         }
 
         let payloads = await client.recordedUnderstandings()
-        #expect(payloads.last?.first?.state == .failed)
+        let overviews = await client.recordedOverviews()
+        #expect(payloads.count == 1)
+        #expect(payloads.first?.first?.state == .failed)
+        #expect(payloads.first?.first?.lastMeaningfulEvent == "zsh: command not found: hfind")
+        #expect(overviews.count == 1)
+        #expect(overviews.first?.summary.contains("term-1") == true)
+        #expect(overviews.first?.summary.contains("hfind") == true)
         let messages = await MainActor.run { conversation.messages }
         #expect(messages.contains { $0.content.contains("likely fix is `find . -print`") })
     }
@@ -286,6 +276,28 @@ private func sampleSnapshots() -> [TerminalSnapshot] {
     ]
 }
 
+@MainActor
+private func failedFindSnapshots() -> [TerminalSnapshot] {
+    [
+        TerminalSnapshot.makePreview(
+            terminalID: "term-1",
+            windowID: "win-1",
+            tabID: "tab-1",
+            title: "shell",
+            cwd: "/tmp/project",
+            isFocused: true,
+            visibleText: "hfind . -print\nzsh: command not found: hfind\nuser@host %",
+            recentScrollbackLines: [
+                "$ pwd",
+                "/tmp/project",
+                "hfind . -print",
+                "zsh: command not found: hfind",
+            ],
+            lastInputPreview: "hfind . -print"
+        ),
+    ]
+}
+
 private func waitForStatus(
     _ expectedStatus: AgentStatus,
     in conversation: ForemanConversation,
@@ -345,7 +357,7 @@ private actor CommandRecorder {
 private actor ScriptedForemanClient: ForemanLLMClient {
     private var responses: [AgentStepResponse]
     private var understandingsLog: [[TerminalUnderstanding]] = []
-    private var capturedUnderstandings: [[TerminalUnderstanding]] = []
+    private var overviewsLog: [TerminalOverview] = []
 
     init(responses: [AgentStepResponse]) {
         self.responses = responses
@@ -367,9 +379,7 @@ private actor ScriptedForemanClient: ForemanLLMClient {
         lastOutcome: TerminalOutcomeReport?
     ) async throws -> AgentStepResponse {
         understandingsLog.append(understandings)
-        if !capturedUnderstandings.isEmpty {
-            understandingsLog.append(contentsOf: capturedUnderstandings)
-        }
+        overviewsLog.append(overview)
         guard !responses.isEmpty else {
             throw ScriptedForemanClientError.missingResponse
         }
@@ -387,12 +397,12 @@ private actor ScriptedForemanClient: ForemanLLMClient {
         return responses.removeFirst()
     }
 
-    func setCapturedUnderstandings(_ understandings: [[TerminalUnderstanding]]) {
-        capturedUnderstandings = understandings
-    }
-
     func recordedUnderstandings() -> [[TerminalUnderstanding]] {
         understandingsLog
+    }
+
+    func recordedOverviews() -> [TerminalOverview] {
+        overviewsLog
     }
 }
 
