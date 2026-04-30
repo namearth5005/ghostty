@@ -7,6 +7,7 @@
 .direnv/
 .envrc.local
 .flatpak-builder/
+.worktrees/
 zig-cache/
 .zig-cache/
 zig-out/
@@ -28,4 +29,3 @@ glad.zip
 /ghostty.qcow2
 
 vgcore.*
-
