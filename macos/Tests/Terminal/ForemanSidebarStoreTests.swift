@@ -65,6 +65,62 @@ struct ForemanSidebarStoreTests {
 
     @MainActor
     @Test
+    func applySnapshotsUsesStructuredUnderstandingStateAndExplanation() {
+        let store = ForemanSidebarStore()
+        let snapshots = [
+            TerminalSnapshot.makePreview(
+                terminalID: "term-1",
+                windowID: "win-1",
+                tabID: "tab-1",
+                title: "api",
+                cwd: "/tmp/project",
+                isFocused: true,
+                visibleText: "error: module not found",
+                recentScrollbackLines: [],
+                lastInputPreview: "npm test"
+            ),
+            TerminalSnapshot.makePreview(
+                terminalID: "term-2",
+                windowID: "win-1",
+                tabID: "tab-2",
+                title: "server",
+                cwd: "/tmp/project",
+                isFocused: false,
+                visibleText: "Server listening on http://localhost:3000",
+                recentScrollbackLines: [],
+                lastInputPreview: "npm run dev"
+            ),
+        ]
+        let summariesByTerminalID = [
+            "term-1": TerminalSummary(
+                terminalID: "term-1",
+                summary: "Tests failed because a module is missing.",
+                state: "failed",
+                confidence: 0.93,
+                needsUserAttention: true,
+                suggestedNextStep: "Install or fix the missing module import."
+            ),
+            "term-2": TerminalSummary(
+                terminalID: "term-2",
+                summary: "The dev server is healthy.",
+                state: "running",
+                confidence: 0.91,
+                needsUserAttention: false,
+                suggestedNextStep: "Continue watching for requests."
+            ),
+        ]
+
+        store.applySnapshots(snapshots, summariesByTerminalID: summariesByTerminalID)
+
+        #expect(store.terminalRows.count == 2)
+        #expect(store.terminalRows[0].state == "failed")
+        #expect(store.terminalRows[0].summary == "Tests failed because a module is missing.")
+        #expect(store.terminalRows[1].state == "running")
+        #expect(store.terminalRows[1].summary == "The dev server is healthy.")
+    }
+
+    @MainActor
+    @Test
     func storeBuildsVisibleRowsAndSelectsNextPendingDraft() {
         let store = ForemanSidebarStore.preview
         store.dispatchQueue = [

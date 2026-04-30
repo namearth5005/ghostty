@@ -94,7 +94,7 @@ final class ForemanSidebarStore: ObservableObject {
         dispatchQueue: [DispatchQueueItem] = [],
         userInstruction: String = "",
         selectedTerminalID: String? = nil,
-        isSidebarVisible: Bool = true,
+        isSidebarVisible: Bool = false,
         planSummary: String? = nil,
         errorMessage: String? = nil,
         isGeneratingDrafts: Bool = false,

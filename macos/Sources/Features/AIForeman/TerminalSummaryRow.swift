@@ -44,11 +44,15 @@ struct TerminalSummaryRow: View {
 
     private var statusColor: Color {
         switch row.state.lowercased() {
-        case "blocked":
+        case "failed", "blocked":
             return .red
-        case "running", "active":
-            return .blue
-        case "waiting", "idle":
+        case "running", "active", "noisy_healthy":
+            return .orange
+        case "succeeded":
+            return .green
+        case "waiting":
+            return .yellow
+        case "idle":
             return .orange
         default:
             return .secondary

@@ -229,6 +229,35 @@ struct ForemanAgentTests {
     }
 
     @Test
+    func independentTerminalsProduceOverviewWithoutInventedSharedStory() {
+        let engine = TerminalUnderstandingEngine()
+        let overview = engine.makeOverview(
+            current: [
+                .preview(
+                    terminalID: "term-1",
+                    state: .failed,
+                    shortExplanation: "Build failed because a module is missing.",
+                    lastMeaningfulEvent: "error: module not found",
+                    importantDetails: ["module A missing"],
+                    suggestedNextActions: []
+                ),
+                .preview(
+                    terminalID: "term-2",
+                    state: .running,
+                    shortExplanation: "Dev server is healthy and still running.",
+                    lastMeaningfulEvent: "Listening on localhost:3000",
+                    importantDetails: ["GET /health 200"],
+                    suggestedNextActions: []
+                ),
+            ],
+            previous: []
+        )
+
+        #expect(overview.summary.contains("term-1"))
+        #expect(!overview.summary.contains("both terminals are working on the same task"))
+    }
+
+    @Test
     func uiPhaseTreatsAskUserAsAwaitingReply() {
         let phase = ConversationUIPhase.resolve(
             goal: "Investigate",

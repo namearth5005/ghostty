@@ -106,7 +106,13 @@ struct AnthropicClient: ForemanLLMClient, Sendable {
         return try decoder.decode(DispatchPlan.self, from: Data(payload.utf8))
     }
 
-    func agentStep(conversation: ForemanConversation, terminals: [TerminalSnapshot], lastOutcome: TerminalOutcomeReport?) async throws -> AgentStepResponse {
+    func agentStep(
+        conversation: ForemanConversation,
+        terminals: [TerminalSnapshot],
+        understandings: [TerminalUnderstanding],
+        overview: TerminalOverview,
+        lastOutcome: TerminalOutcomeReport?
+    ) async throws -> AgentStepResponse {
         let goal = await MainActor.run { conversation.goal ?? "" }
         let mode = await MainActor.run { conversation.mode.rawValue }
         let iterationCount = await MainActor.run { conversation.iterationCount }
@@ -115,7 +121,7 @@ struct AnthropicClient: ForemanLLMClient, Sendable {
 
         let request = Request(
             model: plannerModel,
-            system: Self.agentStepInstructions,
+            system: Self.makeAgentStepInstructions(),
             maxTokens: 1200,
             messages: [.user(Self.agentStepPrompt(
                 goal: goal,
@@ -123,6 +129,8 @@ struct AnthropicClient: ForemanLLMClient, Sendable {
                 mode: mode,
                 iterationCount: iterationCount,
                 messages: messages,
+                understandings: understandings,
+                overview: overview,
                 terminals: terminals,
                 lastOutcome: lastOutcome,
                 using: encoder
@@ -131,6 +139,22 @@ struct AnthropicClient: ForemanLLMClient, Sendable {
 
         let payload = try await perform(request)
         return try Self.decodeJSON(AgentStepResponse.self, from: payload, decoder: decoder)
+    }
+
+    func agentStep(
+        conversation: ForemanConversation,
+        terminals: [TerminalSnapshot],
+        lastOutcome: TerminalOutcomeReport?
+    ) async throws -> AgentStepResponse {
+        let overview = await MainActor.run { conversation.lastOverview } ?? Self.fallbackOverview(for: terminals)
+        let understandings = await MainActor.run { conversation.lastUnderstandings }
+        return try await agentStep(
+            conversation: conversation,
+            terminals: terminals,
+            understandings: understandings,
+            overview: overview,
+            lastOutcome: lastOutcome
+        )
     }
 
     private func perform(_ request: Request) async throws -> String {
@@ -159,16 +183,19 @@ extension AnthropicClient {
     Return JSON only. Only draft messages for terminals that need a next step.
     """
 
-    private static let agentStepInstructions = """
-    You are an autonomous terminal foreman. You observe terminal state, think step by step, and choose exactly ONE action.
-    Return JSON only. Do not wrap the JSON in markdown code blocks.
-    Available action types (use exact snake_case strings): respond, send_command, ask_user, declare_complete, declare_stuck.
-    Treat the latest user message as the active turn. Earlier goal text is session context only and may be superseded by a follow-up.
-    Use respond for plain conversational replies that do not require terminal actions or a blocking follow-up.
-    Use ask_user only when you genuinely need information from the user before you can continue a task.
-    For send_command, terminal_id must exactly match one of the terminal_id values from Terminal snapshots.
-    When sending commands, prefer non-interactive flags (e.g., -y, --no-pager, --batch-mode) to avoid hanging.
-    """
+    private static func makeAgentStepInstructions() -> String {
+        """
+        You are an autonomous terminal foreman. You observe terminal state, think step by step, and choose exactly ONE action.
+        Return JSON only. Do not wrap the JSON in markdown code blocks.
+        Available action types (use exact snake_case strings): respond, send_command, ask_user, declare_complete, declare_stuck.
+        Treat the latest user message as the active turn. Earlier goal text is session context only and may be superseded by a follow-up.
+        Use structured terminal understanding as your primary context. Use raw terminal snapshots only as supporting evidence.
+        Use respond for plain conversational replies that do not require terminal actions or a blocking follow-up.
+        Use ask_user only when you genuinely need information from the user before you can continue a task.
+        For send_command, terminal_id must exactly match one of the terminal_id values from Terminal snapshots.
+        When sending commands, prefer non-interactive flags (e.g., -y, --no-pager, --batch-mode) to avoid hanging.
+        """
+    }
 
     private static func summaryPrompt(for snapshot: TerminalSnapshot, using encoder: JSONEncoder) -> String {
         """
@@ -213,7 +240,18 @@ extension AnthropicClient {
         """
     }
 
-    private static func agentStepPrompt(goal: String, latestUserMessage: String, mode: String, iterationCount: Int, messages: [ConversationMessage], terminals: [TerminalSnapshot], lastOutcome: TerminalOutcomeReport?, using encoder: JSONEncoder) -> String {
+    private static func agentStepPrompt(
+        goal: String,
+        latestUserMessage: String,
+        mode: String,
+        iterationCount: Int,
+        messages: [ConversationMessage],
+        understandings: [TerminalUnderstanding],
+        overview: TerminalOverview,
+        terminals: [TerminalSnapshot],
+        lastOutcome: TerminalOutcomeReport?,
+        using encoder: JSONEncoder
+    ) -> String {
         """
         Return one JSON object with this exact shape:
         {
@@ -238,12 +276,34 @@ extension AnthropicClient {
         Conversation history:
         \(encode(messages, using: encoder))
 
+        Structured terminal overview:
+        \(encode(overview, using: encoder))
+
+        Structured terminal understandings:
+        \(encode(understandings, using: encoder))
+
         Terminal snapshots:
         \(encode(terminals, using: encoder))
 
         Last outcome (if any):
         \(lastOutcome.map { encode($0, using: encoder) } ?? "none")
         """
+    }
+
+    private static func fallbackOverview(for terminals: [TerminalSnapshot]) -> TerminalOverview {
+        let primaryTerminalID = terminals.first?.terminalID
+        let summary: String
+        if terminals.isEmpty {
+            summary = "No structured terminal overview is available yet."
+        } else {
+            summary = "Structured terminal understanding is not available yet for \(terminals.count) terminal(s)."
+        }
+
+        return TerminalOverview(
+            summary: summary,
+            changedTerminalIDs: terminals.map(\.terminalID),
+            primaryTerminalID: primaryTerminalID
+        )
     }
 
     private static func encode<T: Encodable>(_ value: T, using encoder: JSONEncoder) -> String {
