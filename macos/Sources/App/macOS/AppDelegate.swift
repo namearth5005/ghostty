@@ -185,6 +185,9 @@ class AppDelegate: NSObject,
     private var aiForemanRefreshTimer: Timer?
     private var aiForemanSummaryCache: [String: TerminalSummary] = [:]
     private var aiForemanSnapshotFingerprints: [String: Int] = [:]
+    private let aiForemanUnderstandingEngine = TerminalUnderstandingEngine()
+    private var aiForemanPreviousSnapshots: [String: TerminalSnapshot] = [:]
+    private var aiForemanPreviousUnderstandings: [String: TerminalUnderstanding] = [:]
 
     /// Signals
     private var signals: [DispatchSourceSignal] = []
@@ -1470,9 +1473,25 @@ extension AppDelegate {
     private func refreshAIForemanSidebar() {
         for controller in TerminalController.all {
             let snapshots = controller.captureTerminalSnapshots()
+            let understandings = snapshots.map { snapshot in
+                aiForemanUnderstandingEngine.understand(
+                    current: snapshot,
+                    previous: aiForemanPreviousSnapshots[snapshot.terminalID],
+                    lastOutcome: nil
+                )
+            }
+            let understandingsByTerminalID = Dictionary(
+                uniqueKeysWithValues: understandings.map { ($0.terminalID, $0) }
+            )
+            aiForemanPreviousSnapshots = Dictionary(
+                uniqueKeysWithValues: snapshots.map { ($0.terminalID, $0) }
+            )
+            aiForemanPreviousUnderstandings = understandingsByTerminalID
+
             controller.foremanSidebarStore.applySnapshots(
                 snapshots,
-                summariesByTerminalID: currentAISummaries(for: snapshots)
+                summariesByTerminalID: currentAISummaries(for: snapshots),
+                understandingsByTerminalID: understandingsByTerminalID
             )
         }
     }

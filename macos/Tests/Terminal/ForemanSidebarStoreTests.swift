@@ -324,4 +324,91 @@ struct ForemanSidebarStoreTests {
 
         #expect(store.lastActionMessage == nil)
     }
+
+    @MainActor
+    @Test
+    func applySnapshotsPrefersTerminalUnderstandingOverSummary() {
+        let store = ForemanSidebarStore()
+        let snapshots = [
+            TerminalSnapshot.makePreview(
+                terminalID: "term-1",
+                windowID: "win-1",
+                tabID: "tab-1",
+                title: "api",
+                cwd: "/tmp/project",
+                isFocused: true,
+                visibleText: "error: module not found",
+                recentScrollbackLines: [],
+                lastInputPreview: "npm test"
+            )
+        ]
+        let summariesByTerminalID = [
+            "term-1": TerminalSummary(
+                terminalID: "term-1",
+                summary: "Old summary from LLM.",
+                state: "blocked",
+                confidence: 0.93,
+                needsUserAttention: true,
+                suggestedNextStep: "Fix it."
+            )
+        ]
+        let understandingsByTerminalID = [
+            "term-1": TerminalUnderstanding(
+                terminalID: "term-1",
+                title: "api",
+                cwd: "/tmp/project",
+                state: .failed,
+                lastMeaningfulEvent: "npm test failed with module not found",
+                shortExplanation: "The terminal failed: npm test failed with module not found",
+                importantDetails: ["error: module not found"],
+                suggestedNextActions: [
+                    .init(title: "Install missing module", command: "npm install", reason: "Missing dependency", isRecommended: true)
+                ]
+            )
+        ]
+
+        store.applySnapshots(snapshots, summariesByTerminalID: summariesByTerminalID, understandingsByTerminalID: understandingsByTerminalID)
+
+        #expect(store.terminalRows.count == 1)
+        #expect(store.terminalRows[0].state == "failed")
+        #expect(store.terminalRows[0].summary == "The terminal failed: npm test failed with module not found")
+        #expect(store.terminalRows[0].suggestedActions.count == 1)
+        #expect(store.terminalRows[0].suggestedActions[0].title == "Install missing module")
+    }
+
+    @MainActor
+    @Test
+    func applySnapshotsFallsBackToSummaryWhenNoUnderstanding() {
+        let store = ForemanSidebarStore()
+        let snapshots = [
+            TerminalSnapshot.makePreview(
+                terminalID: "term-1",
+                windowID: "win-1",
+                tabID: "tab-1",
+                title: "api",
+                cwd: "/tmp/project",
+                isFocused: true,
+                visibleText: "error: module not found",
+                recentScrollbackLines: [],
+                lastInputPreview: "npm test"
+            )
+        ]
+        let summariesByTerminalID = [
+            "term-1": TerminalSummary(
+                terminalID: "term-1",
+                summary: "Tests failed because a module is missing.",
+                state: "failed",
+                confidence: 0.93,
+                needsUserAttention: true,
+                suggestedNextStep: "Install or fix the missing module import."
+            )
+        ]
+
+        store.applySnapshots(snapshots, summariesByTerminalID: summariesByTerminalID)
+
+        #expect(store.terminalRows.count == 1)
+        #expect(store.terminalRows[0].state == "failed")
+        #expect(store.terminalRows[0].summary == "Tests failed because a module is missing.")
+        #expect(store.terminalRows[0].suggestedActions.isEmpty)
+    }
 }

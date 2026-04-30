@@ -9,6 +9,7 @@ struct TerminalSummaryRowModel: Identifiable, Equatable, Sendable {
     var state: String
     var summary: String
     var isFocused: Bool
+    var suggestedActions: [TerminalSuggestedAction]
 
     var id: String { terminalID }
 }
@@ -129,7 +130,8 @@ final class ForemanSidebarStore: ObservableObject {
                     cwd: "/tmp/project",
                     state: "blocked",
                     summary: "Blocked on an auth assertion failure.",
-                    isFocused: true
+                    isFocused: true,
+                    suggestedActions: []
                 ),
                 .init(
                     terminalID: "term-2",
@@ -137,7 +139,8 @@ final class ForemanSidebarStore: ObservableObject {
                     cwd: "/tmp/project",
                     state: "running",
                     summary: "Still processing a long-running build.",
-                    isFocused: false
+                    isFocused: false,
+                    suggestedActions: []
                 )
             ],
             dispatchQueue: [
@@ -189,9 +192,22 @@ final class ForemanSidebarStore: ObservableObject {
 
     func applySnapshots(
         _ snapshots: [TerminalSnapshot],
-        summariesByTerminalID: [String: TerminalSummary] = [:]
+        summariesByTerminalID: [String: TerminalSummary] = [:],
+        understandingsByTerminalID: [String: TerminalUnderstanding] = [:]
     ) {
         terminalRows = snapshots.map { snapshot in
+            if let understanding = understandingsByTerminalID[snapshot.terminalID] {
+                return TerminalSummaryRowModel(
+                    terminalID: snapshot.terminalID,
+                    title: snapshot.title,
+                    cwd: snapshot.cwd,
+                    state: understanding.state.rawValue,
+                    summary: understanding.shortExplanation,
+                    isFocused: snapshot.isFocused,
+                    suggestedActions: understanding.suggestedNextActions
+                )
+            }
+
             if let summary = summariesByTerminalID[snapshot.terminalID] {
                 return TerminalSummaryRowModel(
                     terminalID: snapshot.terminalID,
@@ -199,7 +215,8 @@ final class ForemanSidebarStore: ObservableObject {
                     cwd: snapshot.cwd,
                     state: summary.state,
                     summary: summary.summary,
-                    isFocused: snapshot.isFocused
+                    isFocused: snapshot.isFocused,
+                    suggestedActions: []
                 )
             }
 
@@ -209,7 +226,8 @@ final class ForemanSidebarStore: ObservableObject {
                 cwd: snapshot.cwd,
                 state: Self.snapshotState(for: snapshot),
                 summary: Self.snapshotSummary(for: snapshot),
-                isFocused: snapshot.isFocused
+                isFocused: snapshot.isFocused,
+                suggestedActions: []
             )
         }
 

@@ -29,6 +29,22 @@ struct TerminalSummaryRow: View {
                 .font(.system(size: 12))
                 .foregroundStyle(.primary)
                 .fixedSize(horizontal: false, vertical: true)
+
+            if !row.suggestedActions.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(row.suggestedActions.prefix(2), id: \.title) { action in
+                        HStack(spacing: 4) {
+                            Image(systemName: action.isRecommended ? "star.fill" : "circle")
+                                .font(.system(size: 8))
+                                .foregroundStyle(action.isRecommended ? .yellow : .secondary)
+                            Text(action.title)
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+                .padding(.top, 4)
+            }
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
