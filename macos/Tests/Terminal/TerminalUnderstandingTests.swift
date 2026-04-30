@@ -27,7 +27,15 @@ struct TerminalUnderstandingTests {
         #expect(understanding.state == .failed)
         #expect(understanding.lastMeaningfulEvent.contains("command not found"))
         #expect(understanding.suggestedNextActions.count == 3)
+        #expect(understanding.suggestedNextActions.map(\.title) == [
+            "Run the likely intended find command",
+            "Try fd if a faster file search was intended",
+            "Confirm whether hfind was intentional",
+        ])
+        #expect(understanding.suggestedNextActions.map(\.isRecommended) == [true, false, false])
+        #expect(understanding.suggestedNextActions.map(\.command) == ["find . -print", "fd .", nil])
         #expect(understanding.recommendedAction?.command == "find . -print")
+        #expect(understanding.suggestedNextActions.first?.command == understanding.recommendedAction?.command)
     }
 
     @Test
@@ -99,8 +107,8 @@ struct TerminalUnderstandingTests {
 
         let overview = engine.makeOverview(current: current, previous: previous)
 
-        #expect(overview.summary.contains("term-1"))
-        #expect(!overview.summary.contains("term-2 is still running"))
+        #expect(overview.summary == "term-1: API server is ready.")
+        #expect(!overview.summary.contains("term-2"))
         #expect(overview.changedTerminalIDs == ["term-1"])
     }
 }
