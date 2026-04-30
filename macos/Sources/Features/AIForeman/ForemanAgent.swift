@@ -17,6 +17,9 @@ actor ForemanAgent {
     private var lastOutcome: TerminalOutcomeReport?
     private var pauseState: PauseState = .none
     private var captureSnapshots: (@MainActor () -> [TerminalSnapshot])?
+    private let understandingEngine = TerminalUnderstandingEngine()
+    private var previousSnapshotsByTerminalID: [String: TerminalSnapshot] = [:]
+    private var previousUnderstandings: [TerminalUnderstanding] = []
 
     init(
         conversation: ForemanConversation,
@@ -40,6 +43,8 @@ actor ForemanAgent {
         self.captureSnapshots = captureSnapshots
         lastOutcome = nil
         pauseState = .none
+        previousSnapshotsByTerminalID = [:]
+        previousUnderstandings = []
         cancelCurrentTask()
 
         currentTask = Task {
@@ -190,12 +195,37 @@ actor ForemanAgent {
             // 1. Observe
             await setStatus(.observing)
             let terminals = await captureSnapshots()
+            let understandings = terminals.map { snapshot in
+                understandingEngine.understand(
+                    current: snapshot,
+                    previous: previousSnapshotsByTerminalID[snapshot.terminalID],
+                    lastOutcome: lastOutcome
+                )
+            }
+            let overview = understandingEngine.makeOverview(
+                current: understandings,
+                previous: previousUnderstandings
+            )
+
+            previousSnapshotsByTerminalID = Dictionary(
+                uniqueKeysWithValues: terminals.map { ($0.terminalID, $0) }
+            )
+            previousUnderstandings = understandings
+
+            await MainActor.run {
+                conversation.updateTerminalContext(
+                    overview: overview,
+                    understandings: understandings
+                )
+            }
 
             // 2. Plan
             await setStatus(.planning)
             let response = try await foremanService.agentStep(
                 conversation: conversation,
                 terminals: terminals,
+                understandings: understandings,
+                overview: overview,
                 lastOutcome: lastOutcome
             )
 

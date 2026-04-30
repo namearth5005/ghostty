@@ -150,6 +150,53 @@ struct ForemanAgentTests {
     }
 
     @Test
+    func followUpQuestionUsesStructuredTerminalOverview() async throws {
+        let conversation = await MainActor.run { ForemanConversation() }
+        let understanding = TerminalUnderstanding.preview(
+            terminalID: "term-1",
+            state: .failed,
+            shortExplanation: "The shell command failed because `hfind` is not installed.",
+            lastMeaningfulEvent: "zsh: command not found: hfind",
+            importantDetails: ["The typed command was `hfind . -print`."],
+            suggestedNextActions: [
+                .init(
+                    title: "Run the likely intended find command",
+                    command: "find . -print",
+                    reason: "Likely typo.",
+                    isRecommended: true
+                ),
+            ]
+        )
+        let client = ScriptedForemanClient(
+            responses: [
+                try makeStepResponse(
+                    thought: "I can answer from structured context.",
+                    action: .respond(message: "This terminal failed because `hfind` is not installed. The likely fix is `find . -print`.")
+                ),
+            ]
+        )
+        await client.setCapturedUnderstandings([[understanding]])
+
+        let commandRecorder = CommandRecorder()
+        let agent = makeAgent(
+            conversation: conversation,
+            client: client,
+            commandRecorder: commandRecorder
+        )
+
+        await agent.start(goal: "what happened here?", mode: .interactive, captureSnapshots: sampleSnapshots)
+
+        try await waitFor {
+            await MainActor.run { conversation.iterationCount >= 1 && conversation.status == .idle }
+        }
+
+        let payloads = await client.recordedUnderstandings()
+        #expect(payloads.last?.first?.state == .failed)
+        let messages = await MainActor.run { conversation.messages }
+        #expect(messages.contains { $0.content.contains("likely fix is `find . -print`") })
+    }
+
+    @Test
     func uiPhaseTreatsAskUserAsAwaitingReply() {
         let phase = ConversationUIPhase.resolve(
             goal: "Investigate",
@@ -297,6 +344,8 @@ private actor CommandRecorder {
 
 private actor ScriptedForemanClient: ForemanLLMClient {
     private var responses: [AgentStepResponse]
+    private var understandingsLog: [[TerminalUnderstanding]] = []
+    private var capturedUnderstandings: [[TerminalUnderstanding]] = []
 
     init(responses: [AgentStepResponse]) {
         self.responses = responses
@@ -313,12 +362,37 @@ private actor ScriptedForemanClient: ForemanLLMClient {
     func agentStep(
         conversation: ForemanConversation,
         terminals: [TerminalSnapshot],
+        understandings: [TerminalUnderstanding],
+        overview: TerminalOverview,
+        lastOutcome: TerminalOutcomeReport?
+    ) async throws -> AgentStepResponse {
+        understandingsLog.append(understandings)
+        if !capturedUnderstandings.isEmpty {
+            understandingsLog.append(contentsOf: capturedUnderstandings)
+        }
+        guard !responses.isEmpty else {
+            throw ScriptedForemanClientError.missingResponse
+        }
+        return responses.removeFirst()
+    }
+
+    func agentStep(
+        conversation: ForemanConversation,
+        terminals: [TerminalSnapshot],
         lastOutcome: TerminalOutcomeReport?
     ) async throws -> AgentStepResponse {
         guard !responses.isEmpty else {
             throw ScriptedForemanClientError.missingResponse
         }
         return responses.removeFirst()
+    }
+
+    func setCapturedUnderstandings(_ understandings: [[TerminalUnderstanding]]) {
+        capturedUnderstandings = understandings
+    }
+
+    func recordedUnderstandings() -> [[TerminalUnderstanding]] {
+        understandingsLog
     }
 }
 

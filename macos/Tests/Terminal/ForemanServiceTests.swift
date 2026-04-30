@@ -70,4 +70,100 @@ struct ForemanServiceTests {
             reason: "Retry with the correct command."
         ))
     }
+
+    @Test
+    func serviceForwardsStructuredUnderstandingsToClient() async throws {
+        let client = RecordingForemanClient()
+        let service = ForemanService(client: client)
+        let conversation = await MainActor.run { ForemanConversation() }
+        let understanding = TerminalUnderstanding.preview(
+            terminalID: "term-1",
+            state: .failed,
+            shortExplanation: "The terminal failed.",
+            lastMeaningfulEvent: "error: module not found",
+            importantDetails: ["module not found"],
+            suggestedNextActions: []
+        )
+        let overview = TerminalOverview(
+            summary: "term-1 failed",
+            changedTerminalIDs: ["term-1"],
+            primaryTerminalID: "term-1"
+        )
+
+        _ = try await service.agentStep(
+            conversation: conversation,
+            terminals: sampleSnapshots(),
+            understandings: [understanding],
+            overview: overview,
+            lastOutcome: nil
+        )
+
+        let recorded = await client.lastUnderstandings
+        #expect(recorded == [understanding])
+    }
+}
+
+@MainActor
+private func sampleSnapshots() -> [TerminalSnapshot] {
+    [
+        TerminalSnapshot.makePreview(
+            terminalID: "term-1",
+            windowID: "win-1",
+            tabID: "tab-1",
+            title: "shell",
+            cwd: "/tmp/project",
+            isFocused: true,
+            visibleText: "$ ",
+            recentScrollbackLines: [],
+            lastInputPreview: "hfind . -print"
+        ),
+    ]
+}
+
+private actor RecordingForemanClient: ForemanLLMClient {
+    private(set) var lastUnderstandings: [TerminalUnderstanding] = []
+
+    func summarize(snapshot: TerminalSnapshot) async throws -> TerminalSummary {
+        throw RecordingForemanClientError.unexpectedCall
+    }
+
+    func planDispatch(instruction: String, summaries: [TerminalSummary]) async throws -> DispatchPlan {
+        throw RecordingForemanClientError.unexpectedCall
+    }
+
+    func agentStep(
+        conversation: ForemanConversation,
+        terminals: [TerminalSnapshot],
+        understandings: [TerminalUnderstanding],
+        overview: TerminalOverview,
+        lastOutcome: TerminalOutcomeReport?
+    ) async throws -> AgentStepResponse {
+        lastUnderstandings = understandings
+        return try makeStepResponse(
+            thought: "Answering from structured context.",
+            action: .respond(message: overview.summary)
+        )
+    }
+
+    func agentStep(
+        conversation: ForemanConversation,
+        terminals: [TerminalSnapshot],
+        lastOutcome: TerminalOutcomeReport?
+    ) async throws -> AgentStepResponse {
+        throw RecordingForemanClientError.unexpectedCall
+    }
+}
+
+private enum RecordingForemanClientError: Error {
+    case unexpectedCall
+}
+
+private func makeStepResponse(thought: String, action: AgentAction) throws -> AgentStepResponse {
+    struct StepEnvelope: Encodable {
+        let thought: String
+        let action: AgentAction
+    }
+
+    let data = try JSONEncoder().encode(StepEnvelope(thought: thought, action: action))
+    return try JSONDecoder().decode(AgentStepResponse.self, from: data)
 }

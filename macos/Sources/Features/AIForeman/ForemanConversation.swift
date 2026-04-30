@@ -36,6 +36,8 @@ final class ForemanConversation: ObservableObject {
     @Published var status: AgentStatus = .idle
     @Published var iterationCount: Int = 0
     @Published var errorMessage: String?
+    @Published var lastOverview: TerminalOverview?
+    @Published var lastUnderstandings: [TerminalUnderstanding] = []
 
     let maxIterations = 20
 
@@ -64,6 +66,14 @@ final class ForemanConversation: ObservableObject {
 
     func incrementIteration() {
         iterationCount += 1
+    }
+
+    func updateTerminalContext(
+        overview: TerminalOverview,
+        understandings: [TerminalUnderstanding]
+    ) {
+        self.lastOverview = overview
+        self.lastUnderstandings = understandings
     }
 
     var hasReachedMaxIterations: Bool {
