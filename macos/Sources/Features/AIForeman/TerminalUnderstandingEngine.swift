@@ -216,6 +216,10 @@ struct TerminalUnderstandingEngine {
             return nil
         }
 
+        if isFreshExecutionTransition(current: current, previous: previous) {
+            return nil
+        }
+
         return lastOutcome
     }
 
@@ -228,5 +232,15 @@ struct TerminalUnderstandingEngine {
             return nil
         }
         return trimmed
+    }
+
+    private func isFreshExecutionTransition(
+        current: TerminalSnapshot,
+        previous: TerminalSnapshot?
+    ) -> Bool {
+        guard let previous else { return false }
+        guard previous.signals.likelyWaitingForInput else { return false }
+        guard !current.signals.likelyWaitingForInput else { return false }
+        return current.visibleText != previous.visibleText
     }
 }

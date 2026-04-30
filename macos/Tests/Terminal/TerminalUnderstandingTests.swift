@@ -141,6 +141,50 @@ struct TerminalUnderstandingTests {
     }
 
     @Test
+    func engineIgnoresStaleOutcomeWhenSameCommandIsRerun() {
+        let engine = TerminalUnderstandingEngine()
+        let previous = TerminalSnapshot.makePreview(
+            terminalID: "term-5",
+            windowID: "win-1",
+            tabID: "tab-5",
+            title: "test",
+            cwd: "/tmp/project",
+            isFocused: true,
+            visibleText: "Tests: 42 passed\nuser@host %",
+            recentScrollbackLines: ["npm test", "Tests: 42 passed", "user@host %"],
+            lastInputPreview: "npm test"
+        )
+        let current = TerminalSnapshot.makePreview(
+            terminalID: "term-5",
+            windowID: "win-1",
+            tabID: "tab-5",
+            title: "test",
+            cwd: "/tmp/project",
+            isFocused: true,
+            visibleText: "Running tests...\nSuite auth.spec.ts",
+            recentScrollbackLines: ["npm test", "Running tests...", "Suite auth.spec.ts"],
+            lastInputPreview: "npm test"
+        )
+        let staleOutcome = TerminalOutcomeReport(
+            terminalID: "term-5",
+            sentCommand: "npm test",
+            outcome: .success,
+            detectedAt: .now,
+            summary: "Previous test run passed."
+        )
+
+        let understanding = engine.understand(
+            current: current,
+            previous: previous,
+            lastOutcome: staleOutcome
+        )
+
+        #expect(understanding.state == .running)
+        #expect(understanding.lastMeaningfulEvent == "Suite auth.spec.ts")
+        #expect(!understanding.shortExplanation.contains("Previous test run passed."))
+    }
+
+    @Test
     func adaptiveOverviewMentionsOnlyChangedTerminal() {
         let engine = TerminalUnderstandingEngine()
 
