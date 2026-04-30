@@ -7,8 +7,9 @@ struct TerminalUnderstandingEngine {
         lastOutcome: TerminalOutcomeReport?
     ) -> TerminalUnderstanding {
         let visible = current.visibleText
-        let lastEvent = extractLastMeaningfulEvent(from: current, previous: previous, lastOutcome: lastOutcome)
-        let state = classifyState(current: current, lastOutcome: lastOutcome)
+        let applicableOutcome = applicableOutcome(for: current, previous: previous, lastOutcome: lastOutcome)
+        let lastEvent = extractLastMeaningfulEvent(from: current, previous: previous, lastOutcome: applicableOutcome)
+        let state = classifyState(current: current, lastOutcome: applicableOutcome)
         let suggestedActions = makeSuggestions(for: current, state: state, lastEvent: lastEvent)
 
         return TerminalUnderstanding(
@@ -27,14 +28,25 @@ struct TerminalUnderstandingEngine {
         current: [TerminalUnderstanding],
         previous: [TerminalUnderstanding]
     ) -> TerminalOverview {
+        let currentIDs = Set(current.map(\.terminalID))
         let previousByID = Dictionary(uniqueKeysWithValues: previous.map { ($0.terminalID, $0) })
-        let changed = current.filter { previousByID[$0.terminalID] != $0 }.map(\.terminalID)
+        let changedCurrent = current.filter { previousByID[$0.terminalID] != $0 }.map(\.terminalID)
+        let removed = previous.map(\.terminalID).filter { !currentIDs.contains($0) }
+        let changed = changedCurrent + removed
 
-        if let changedTerminal = current.first(where: { changed.contains($0.terminalID) }) {
+        if let changedTerminal = current.first(where: { changedCurrent.contains($0.terminalID) }) {
             return TerminalOverview(
                 summary: "\(changedTerminal.terminalID): \(changedTerminal.shortExplanation)",
                 changedTerminalIDs: changed,
                 primaryTerminalID: changedTerminal.terminalID
+            )
+        }
+
+        if let removedTerminalID = removed.first {
+            return TerminalOverview(
+                summary: "\(removedTerminalID) is no longer available.",
+                changedTerminalIDs: changed,
+                primaryTerminalID: removedTerminalID
             )
         }
 
@@ -110,7 +122,7 @@ struct TerminalUnderstandingEngine {
         case .failed:
             return "The terminal failed: \(lastEvent)"
         case .succeeded:
-            return "The terminal completed successfully."
+            return "The terminal completed successfully: \(lastEvent)"
         case .running:
             return "The \(snapshot.title) terminal is still running a long-lived command."
         case .waiting:
@@ -187,5 +199,34 @@ struct TerminalUnderstandingEngine {
         guard !trimmed.isEmpty else { return false }
         let promptSuffixes = ["$", "%", "#", ">", "λ", "❯", "➜", "→", "⇒"]
         return promptSuffixes.contains { trimmed.hasSuffix($0) }
+    }
+
+    private func applicableOutcome(
+        for current: TerminalSnapshot,
+        previous: TerminalSnapshot?,
+        lastOutcome: TerminalOutcomeReport?
+    ) -> TerminalOutcomeReport? {
+        guard let lastOutcome, lastOutcome.terminalID == current.terminalID else {
+            return nil
+        }
+
+        let activeCommand = normalizedCommand(current.lastInputPreview)
+            ?? normalizedCommand(previous?.lastInputPreview)
+        guard let activeCommand, activeCommand == normalizedCommand(lastOutcome.sentCommand) else {
+            return nil
+        }
+
+        return lastOutcome
+    }
+
+    private func normalizedCommand(_ command: String?) -> String? {
+        guard let command else {
+            return nil
+        }
+        let trimmed = command.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return nil
+        }
+        return trimmed
     }
 }
