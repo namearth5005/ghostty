@@ -65,6 +65,25 @@ struct ForemanChatView: View {
 
             Divider()
 
+            // Terminal inspect surface
+            if !store.terminalRows.isEmpty {
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack {
+                        Text("Terminals")
+                            .font(.system(size: 12, weight: .bold))
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                    }
+                    ForEach(store.terminalRows) { row in
+                        TerminalSummaryRow(row: row)
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
+
+                Divider()
+            }
+
             // Chat messages
             ScrollViewReader { proxy in
                 ScrollView {
