@@ -125,4 +125,23 @@ struct TerminalSnapshotTests {
 
         #expect(snapshot.signals.likelyLongRunning == true)
     }
+
+    @Test
+    func snapshotPrefersSemanticPromptSignalWhenVisibleTailIsNotPromptLike() {
+        let snapshot = TerminalSnapshot.makePreview(
+            terminalID: "term-6",
+            windowID: "win-6",
+            tabID: "tab-6",
+            title: "claude",
+            cwd: "/tmp/project",
+            isFocused: true,
+            visibleText: "What do you want to do?\n1. Stop and wait for limit to reset\n2. Upgrade your plan\nEnter to confirm · Esc to cancel",
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            cursorIsAtPrompt: true
+        )
+
+        #expect(snapshot.runtime.cursorIsAtPrompt == true)
+        #expect(snapshot.signals.likelyWaitingForInput == true)
+    }
 }

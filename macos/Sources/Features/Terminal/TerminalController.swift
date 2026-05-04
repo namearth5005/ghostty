@@ -1617,9 +1617,18 @@ protocol TerminalSnapshotSource {
     var terminalSnapshotVisibleText: String { get }
     var terminalSnapshotRecentScrollbackLines: [String] { get }
     var terminalSnapshotLastInputPreview: String? { get }
+    var terminalSnapshotForegroundProcessID: Int? { get }
+    var terminalSnapshotForegroundProcessName: String? { get }
+    var terminalSnapshotCursorIsAtPrompt: Bool? { get }
+    var terminalSnapshotUsingAlternateScreen: Bool { get }
 }
 
 extension TerminalSnapshotSource {
+    var terminalSnapshotForegroundProcessID: Int? { nil }
+    var terminalSnapshotForegroundProcessName: String? { nil }
+    var terminalSnapshotCursorIsAtPrompt: Bool? { nil }
+    var terminalSnapshotUsingAlternateScreen: Bool { false }
+
     @MainActor
     func makeTerminalSnapshot() -> TerminalSnapshot {
         TerminalSnapshot.makePreview(
@@ -1631,7 +1640,11 @@ extension TerminalSnapshotSource {
             isFocused: terminalSnapshotIsFocused,
             visibleText: terminalSnapshotVisibleText,
             recentScrollbackLines: terminalSnapshotRecentScrollbackLines,
-            lastInputPreview: terminalSnapshotLastInputPreview
+            lastInputPreview: terminalSnapshotLastInputPreview,
+            foregroundProcessID: terminalSnapshotForegroundProcessID,
+            foregroundProcessName: terminalSnapshotForegroundProcessName,
+            cursorIsAtPrompt: terminalSnapshotCursorIsAtPrompt,
+            usingAlternateScreen: terminalSnapshotUsingAlternateScreen
         )
     }
 }

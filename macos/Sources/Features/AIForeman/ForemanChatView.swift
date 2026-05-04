@@ -50,6 +50,20 @@ struct ForemanChatView: View {
                 .padding(.top, 12)
             }
 
+            // Agent readiness panel
+            if !store.agentReadiness.isEmpty {
+                AgentReadinessPanel(
+                    agents: store.agentReadiness,
+                    onLaunch: { identity in
+                        store.onLaunchAgent?(identity)
+                    }
+                )
+                .padding(.horizontal, 16)
+                .padding(.top, 12)
+
+                Divider()
+            }
+
             // Status bar
             HStack {
                 StatusBadge(display: statusDisplay)

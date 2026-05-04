@@ -53,6 +53,15 @@ struct ForemanSidebarView: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
+                    if !store.agentReadiness.isEmpty {
+                        AgentReadinessPanel(
+                            agents: store.agentReadiness,
+                            onLaunch: { identity in
+                                store.onLaunchAgent?(identity)
+                            }
+                        )
+                    }
+
                     VStack(alignment: .leading, spacing: 10) {
                         Text("Terminals")
                             .font(.system(size: 12, weight: .bold))

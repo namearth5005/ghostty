@@ -30,6 +30,52 @@ struct TerminalSummaryRow: View {
                 .foregroundStyle(.primary)
                 .fixedSize(horizontal: false, vertical: true)
 
+            // NEW: Rich agent context card
+            if let contextType = row.agentContextType {
+                HStack(spacing: 8) {
+                    Image(systemName: iconForContextType(contextType))
+                        .font(.system(size: 12))
+                        .foregroundStyle(colorForContextType(contextType))
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        if let title = row.agentContextTitle {
+                            Text(title)
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(colorForContextType(contextType))
+                        }
+                        if let description = row.agentContextDescription {
+                            Text(description)
+                                .font(.system(size: 11))
+                                .foregroundStyle(.secondary)
+                                .lineLimit(2)
+                        }
+                        if let detail = row.agentContextDetail {
+                            Text(detail)
+                                .font(.system(size: 10, weight: .medium, design: .monospaced))
+                                .foregroundStyle(.secondary.opacity(0.8))
+                        }
+                    }
+                }
+                .padding(.top, 4)
+            }
+
+            // Legacy metadata (only show if no rich context)
+            if row.agentContextType == nil, row.agentIdentity != nil || row.evidenceSummary != nil {
+                HStack(spacing: 8) {
+                    if let agentIdentity = row.agentIdentity {
+                        Text(agentIdentity.replacingOccurrences(of: "_", with: " "))
+                    }
+                    if let agentInteractionState = row.agentInteractionState {
+                        Text(agentInteractionState.replacingOccurrences(of: "_", with: " "))
+                    }
+                    if let evidenceSummary = row.evidenceSummary {
+                        Text(evidenceSummary.replacingOccurrences(of: "_", with: " "))
+                    }
+                }
+                .font(.system(size: 10, weight: .medium, design: .monospaced))
+                .foregroundStyle(.secondary)
+            }
+
             if !row.suggestedActions.isEmpty {
                 VStack(alignment: .leading, spacing: 4) {
                     ForEach(row.suggestedActions.prefix(2), id: \.title) { action in
@@ -54,7 +100,10 @@ struct TerminalSummaryRow: View {
         )
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(row.isFocused ? Color.accentColor.opacity(0.35) : Color.black.opacity(0.08), lineWidth: 1)
+                .stroke(
+                    attentionBorderColor,
+                    lineWidth: attentionBorderWidth
+                )
         )
     }
 
@@ -73,5 +122,59 @@ struct TerminalSummaryRow: View {
         default:
             return .secondary
         }
+    }
+
+    private var attentionBorderColor: Color {
+        if !row.isFocused, row.agentContextType == "waitingApproval" || row.agentContextType == "waitingChoice" || row.agentContextType == "waitingText" {
+            return Color.orange.opacity(0.5)
+        }
+        return row.isFocused ? Color.accentColor.opacity(0.35) : Color.black.opacity(0.08)
+    }
+
+    private var attentionBorderWidth: CGFloat {
+        if !row.isFocused, row.agentContextType == "waitingApproval" || row.agentContextType == "waitingChoice" || row.agentContextType == "waitingText" {
+            return 2
+        }
+        return 1
+    }
+}
+
+// MARK: - Context type helpers
+
+private func iconForContextType(_ type: String) -> String {
+    switch type.lowercased() {
+    case "running":
+        return "arrow.triangle.2.circlepath"
+    case "waitingapproval":
+        return "exclamationmark.shield"
+    case "waitingchoice":
+        return "list.bullet.clipboard"
+    case "waitingtext":
+        return "bubble.left.and.bubble.right"
+    case "completed":
+        return "checkmark.circle"
+    case "error":
+        return "xmark.octagon"
+    default:
+        return "circle"
+    }
+}
+
+private func colorForContextType(_ type: String) -> Color {
+    switch type.lowercased() {
+    case "running":
+        return .blue
+    case "waitingapproval":
+        return .orange
+    case "waitingchoice":
+        return .yellow
+    case "waitingtext":
+        return .purple
+    case "completed":
+        return .green
+    case "error":
+        return .red
+    default:
+        return .secondary
     }
 }

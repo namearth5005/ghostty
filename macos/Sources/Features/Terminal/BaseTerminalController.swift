@@ -175,6 +175,18 @@ class BaseTerminalController: NSWindowController,
             guard let self else { return }
             (NSApp.delegate as? AppDelegate)?.skipForemanAction()
         }
+        foremanSidebarStore.onLaunchAgent = { [weak self] identity in
+            guard let self else { return }
+            let request = ManagedAgentLaunchRequest(
+                identity: identity,
+                workingDirectory: self.focusedSurface?.pwd,
+                location: .tab
+            )
+            _ = (NSApp.delegate as? AppDelegate)?.launchManagedAgent(request)
+        }
+
+        // Refresh agent readiness on init
+        foremanSidebarStore.refreshAgentReadiness()
 
         // Setup our bell state for the window
         setupBellNotificationPublisher()

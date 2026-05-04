@@ -1715,6 +1715,11 @@ pub const CAPI = struct {
         return surface.core_surface.getProcessInfo(.foreground_pid) orelse 0;
     }
 
+    /// Returns whether the terminal cursor is currently in a semantic prompt or input region.
+    export fn ghostty_surface_cursor_is_at_prompt(surface: *Surface) bool {
+        return surface.core_surface.io.terminal.cursorIsAtPrompt();
+    }
+
     /// Returns the PTY name for the surface. The returned string must be
     /// freed by the caller via ghostty_string_free.
     export fn ghostty_surface_tty_name(surface: *Surface) String {

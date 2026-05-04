@@ -32,6 +32,12 @@ struct ForemanSidebarStoreTests {
                 visibleText: "raw shell text",
                 recentScrollback: "line one\nline two",
                 lastInputPreview: "pnpm test",
+                runtime: .init(
+                    foregroundProcessID: nil,
+                    foregroundProcessName: nil,
+                    cursorIsAtPrompt: false,
+                    usingAlternateScreen: false
+                ),
                 signals: .init(
                     likelyWaitingForInput: false,
                     likelyLongRunning: false,
@@ -117,6 +123,50 @@ struct ForemanSidebarStoreTests {
         #expect(store.terminalRows[0].summary == "Tests failed because a module is missing.")
         #expect(store.terminalRows[1].state == "running")
         #expect(store.terminalRows[1].summary == "The dev server is healthy.")
+    }
+
+    @MainActor
+    @Test
+    func applySnapshotsCarriesAgentMetadataIntoTerminalRows() {
+        let store = ForemanSidebarStore()
+        let snapshots = [
+            TerminalSnapshot.makePreview(
+                terminalID: "term-1",
+                windowID: "win-1",
+                tabID: "tab-1",
+                title: "Claude Code",
+                cwd: "/tmp/project",
+                isFocused: true,
+                visibleText: "What do you want to do?",
+                recentScrollbackLines: [],
+                lastInputPreview: nil,
+                foregroundProcessName: "claude"
+            )
+        ]
+        let understanding = TerminalUnderstanding.preview(
+            terminalID: "term-1",
+            state: .waiting,
+            shortExplanation: "Claude Code is waiting for your selection.",
+            lastMeaningfulEvent: "What do you want to do?",
+            importantDetails: [],
+            suggestedNextActions: [],
+            agentIdentity: .claudeCode,
+            agentInteractionState: .waitingChoice,
+            supportLevel: .firstClass,
+            evidence: [
+                .init(source: .screenHeuristic, detail: "Detected numbered menu", confidence: 0.86)
+            ]
+        )
+
+        store.applySnapshots(
+            snapshots,
+            understandingsByTerminalID: ["term-1": understanding]
+        )
+
+        #expect(store.terminalRows[0].agentIdentity == "claude_code")
+        #expect(store.terminalRows[0].agentInteractionState == "waiting_choice")
+        #expect(store.terminalRows[0].supportLevel == "first_class")
+        #expect(store.terminalRows[0].evidenceSummary == "screen_heuristic")
     }
 
     @MainActor
@@ -358,9 +408,13 @@ struct ForemanSidebarStoreTests {
                 title: "api",
                 cwd: "/tmp/project",
                 state: .failed,
+                agentIdentity: .none,
+                agentInteractionState: .unknown,
+                supportLevel: .genericFallback,
                 lastMeaningfulEvent: "npm test failed with module not found",
                 shortExplanation: "The terminal failed: npm test failed with module not found",
                 importantDetails: ["error: module not found"],
+                evidence: [],
                 suggestedNextActions: [
                     .init(title: "Install missing module", command: "npm install", reason: "Missing dependency", isRecommended: true)
                 ]

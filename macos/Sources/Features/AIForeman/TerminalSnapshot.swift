@@ -8,6 +8,13 @@ struct TerminalSnapshot: Codable, Equatable, Sendable {
         var likelyTUI: Bool
     }
 
+    struct Runtime: Codable, Equatable, Sendable {
+        var foregroundProcessID: Int?
+        var foregroundProcessName: String?
+        var cursorIsAtPrompt: Bool
+        var usingAlternateScreen: Bool
+    }
+
     let terminalID: String
     let windowID: String
     let tabID: String
@@ -18,6 +25,7 @@ struct TerminalSnapshot: Codable, Equatable, Sendable {
     let visibleText: String
     let recentScrollback: String
     let lastInputPreview: String?
+    let runtime: Runtime
     let signals: Signals
 
     var summaryInput: String {
@@ -46,7 +54,11 @@ struct TerminalSnapshot: Codable, Equatable, Sendable {
         isFocused: Bool,
         visibleText: String,
         recentScrollbackLines: [String],
-        lastInputPreview: String?
+        lastInputPreview: String?,
+        foregroundProcessID: Int? = nil,
+        foregroundProcessName: String? = nil,
+        cursorIsAtPrompt: Bool? = nil,
+        usingAlternateScreen: Bool = false
     ) -> TerminalSnapshot {
         let capped = Array(recentScrollbackLines.suffix(250)).joined(separator: "\n")
         let normalizedVisible = normalizeTerminalText(visibleText)
@@ -56,6 +68,7 @@ struct TerminalSnapshot: Codable, Equatable, Sendable {
             .joined(separator: "\n")
             .lowercased()
         let trimmedVisible = normalizedVisible.trimmingCharacters(in: .whitespacesAndNewlines)
+        let promptSignal = cursorIsAtPrompt ?? isLikelyWaitingForInput(trimmedVisible)
         return TerminalSnapshot(
             terminalID: terminalID,
             windowID: windowID,
@@ -67,11 +80,17 @@ struct TerminalSnapshot: Codable, Equatable, Sendable {
             visibleText: normalizedVisible,
             recentScrollback: normalizedScrollback,
             lastInputPreview: lastInputPreview,
+            runtime: .init(
+                foregroundProcessID: foregroundProcessID,
+                foregroundProcessName: foregroundProcessName,
+                cursorIsAtPrompt: promptSignal,
+                usingAlternateScreen: usingAlternateScreen
+            ),
             signals: .init(
-                likelyWaitingForInput: isLikelyWaitingForInput(trimmedVisible),
+                likelyWaitingForInput: promptSignal,
                 likelyLongRunning: isLikelyLongRunning(commandSignals),
                 likelyErrorState: isLikelyErrorState(normalizedVisible),
-                likelyTUI: isLikelyTUI(commandSignals)
+                likelyTUI: usingAlternateScreen || isLikelyTUI(commandSignals)
             )
         )
     }

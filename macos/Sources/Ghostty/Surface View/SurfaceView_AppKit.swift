@@ -3,6 +3,7 @@ import Combine
 import SwiftUI
 import CoreText
 import UserNotifications
+import Darwin
 import GhosttyKit
 
 extension Ghostty {
@@ -2198,6 +2199,17 @@ extension Ghostty.SurfaceView {
 
 #if canImport(AppKit)
 extension Ghostty.SurfaceView: TerminalSnapshotSource {
+    private func terminalSnapshotForegroundProcessName(for pid: Int?) -> String? {
+        guard let pid else { return nil }
+
+        var buffer = [CChar](repeating: 0, count: Int(MAXPATHLEN))
+        let nameLength = proc_name(Int32(pid), &buffer, UInt32(buffer.count))
+        guard nameLength > 0 else { return nil }
+
+        let name = String(cString: buffer).trimmingCharacters(in: .whitespacesAndNewlines)
+        return name.isEmpty ? nil : name
+    }
+
     private var terminalSnapshotController: BaseTerminalController? {
         window?.windowController as? BaseTerminalController
     }
@@ -2216,7 +2228,34 @@ extension Ghostty.SurfaceView: TerminalSnapshotSource {
 
     var terminalSnapshotTitle: String { title }
 
-    var terminalSnapshotWorkingDirectory: String? { pwd }
+    var terminalSnapshotWorkingDirectory: String? {
+        if let pwd { return pwd }
+        // Fallback: query the foreground process's cwd via lsof
+        return terminalSnapshotWorkingDirectoryFromProcess(pid: terminalSnapshotForegroundProcessID)
+    }
+
+    private func terminalSnapshotWorkingDirectoryFromProcess(pid: Int?) -> String? {
+        guard let pid else { return nil }
+        let task = Process()
+        task.launchPath = "/usr/sbin/lsof"
+        task.arguments = ["-p", "\(pid)", "-a", "-d", "cwd", "-Fn"]
+        let pipe = Pipe()
+        task.standardOutput = pipe
+        do {
+            try task.run()
+            task.waitUntilExit()
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            guard let output = String(data: data, encoding: .utf8) else { return nil }
+            for line in output.split(separator: "\n") {
+                if line.hasPrefix("n"), line.count > 1 {
+                    return String(line.dropFirst())
+                }
+            }
+        } catch {
+            // lsof failed; silently fall back to nil
+        }
+        return nil
+    }
 
     var terminalSnapshotIsFocused: Bool {
         guard let controller = terminalSnapshotController else { return focused }
@@ -2230,6 +2269,18 @@ extension Ghostty.SurfaceView: TerminalSnapshotSource {
     }
 
     var terminalSnapshotLastInputPreview: String? { nil }
+
+    var terminalSnapshotForegroundProcessID: Int? {
+        surfaceModel?.foregroundPID
+    }
+
+    var terminalSnapshotForegroundProcessName: String? {
+        terminalSnapshotForegroundProcessName(for: terminalSnapshotForegroundProcessID)
+    }
+
+    var terminalSnapshotCursorIsAtPrompt: Bool? {
+        surfaceModel?.cursorIsAtPrompt
+    }
 }
 #endif
 

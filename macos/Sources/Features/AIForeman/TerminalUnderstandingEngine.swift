@@ -1,26 +1,54 @@
 import Foundation
 
 struct TerminalUnderstandingEngine {
+    private let adapters: [any TerminalAgentAdapter] = [
+        ClaudeCodeTerminalAdapter(),
+        CodexTerminalAdapter(),
+        KimiTerminalAdapter(),
+    ]
+
     func understand(
         current: TerminalSnapshot,
         previous: TerminalSnapshot?,
-        lastOutcome: TerminalOutcomeReport?
+        lastOutcome: TerminalOutcomeReport?,
+        wireRecords: [KimiWireRecord] = []
     ) -> TerminalUnderstanding {
-        let visible = current.visibleText
         let applicableOutcome = applicableOutcome(for: current, previous: previous, lastOutcome: lastOutcome)
         let lastEvent = extractLastMeaningfulEvent(from: current, previous: previous, lastOutcome: applicableOutcome)
-        let state = classifyState(current: current, lastOutcome: applicableOutcome)
-        let suggestedActions = makeSuggestions(for: current, state: state, lastEvent: lastEvent)
+        let classification = classifyAgent(
+            current: current,
+            previous: previous,
+            lastOutcome: applicableOutcome,
+            lastEvent: lastEvent,
+            wireRecords: wireRecords
+        )
+        let state = classifyState(current: current, lastOutcome: applicableOutcome, classification: classification)
+        let suggestedActions = makeSuggestions(
+            for: current,
+            state: state,
+            classification: classification,
+            lastEvent: lastEvent
+        )
 
         return TerminalUnderstanding(
             terminalID: current.terminalID,
             title: current.title,
             cwd: current.cwd,
             state: state,
+            agentIdentity: classification?.identity ?? .none,
+            agentInteractionState: classification?.interactionState ?? .unknown,
+            supportLevel: classification?.supportLevel ?? .genericFallback,
             lastMeaningfulEvent: lastEvent,
-            shortExplanation: explain(state: state, snapshot: current, lastEvent: lastEvent),
-            importantDetails: importantDetails(from: visible, state: state),
-            suggestedNextActions: suggestedActions
+            shortExplanation: explain(
+                state: state,
+                snapshot: current,
+                classification: classification,
+                lastEvent: lastEvent
+            ),
+            importantDetails: importantDetails(from: current.visibleText, state: state),
+            evidence: classification?.evidence ?? [],
+            suggestedNextActions: suggestedActions,
+            agentInteractionContext: classification?.context ?? .none
         )
     }
 
@@ -61,10 +89,98 @@ struct TerminalUnderstandingEngine {
         )
     }
 
+    private func classifyAgent(
+        current: TerminalSnapshot,
+        previous: TerminalSnapshot?,
+        lastOutcome: TerminalOutcomeReport?,
+        lastEvent: String,
+        wireRecords: [KimiWireRecord]
+    ) -> AgentClassification? {
+        for adapter in adapters {
+            guard let identity = adapter.detect(current: current, previous: previous) else { continue }
+            // If wire records are available and this is Kimi, prefer wire signals over heuristics
+            if identity == .kimi, !wireRecords.isEmpty,
+               let wireClassification = classifyFromWireRecords(
+                   identity: identity,
+                   wireRecords: wireRecords,
+                   lastEvent: lastEvent
+               ) {
+                return wireClassification
+            }
+            return adapter.classify(
+                identity: identity,
+                current: current,
+                previous: previous,
+                lastOutcome: lastOutcome,
+                lastEvent: lastEvent
+            )
+        }
+        return nil
+    }
+
+    private func classifyFromWireRecords(
+        identity: AgentIdentity,
+        wireRecords: [KimiWireRecord],
+        lastEvent: String
+    ) -> AgentClassification? {
+        // Find the most recent record that carries actionable state
+        guard let record = wireRecords.lazy.reversed().compactMap({ rec -> KimiWireRecord? in
+            rec.asAgentInteractionContext != nil ? rec : nil
+        }).first else {
+            return nil
+        }
+
+        guard let context = record.asAgentInteractionContext else {
+            return nil
+        }
+
+        let interactionState: AgentInteractionState
+        switch context {
+        case .running:
+            interactionState = .running
+        case .waitingApproval:
+            interactionState = .waitingApproval
+        case .waitingChoice:
+            interactionState = .waitingChoice
+        case .waitingText:
+            interactionState = .waitingText
+        case .completed:
+            interactionState = .completed
+        case .error:
+            interactionState = .error
+        case .none:
+            return nil
+        }
+
+        return AgentClassification(
+            identity: identity,
+            interactionState: interactionState,
+            supportLevel: .firstClass,
+            evidence: [.init(source: .wireSignal, detail: "Wire record: \(record.message.type)", confidence: 0.98)],
+            context: context
+        )
+    }
+
     private func classifyState(
         current: TerminalSnapshot,
-        lastOutcome: TerminalOutcomeReport?
+        lastOutcome: TerminalOutcomeReport?,
+        classification: AgentClassification?
     ) -> TerminalUnderstandingState {
+        if let classification {
+            switch classification.interactionState {
+            case .waitingApproval, .waitingChoice, .waitingText:
+                return .waiting
+            case .running:
+                return .running
+            case .completed:
+                return .succeeded
+            case .error:
+                return .failed
+            case .unknown:
+                break
+            }
+        }
+
         if let lastOutcome, lastOutcome.terminalID == current.terminalID {
             switch lastOutcome.outcome {
             case .success:
@@ -109,15 +225,39 @@ struct TerminalUnderstandingEngine {
             .filter { !looksLikePrompt($0) }
         let previousLines = Set(previousText.split(separator: "\n").map(String.init))
         return currentLines.last(where: { !previousLines.contains($0) && !$0.trimmingCharacters(in: .whitespaces).isEmpty })
-            ?? currentLines.last
+            ?? currentLines.last(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty })
             ?? "No meaningful terminal event detected."
     }
 
     private func explain(
         state: TerminalUnderstandingState,
         snapshot: TerminalSnapshot,
+        classification: AgentClassification?,
         lastEvent: String
     ) -> String {
+        if let classification {
+            let name = classification.identity.displayName ?? snapshot.title
+            switch classification.interactionState {
+            case .waitingApproval:
+                return "\(name) is waiting for approval to continue."
+            case .waitingChoice:
+                return "\(name) is waiting for your selection."
+            case .waitingText:
+                if looksLikeQuestion(lastEvent) {
+                    return "\(name) is waiting for your response: \(lastEvent)"
+                }
+                return "\(name) is waiting for your response."
+            case .running:
+                return "\(name) is actively working in this terminal."
+            case .completed:
+                return "\(name) completed its turn: \(lastEvent)"
+            case .error:
+                return "\(name) hit an error: \(lastEvent)"
+            case .unknown:
+                break
+            }
+        }
+
         switch state {
         case .failed:
             return "The terminal failed: \(lastEvent)"
@@ -147,9 +287,36 @@ struct TerminalUnderstandingEngine {
     private func makeSuggestions(
         for snapshot: TerminalSnapshot,
         state: TerminalUnderstandingState,
+        classification: AgentClassification?,
         lastEvent: String
     ) -> [TerminalSuggestedAction] {
         let input = snapshot.lastInputPreview ?? ""
+
+        if let classification {
+            switch classification.interactionState {
+            case .waitingApproval:
+                return [
+                    .init(title: "Review the approval request", command: nil, reason: lastEvent, isRecommended: true),
+                    .init(title: "Let Foreman explain the requested action", command: nil, reason: "Use this when the approval UI is dense.", isRecommended: false),
+                ]
+            case .waitingChoice:
+                return [
+                    .init(title: "Inspect the available choices", command: nil, reason: lastEvent, isRecommended: true),
+                    .init(title: "Ask Foreman to summarize the options", command: nil, reason: "Useful when the menu is noisy.", isRecommended: false),
+                ]
+            case .waitingText:
+                return [
+                    .init(title: "Reply to the agent", command: nil, reason: lastEvent, isRecommended: true),
+                ]
+            case .error:
+                return [
+                    .init(title: "Inspect the failure details", command: nil, reason: lastEvent, isRecommended: true),
+                ]
+            case .running, .completed, .unknown:
+                break
+            }
+        }
+
         if state == .failed && lastEvent.lowercased().contains("command not found") && input.contains("hfind") {
             return [
                 .init(
@@ -197,8 +364,14 @@ struct TerminalUnderstandingEngine {
     private func looksLikePrompt(_ line: String) -> Bool {
         let trimmed = line.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty else { return false }
-        let promptSuffixes = ["$", "%", "#", ">", "λ", "❯", "➜", "→", "⇒"]
-        return promptSuffixes.contains { trimmed.hasSuffix($0) }
+        let promptMarkers = ["$", "%", "#", ">", "λ", "❯", "➜", "→", "⇒", "›"]
+        return promptMarkers.contains(where: {
+            trimmed == $0 || trimmed.hasPrefix($0 + " ") || trimmed.hasSuffix(" " + $0) || trimmed.hasSuffix($0)
+        })
+    }
+
+    private func looksLikeQuestion(_ line: String) -> Bool {
+        line.trimmingCharacters(in: .whitespacesAndNewlines).contains("?")
     }
 
     private func applicableOutcome(
@@ -242,5 +415,215 @@ struct TerminalUnderstandingEngine {
         guard previous.signals.likelyWaitingForInput else { return false }
         guard !current.signals.likelyWaitingForInput else { return false }
         return current.visibleText != previous.visibleText
+    }
+}
+
+private protocol TerminalAgentAdapter {
+    func detect(current: TerminalSnapshot, previous: TerminalSnapshot?) -> AgentIdentity?
+    func classify(
+        identity: AgentIdentity,
+        current: TerminalSnapshot,
+        previous: TerminalSnapshot?,
+        lastOutcome: TerminalOutcomeReport?,
+        lastEvent: String
+    ) -> AgentClassification
+}
+
+private struct AgentClassification {
+    let identity: AgentIdentity
+    let interactionState: AgentInteractionState
+    let supportLevel: AgentSupportLevel
+    let evidence: [UnderstandingEvidence]
+    let context: AgentInteractionContext
+}
+
+private struct ClaudeCodeTerminalAdapter: TerminalAgentAdapter {
+    func detect(current: TerminalSnapshot, previous: TerminalSnapshot?) -> AgentIdentity? {
+        guard current.matchesAgent(markers: ["claude code", "claude"]) else { return nil }
+        return .claudeCode
+    }
+
+    func classify(
+        identity: AgentIdentity,
+        current: TerminalSnapshot,
+        previous: TerminalSnapshot?,
+        lastOutcome: TerminalOutcomeReport?,
+        lastEvent: String
+    ) -> AgentClassification {
+        classifyCommonAgent(
+            identity: identity,
+            current: current,
+            lastOutcome: lastOutcome,
+            lastEvent: lastEvent,
+            choiceMarkers: ["what do you want to do?", "enter to confirm", "esc to cancel"],
+            approvalMarkers: ["permission", "approve", "proceed", "allow once", "allow always"]
+        )
+    }
+}
+
+private struct CodexTerminalAdapter: TerminalAgentAdapter {
+    func detect(current: TerminalSnapshot, previous: TerminalSnapshot?) -> AgentIdentity? {
+        guard current.matchesAgent(markers: ["openai codex", "codex"]) else { return nil }
+        return .codex
+    }
+
+    func classify(
+        identity: AgentIdentity,
+        current: TerminalSnapshot,
+        previous: TerminalSnapshot?,
+        lastOutcome: TerminalOutcomeReport?,
+        lastEvent: String
+    ) -> AgentClassification {
+        classifyCommonAgent(
+            identity: identity,
+            current: current,
+            lastOutcome: lastOutcome,
+            lastEvent: lastEvent,
+            choiceMarkers: ["enter to confirm", "esc to cancel"],
+            approvalMarkers: ["approve", "permission", "[y/n]"]
+        )
+    }
+}
+
+private struct KimiTerminalAdapter: TerminalAgentAdapter {
+    func detect(current: TerminalSnapshot, previous: TerminalSnapshot?) -> AgentIdentity? {
+        guard current.matchesAgent(markers: ["kimi code", "kimi"]) else { return nil }
+        return .kimi
+    }
+
+    func classify(
+        identity: AgentIdentity,
+        current: TerminalSnapshot,
+        previous: TerminalSnapshot?,
+        lastOutcome: TerminalOutcomeReport?,
+        lastEvent: String
+    ) -> AgentClassification {
+        classifyCommonAgent(
+            identity: identity,
+            current: current,
+            lastOutcome: lastOutcome,
+            lastEvent: lastEvent,
+            choiceMarkers: ["choose one", "select an option"],
+            approvalMarkers: ["approve once", "approve for this session", "reject"]
+        )
+    }
+}
+
+private func classifyCommonAgent(
+    identity: AgentIdentity,
+    current: TerminalSnapshot,
+    lastOutcome: TerminalOutcomeReport?,
+    lastEvent: String,
+    choiceMarkers: [String],
+    approvalMarkers: [String]
+) -> AgentClassification {
+    let lowered = current.visibleText.lowercased()
+    let promptReady = current.signals.likelyWaitingForInput
+
+    if let lastOutcome {
+        switch lastOutcome.outcome {
+        case .failure, .hung:
+            return classification(identity, .error, .outcome, "Terminal outcome reported failure.", 1.0, .error(description: lastOutcome.summary ?? "Unknown failure"))
+        case .success:
+            return classification(identity, .completed, .outcome, "Terminal outcome reported success.", 1.0, .completed(summary: lastOutcome.summary))
+        case .needsInput:
+            return classification(identity, .waitingText, .outcome, "Terminal outcome requested additional input.", 1.0, .waitingText(question: lastOutcome.summary))
+        case .stillRunning, .unknown:
+            break
+        }
+    }
+
+    if containsAny(lowered, markers: choiceMarkers) || looksLikeNumberedChoiceMenu(current.visibleText) {
+        let options = extractNumberedOptions(current.visibleText)
+        return classification(identity, .waitingChoice, .screenHeuristic, "Detected an interactive choice menu.", 0.86, .waitingChoice(question: lastEvent, options: options))
+    }
+
+    if containsAny(lowered, markers: approvalMarkers) {
+        return classification(identity, .waitingApproval, .phraseHeuristic, "Detected approval-oriented prompt text.", 0.82, .waitingApproval(description: lastEvent, tool: nil))
+    }
+
+    if promptReady {
+        return classification(identity, .waitingText, .runtime, "Terminal returned control to the input region.", 0.92, .waitingText(question: lastEvent))
+    }
+
+    if current.signals.likelyErrorState && !looksLikeQuestion(lastEvent) {
+        return classification(identity, .error, .phraseHeuristic, "Detected active failure markers in agent output.", 0.73, .error(description: lastEvent))
+    }
+
+    return classification(identity, .running, .runtime, "Agent process is active without a prompt handoff.", 0.75, .running(stepDescription: lastEvent))
+}
+
+private func extractNumberedOptions(_ text: String) -> [String] {
+    let lines = text.split(separator: "\n").map(String.init)
+    var options: [String] = []
+    for line in lines {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        guard let firstScalar = trimmed.unicodeScalars.first else { continue }
+        if CharacterSet.decimalDigits.contains(firstScalar) || trimmed.hasPrefix("❯ ") {
+            if let dotRange = trimmed.range(of: ". ") {
+                let option = String(trimmed[dotRange.upperBound...]).trimmingCharacters(in: .whitespaces)
+                if !option.isEmpty {
+                    options.append(option)
+                }
+            }
+        }
+    }
+    return options
+}
+
+private func classification(
+    _ identity: AgentIdentity,
+    _ interactionState: AgentInteractionState,
+    _ source: UnderstandingEvidenceSource,
+    _ detail: String,
+    _ confidence: Double,
+    _ context: AgentInteractionContext = .none
+) -> AgentClassification {
+    AgentClassification(
+        identity: identity,
+        interactionState: interactionState,
+        supportLevel: .firstClass,
+        evidence: [.init(source: source, detail: detail, confidence: confidence)],
+        context: context
+    )
+}
+
+private func containsAny(_ text: String, markers: [String]) -> Bool {
+    markers.contains(where: text.contains)
+}
+
+private func looksLikeNumberedChoiceMenu(_ text: String) -> Bool {
+    let lines = text
+        .split(separator: "\n")
+        .map { $0.trimmingCharacters(in: .whitespaces) }
+        .filter { !$0.isEmpty }
+
+    let numberedCount = lines.filter { line in
+        let scalars = Array(line.unicodeScalars)
+        guard let first = scalars.first, CharacterSet.decimalDigits.contains(first) || line.hasPrefix("❯ 1.") else {
+            return false
+        }
+        return line.contains(". ")
+    }.count
+
+    return numberedCount >= 2
+}
+
+private func looksLikeQuestion(_ text: String) -> Bool {
+    text.trimmingCharacters(in: .whitespacesAndNewlines).contains("?")
+}
+
+private extension TerminalSnapshot {
+    func matchesAgent(markers: [String]) -> Bool {
+        let candidates = [
+            runtime.foregroundProcessName?.lowercased(),
+            title.lowercased(),
+            visibleText.lowercased(),
+            lastInputPreview?.lowercased(),
+        ].compactMap { $0 }
+
+        return candidates.contains { candidate in
+            markers.contains(where: candidate.contains)
+        }
     }
 }

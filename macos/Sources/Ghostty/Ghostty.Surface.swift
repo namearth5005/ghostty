@@ -100,6 +100,12 @@ extension Ghostty {
             return Int(exactly: pid)
         }
 
+        /// Whether the cursor is currently at a semantic prompt or input region.
+        @MainActor
+        var cursorIsAtPrompt: Bool {
+            ghostty_surface_cursor_is_at_prompt(surface)
+        }
+
         /// The PTY device name for this surface.
         @MainActor
         var ttyName: String? {

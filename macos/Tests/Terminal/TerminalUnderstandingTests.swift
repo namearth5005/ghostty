@@ -272,4 +272,75 @@ struct TerminalUnderstandingTests {
         #expect(overview.changedTerminalIDs == ["term-2"])
         #expect(overview.primaryTerminalID == "term-2")
     }
+
+    @Test
+    func engineClassifiesClaudeMenuAsWaitingChoice() {
+        let engine = TerminalUnderstandingEngine()
+        let snapshot = TerminalSnapshot.makePreview(
+            terminalID: "term-6",
+            windowID: "win-1",
+            tabID: "tab-6",
+            title: "Claude Code",
+            cwd: "/tmp/project",
+            isFocused: true,
+            visibleText: """
+            What do you want to do?
+
+            ❯ 1. Stop and wait for limit to reset
+              2. Upgrade your plan
+
+            Enter to confirm · Esc to cancel
+            """,
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessName: "claude",
+            usingAlternateScreen: true
+        )
+
+        let understanding = engine.understand(
+            current: snapshot,
+            previous: nil,
+            lastOutcome: nil
+        )
+
+        #expect(understanding.agentIdentity == .claudeCode)
+        #expect(understanding.agentInteractionState == .waitingChoice)
+        #expect(understanding.state == .waiting)
+        #expect(understanding.supportLevel == .firstClass)
+        #expect(understanding.evidence.contains(where: { $0.source == .screenHeuristic }))
+    }
+
+    @Test
+    func engineClassifiesCodexPromptAsWaitingText() {
+        let engine = TerminalUnderstandingEngine()
+        let snapshot = TerminalSnapshot.makePreview(
+            terminalID: "term-7",
+            windowID: "win-1",
+            tabID: "tab-7",
+            title: "speed2",
+            cwd: "/tmp/project",
+            isFocused: true,
+            visibleText: """
+            • Hey. What do you need help with?
+
+            ›
+            """,
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessName: "codex",
+            cursorIsAtPrompt: true,
+            usingAlternateScreen: true
+        )
+
+        let understanding = engine.understand(
+            current: snapshot,
+            previous: nil,
+            lastOutcome: nil
+        )
+
+        #expect(understanding.agentIdentity == .codex)
+        #expect(understanding.agentInteractionState == .waitingText)
+        #expect(understanding.state == .waiting)
+        #expect(understanding.shortExplanation.contains("waiting"))
+    }
 }

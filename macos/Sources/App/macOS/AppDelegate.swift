@@ -188,6 +188,7 @@ class AppDelegate: NSObject,
     private let aiForemanUnderstandingEngine = TerminalUnderstandingEngine()
     private var aiForemanPreviousSnapshots: [String: TerminalSnapshot] = [:]
     private var aiForemanPreviousUnderstandings: [String: TerminalUnderstanding] = [:]
+    private var kimiWireMonitors: [String: KimiWireSessionMonitor] = [:]
 
     /// Signals
     private var signals: [DispatchSourceSignal] = []
@@ -1470,15 +1471,72 @@ extension AppDelegate {
     }
 
     @MainActor
+    private func snapshotIsKimi(_ snapshot: TerminalSnapshot) -> Bool {
+        let candidates = [
+            snapshot.runtime.foregroundProcessName?.lowercased(),
+            snapshot.title.lowercased(),
+            snapshot.visibleText.lowercased(),
+            snapshot.lastInputPreview?.lowercased(),
+        ].compactMap { $0 }
+        let markers = ["kimi code", "kimi"]
+        let isMatch = candidates.contains { candidate in
+            markers.contains(where: candidate.contains)
+        }
+        if isMatch {
+            // Kimi detected
+        }
+        return isMatch
+    }
+
+    @MainActor
     private func refreshAIForemanSidebar() {
         for controller in TerminalController.all {
             let snapshots = controller.captureTerminalSnapshots()
+
+            // Manage Kimi wire monitors per terminal
+            let activeKimiTerminalIDs = Set(snapshots
+                .filter { snapshotIsKimi($0) }
+                .map(\.terminalID))
+
+            // Start monitors for new Kimi terminals, or recreate if cwd changed
+            for snapshot in snapshots where activeKimiTerminalIDs.contains(snapshot.terminalID) {
+                let monitorCwd = snapshot.cwd ?? "" // empty string triggers global session scan
+                let isGlobalScan = snapshot.cwd == nil
+                if let existing = kimiWireMonitors[snapshot.terminalID] {
+                    if existing.workingDirectory != monitorCwd {
+                        DebugLogger.log("[AppDelegate] Recreating monitor for \(snapshot.terminalID.prefix(8)) cwd=\(snapshot.cwd ?? "nil") global=\(isGlobalScan)")
+                        existing.stop()
+                        let monitor = KimiWireSessionMonitor(workingDirectory: monitorCwd)
+                        monitor.start()
+                        kimiWireMonitors[snapshot.terminalID] = monitor
+                    }
+                } else {
+                    DebugLogger.log("[AppDelegate] Creating monitor for \(snapshot.terminalID.prefix(8)) cwd=\(snapshot.cwd ?? "nil") global=\(isGlobalScan)")
+                    NSLog("[AppDelegate] Creating monitor for %@ cwd=%@ global=%d", String(snapshot.terminalID.prefix(8)), snapshot.cwd ?? "nil", isGlobalScan)
+                    let monitor = KimiWireSessionMonitor(workingDirectory: monitorCwd)
+                    monitor.start()
+                    kimiWireMonitors[snapshot.terminalID] = monitor
+                }
+            }
+
+            // Stop monitors for terminals that no longer run Kimi
+            for terminalID in kimiWireMonitors.keys where !activeKimiTerminalIDs.contains(terminalID) {
+                kimiWireMonitors[terminalID]?.stop()
+                kimiWireMonitors.removeValue(forKey: terminalID)
+            }
+
             let understandings = snapshots.map { snapshot in
-                aiForemanUnderstandingEngine.understand(
+                let wireRecords = kimiWireMonitors[snapshot.terminalID]?.records() ?? []
+                let understanding = aiForemanUnderstandingEngine.understand(
                     current: snapshot,
                     previous: aiForemanPreviousSnapshots[snapshot.terminalID],
-                    lastOutcome: nil
+                    lastOutcome: nil,
+                    wireRecords: wireRecords
                 )
+                if understanding.agentIdentity == .kimi {
+                    DebugLogger.log("[AppDelegate] understand: terminal=\(snapshot.terminalID.prefix(8)) wireRecords=\(wireRecords.count) context=\(understanding.agentInteractionContext.typeString ?? "nil") state=\(understanding.state.rawValue)")
+                }
+                return understanding
             }
             let understandingsByTerminalID = Dictionary(
                 uniqueKeysWithValues: understandings.map { ($0.terminalID, $0) }
@@ -1506,6 +1564,47 @@ extension AppDelegate {
     @MainActor
     private func terminalController(for store: ForemanSidebarStore) -> TerminalController? {
         TerminalController.all.first(where: { $0.foremanSidebarStore === store })
+    }
+
+    @MainActor
+    func launchManagedAgent(_ request: ManagedAgentLaunchRequest) -> String? {
+        guard let definition = ManagedAgentRegistry.definition(for: request.identity) else {
+            return nil
+        }
+
+        let config = definition.makeSurfaceConfiguration(
+            workingDirectory: request.workingDirectory,
+            initialPrompt: request.initialPrompt
+        )
+
+        let preferredParent = TerminalController.preferredParent?.focusedSurface
+            ?? TerminalController.preferredParent?.surfaceTree.root?.leftmostLeaf()
+
+        switch request.location {
+        case .tab:
+            if let controller = TerminalController.newTab(
+                ghostty,
+                from: preferredParent?.window,
+                withBaseConfig: config
+            ) {
+                return controller.surfaceTree.root?.leftmostLeaf().id.uuidString
+            }
+
+            let controller = TerminalController.newWindow(
+                ghostty,
+                withBaseConfig: config,
+                withParent: preferredParent?.window
+            )
+            return controller.surfaceTree.root?.leftmostLeaf().id.uuidString
+
+        case .window:
+            let controller = TerminalController.newWindow(
+                ghostty,
+                withBaseConfig: config,
+                withParent: preferredParent?.window
+            )
+            return controller.surfaceTree.root?.leftmostLeaf().id.uuidString
+        }
     }
 
     @MainActor

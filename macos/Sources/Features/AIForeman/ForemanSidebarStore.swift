@@ -8,8 +8,18 @@ struct TerminalSummaryRowModel: Identifiable, Equatable, Sendable {
     var cwd: String?
     var state: String
     var summary: String
+    var agentIdentity: String?
+    var agentInteractionState: String?
+    var supportLevel: String?
+    var evidenceSummary: String?
     var isFocused: Bool
     var suggestedActions: [TerminalSuggestedAction]
+    
+    // NEW: Rich agent context for UX
+    var agentContextType: String?
+    var agentContextTitle: String?
+    var agentContextDescription: String?
+    var agentContextDetail: String?
 
     var id: String { terminalID }
 }
@@ -81,11 +91,13 @@ final class ForemanSidebarStore: ObservableObject {
     @Published var conversation: ForemanConversation
     @Published var chatInput: String = ""
     @Published var isAgentRunning: Bool = false
+    @Published var agentReadiness: [(AgentIdentity, AgentReadinessState)] = []
     var onStartAgent: ((String, AgentMode) -> Void)?
     var onSendChatMessage: ((String) -> Void)?
     var onStopAgent: (() -> Void)?
     var onApproveAction: (() -> Void)?
     var onSkipAction: (() -> Void)?
+    var onLaunchAgent: ((AgentIdentity) -> Void)?
 
     private var cancellables = Set<AnyCancellable>()
 
@@ -130,17 +142,35 @@ final class ForemanSidebarStore: ObservableObject {
                     cwd: "/tmp/project",
                     state: "blocked",
                     summary: "Blocked on an auth assertion failure.",
+                    agentIdentity: nil,
+                    agentInteractionState: nil,
+                    supportLevel: nil,
+                    evidenceSummary: nil,
                     isFocused: true,
-                    suggestedActions: []
+                    suggestedActions: [],
+                    agentContextType: nil,
+                    agentContextTitle: nil,
+                    agentContextDescription: nil,
+                    agentContextDetail: nil
                 ),
                 .init(
                     terminalID: "term-2",
-                    title: "worker",
+                    title: "kimi",
                     cwd: "/tmp/project",
-                    state: "running",
-                    summary: "Still processing a long-running build.",
+                    state: "waiting",
+                    summary: "Kimi is waiting for your approval.",
+                    agentIdentity: "kimi",
+                    agentInteractionState: "waiting_approval",
+                    supportLevel: "first_class",
+                    evidenceSummary: "screen_heuristic",
                     isFocused: false,
-                    suggestedActions: []
+                    suggestedActions: [
+                        .init(title: "Review the approval request", command: nil, reason: "Run shell command: git push origin main", isRecommended: true)
+                    ],
+                    agentContextType: "waitingApproval",
+                    agentContextTitle: "Needs your approval",
+                    agentContextDescription: "Run shell command: git push origin main",
+                    agentContextDetail: "Shell"
                 )
             ],
             dispatchQueue: [
@@ -197,14 +227,23 @@ final class ForemanSidebarStore: ObservableObject {
     ) {
         terminalRows = snapshots.map { snapshot in
             if let understanding = understandingsByTerminalID[snapshot.terminalID] {
+                let context = understanding.agentInteractionContext
                 return TerminalSummaryRowModel(
                     terminalID: snapshot.terminalID,
                     title: snapshot.title,
                     cwd: snapshot.cwd,
                     state: understanding.state.rawValue,
                     summary: understanding.shortExplanation,
+                    agentIdentity: understanding.agentIdentity == .none ? nil : understanding.agentIdentity.rawValue,
+                    agentInteractionState: understanding.agentInteractionState == .unknown ? nil : understanding.agentInteractionState.rawValue,
+                    supportLevel: understanding.supportLevel.rawValue,
+                    evidenceSummary: understanding.evidence.first?.source.rawValue,
                     isFocused: snapshot.isFocused,
-                    suggestedActions: understanding.suggestedNextActions
+                    suggestedActions: understanding.suggestedNextActions,
+                    agentContextType: context.typeString,
+                    agentContextTitle: context.titleString,
+                    agentContextDescription: context.descriptionString,
+                    agentContextDetail: context.detailString
                 )
             }
 
@@ -215,8 +254,16 @@ final class ForemanSidebarStore: ObservableObject {
                     cwd: snapshot.cwd,
                     state: summary.state,
                     summary: summary.summary,
+                    agentIdentity: nil,
+                    agentInteractionState: nil,
+                    supportLevel: nil,
+                    evidenceSummary: nil,
                     isFocused: snapshot.isFocused,
-                    suggestedActions: []
+                    suggestedActions: [],
+                    agentContextType: nil,
+                    agentContextTitle: nil,
+                    agentContextDescription: nil,
+                    agentContextDetail: nil
                 )
             }
 
@@ -226,12 +273,25 @@ final class ForemanSidebarStore: ObservableObject {
                 cwd: snapshot.cwd,
                 state: Self.snapshotState(for: snapshot),
                 summary: Self.snapshotSummary(for: snapshot),
+                agentIdentity: nil,
+                agentInteractionState: nil,
+                supportLevel: nil,
+                evidenceSummary: nil,
                 isFocused: snapshot.isFocused,
-                suggestedActions: []
+                suggestedActions: [],
+                agentContextType: nil,
+                agentContextTitle: nil,
+                agentContextDescription: nil,
+                agentContextDetail: nil
             )
         }
 
         let nextPendingTerminalID = dispatchQueue.first(where: { $0.state == .pending })?.terminalID
+        let waitingTerminalID = terminalRows.first(where: {
+            !$0.isFocused && ($0.agentContextType == "waitingApproval" ||
+                             $0.agentContextType == "waitingChoice" ||
+                             $0.agentContextType == "waitingText")
+        })?.terminalID
         let focusedTerminalID = snapshots.first(where: { $0.isFocused })?.terminalID
         let firstTerminalID = snapshots.first?.terminalID
 
@@ -240,7 +300,7 @@ final class ForemanSidebarStore: ObservableObject {
             return
         }
 
-        selectedTerminalID = nextPendingTerminalID ?? focusedTerminalID ?? firstTerminalID
+        selectedTerminalID = nextPendingTerminalID ?? waitingTerminalID ?? focusedTerminalID ?? firstTerminalID
     }
 
     func applyDispatchPlan(
@@ -330,6 +390,12 @@ final class ForemanSidebarStore: ObservableObject {
         }
 
         dispatchQueue[index].message = message
+    }
+
+    func refreshAgentReadiness() {
+        agentReadiness = ManagedAgentRegistry.supportedAgents.map { agent in
+            (agent.identity, ManagedAgentRegistry.readiness(for: agent.identity))
+        }
     }
 
     private static func snapshotState(for snapshot: TerminalSnapshot) -> String {
