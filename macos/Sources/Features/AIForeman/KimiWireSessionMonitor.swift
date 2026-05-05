@@ -23,8 +23,11 @@ final class KimiWireSessionMonitor {
         lastOffset = 0
         recordBuffer.removeAll()
 
-        // Attempt immediate discovery
-        resolveWirePath()
+        // Attempt immediate discovery — only accept recent files on first start
+        // to avoid picking up stale wire.jsonl from previous sessions.
+        if let path = resolveWirePath() {
+            resolvedWirePath = path
+        }
         DebugLogger.log("[KimiWireMonitor] start wd='\(workingDirectory)' resolved='\(resolvedWirePath?.path ?? "nil")'")
 
         // Poll every 1.5 seconds for new lines
@@ -56,13 +59,22 @@ final class KimiWireSessionMonitor {
     // MARK: - Polling
 
     func poll() {
-        // Re-resolve on every poll to catch new sessions (Kimi creates a new session per interaction)
+        // Re-resolve on every poll to catch new sessions (Kimi creates a new session per interaction).
+        // Only switch to a newly-discovered file if it is recent (modified within last 2 min).
+        // If resolve returns nil, keep reading from the current file so long-running
+        // sessions aren't dropped just because the file hasn't been touched recently.
         let previousPath = resolvedWirePath
-        resolveWirePath()
-        if let newPath = resolvedWirePath, newPath != previousPath {
-            DebugLogger.log("[KimiWireMonitor] switched session from '\(previousPath?.lastPathComponent ?? "nil")' to '\(newPath.lastPathComponent)'")
-            lastOffset = 0
+        let candidatePath = resolveWirePath()
+
+        if let newPath = candidatePath, newPath != previousPath {
+            let isRecent = fileIsRecent(newPath, within: 120)
+            if previousPath == nil || isRecent {
+                resolvedWirePath = newPath
+                DebugLogger.log("[KimiWireMonitor] switched session from '\(previousPath?.lastPathComponent ?? "nil")' to '\(newPath.lastPathComponent)'")
+                lastOffset = 0
+            }
         }
+
         guard resolvedWirePath != nil else { return }
         DebugLogger.log("[KimiWireMonitor] polling path='\(resolvedWirePath?.lastPathComponent ?? "nil")' offset=\(lastOffset)")
 
@@ -114,14 +126,18 @@ final class KimiWireSessionMonitor {
 
     // MARK: - Path Resolution
 
-    private func resolveWirePath() {
+    /// Resolves the most recent wire.jsonl path. Returns nil if no suitable file exists.
+    /// Only considers files modified within the last 10 minutes to avoid picking up
+    /// stale session files from previous Kimi runs.
+    private func resolveWirePath() -> URL? {
         let baseDir = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".kimi/sessions")
-        
+        let stalenessThreshold = Date(timeIntervalSinceNow: -600) // 10 minutes
+
         var candidateDirs: [URL] = []
-        
+
         if workingDirectory.isEmpty {
             // Global scan: look in ALL md5 subdirectories under ~/.kimi/sessions
-            guard let md5Dirs = try? FileManager.default.contentsOfDirectory(atPath: baseDir.path) else { return }
+            guard let md5Dirs = try? FileManager.default.contentsOfDirectory(atPath: baseDir.path) else { return nil }
             for md5 in md5Dirs {
                 candidateDirs.append(baseDir.appendingPathComponent(md5))
             }
@@ -130,32 +146,35 @@ final class KimiWireSessionMonitor {
             let md5 = Self.md5Hash(workingDirectory)
             candidateDirs.append(baseDir.appendingPathComponent(md5))
         }
-        
+
         var mostRecentPath: URL?
         var mostRecentDate: Date?
-        
+
         for sessionsDir in candidateDirs {
             guard FileManager.default.fileExists(atPath: sessionsDir.path) else { continue }
             guard let sessionDirs = try? FileManager.default.contentsOfDirectory(atPath: sessionsDir.path) else { continue }
-            
+
             for sessionID in sessionDirs {
                 let wirePath = sessionsDir.appendingPathComponent("\(sessionID)/wire.jsonl")
                 guard FileManager.default.fileExists(atPath: wirePath.path) else { continue }
-                
+
                 // Skip empty files — Kimi may create a new session file before writing any records,
                 // and switching to an empty file causes us to lose the prior session's state.
                 guard let attrs = try? FileManager.default.attributesOfItem(atPath: wirePath.path),
                       let modDate = attrs[.modificationDate] as? Date,
                       attrs[.size] as? UInt64 ?? 0 > 0 else { continue }
-                
+
+                // Skip stale files from previous sessions
+                guard modDate > stalenessThreshold else { continue }
+
                 if mostRecentDate == nil || modDate > mostRecentDate! {
                     mostRecentDate = modDate
                     mostRecentPath = wirePath
                 }
             }
         }
-        
-        resolvedWirePath = mostRecentPath
+
+        return mostRecentPath
     }
 
     // MARK: - MD5 Hash
@@ -164,5 +183,14 @@ final class KimiWireSessionMonitor {
         let data = Data(string.utf8)
         let digest = Insecure.MD5.hash(data: data)
         return digest.map { String(format: "%02hhx", $0) }.joined()
+    }
+
+    private func fileModDate(_ url: URL) -> Date? {
+        (try? FileManager.default.attributesOfItem(atPath: url.path)[.modificationDate]) as? Date
+    }
+
+    private func fileIsRecent(_ url: URL, within seconds: TimeInterval) -> Bool {
+        guard let modDate = fileModDate(url) else { return false }
+        return Date().timeIntervalSince(modDate) < seconds
     }
 }
