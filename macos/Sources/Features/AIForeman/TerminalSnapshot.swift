@@ -100,13 +100,16 @@ struct TerminalSnapshot: Codable, Equatable, Sendable {
     /// portion of current text when no previous snapshot exists.
     static func computeTextDelta(previous: String?, current: String, maxLines: Int = 50, maxChars: Int = 2000) -> String {
         let currentNormalized = normalizeTerminalText(current)
+        let originalLines = currentNormalized.split(separator: "\n").count
         
         guard let previous, !previous.isEmpty else {
             // No previous snapshot — return truncated current text
             let lines = currentNormalized.split(separator: "\n", omittingEmptySubsequences: false)
             let capped = Array(lines.suffix(maxLines))
             let result = capped.joined(separator: "\n")
-            return String(result.suffix(maxChars))
+            let delta = String(result.suffix(maxChars))
+            DebugLogger.log("[Delta] no previous: \(originalLines) lines → \(delta.split(separator: "\n").count) lines")
+            return delta
         }
         
         let previousNormalized = normalizeTerminalText(previous)
@@ -115,11 +118,16 @@ struct TerminalSnapshot: Codable, Equatable, Sendable {
         if currentNormalized.hasPrefix(previousNormalized) {
             let delta = String(currentNormalized.dropFirst(previousNormalized.count))
             let trimmed = delta.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmed.isEmpty else { return "(no new output)" }
+            guard !trimmed.isEmpty else {
+                DebugLogger.log("[Delta] appended: \(originalLines) lines → 0 lines (no new output)")
+                return "(no new output)"
+            }
             let lines = trimmed.split(separator: "\n", omittingEmptySubsequences: false)
             let capped = Array(lines.suffix(maxLines))
             let result = capped.joined(separator: "\n")
-            return String(result.suffix(maxChars))
+            let deltaResult = String(result.suffix(maxChars))
+            DebugLogger.log("[Delta] appended: \(originalLines) lines → \(deltaResult.split(separator: "\n").count) lines")
+            return deltaResult
         }
         
         // Line-based diff: find lines in current not in previous
@@ -140,10 +148,13 @@ struct TerminalSnapshot: Codable, Equatable, Sendable {
         let result = resultLines.joined(separator: "\n")
         
         if result.isEmpty {
+            DebugLogger.log("[Delta] diff: \(originalLines) lines → 0 lines (no new output)")
             return "(no new output)"
         }
         
-        return String(result.suffix(maxChars))
+        let deltaResult = String(result.suffix(maxChars))
+        DebugLogger.log("[Delta] diff: \(originalLines) lines → \(deltaResult.split(separator: "\n").count) lines")
+        return deltaResult
     }
 
     private static func normalizeTerminalText(_ text: String) -> String {
