@@ -601,7 +601,24 @@ private struct KimiTerminalAdapter: TerminalAgentAdapter {
         lastOutcome: TerminalOutcomeReport?,
         lastEvent: String
     ) -> AgentClassification {
-        classifyCommonAgent(
+        let lowered = current.visibleText.lowercased()
+        // Kimi's initial welcome screen has no wire file yet; the generic
+        // heuristic sees no shell prompt and classifies as .running.
+        // Detect the welcome state and treat it as awaiting first input.
+        if lowered.contains("welcome to kimi code cli"),
+           lowered.contains("directory:"),
+           lowered.contains("model:") {
+            return classification(
+                identity,
+                .waitingText,
+                .screenHeuristic,
+                "Kimi welcome screen detected — awaiting first input.",
+                0.88,
+                .waitingText(question: nil)
+            )
+        }
+
+        return classifyCommonAgent(
             identity: identity,
             current: current,
             lastOutcome: lastOutcome,
