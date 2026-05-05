@@ -190,6 +190,7 @@ class AppDelegate: NSObject,
     private var aiForemanPreviousUnderstandings: [String: TerminalUnderstanding] = [:]
     private var kimiWireMonitors: [String: KimiWireSessionMonitor] = [:]
     private var codexWireMonitors: [String: CodexSessionMonitor] = [:]
+    private var claudeWireMonitors: [String: ClaudeSessionMonitor] = [:]
 
     /// Signals
     private var signals: [DispatchSourceSignal] = []
@@ -1500,6 +1501,20 @@ extension AppDelegate {
     }
 
     @MainActor
+    private func snapshotIsClaude(_ snapshot: TerminalSnapshot) -> Bool {
+        let candidates = [
+            snapshot.runtime.foregroundProcessName?.lowercased(),
+            snapshot.title.lowercased(),
+            snapshot.visibleText.lowercased(),
+            snapshot.lastInputPreview?.lowercased(),
+        ].compactMap { $0 }
+        let markers = ["claude code", "claude"]
+        return candidates.contains { candidate in
+            markers.contains(where: candidate.contains)
+        }
+    }
+
+    @MainActor
     private func refreshAIForemanSidebar() {
         for controller in TerminalController.all {
             let snapshots = controller.captureTerminalSnapshots()
@@ -1559,15 +1574,44 @@ extension AppDelegate {
                 codexWireMonitors.removeValue(forKey: terminalID)
             }
 
+            // Manage Claude wire monitors per terminal
+            let activeClaudeTerminalIDs = Set(snapshots
+                .filter { snapshotIsClaude($0) }
+                .map(\.terminalID))
+
+            for snapshot in snapshots where activeClaudeTerminalIDs.contains(snapshot.terminalID) {
+                let monitorPID = snapshot.runtime.foregroundProcessID
+                if let existing = claudeWireMonitors[snapshot.terminalID] {
+                    if existing.pid != monitorPID {
+                        existing.stop()
+                        let monitor = ClaudeSessionMonitor(pid: monitorPID)
+                        monitor.start()
+                        claudeWireMonitors[snapshot.terminalID] = monitor
+                    }
+                } else {
+                    let monitor = ClaudeSessionMonitor(pid: monitorPID)
+                    monitor.start()
+                    claudeWireMonitors[snapshot.terminalID] = monitor
+                }
+            }
+
+            // Stop monitors for terminals that no longer run Claude
+            for terminalID in claudeWireMonitors.keys where !activeClaudeTerminalIDs.contains(terminalID) {
+                claudeWireMonitors[terminalID]?.stop()
+                claudeWireMonitors.removeValue(forKey: terminalID)
+            }
+
             let understandings = snapshots.map { snapshot in
                 let wireRecords = kimiWireMonitors[snapshot.terminalID]?.records() ?? []
                 let codexWireRecords = codexWireMonitors[snapshot.terminalID]?.records() ?? []
+                let claudeWireRecords = claudeWireMonitors[snapshot.terminalID]?.records() ?? []
                 let understanding = aiForemanUnderstandingEngine.understand(
                     current: snapshot,
                     previous: aiForemanPreviousSnapshots[snapshot.terminalID],
                     lastOutcome: nil,
                     wireRecords: wireRecords,
-                    codexWireRecords: codexWireRecords
+                    codexWireRecords: codexWireRecords,
+                    claudeWireRecords: claudeWireRecords
                 )
                 if understanding.agentIdentity == .kimi {
                     DebugLogger.log("[AppDelegate] understand: terminal=\(snapshot.terminalID.prefix(8)) wireRecords=\(wireRecords.count) context=\(understanding.agentInteractionContext.typeString ?? "nil") state=\(understanding.state.rawValue)")

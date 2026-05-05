@@ -12,7 +12,8 @@ struct TerminalUnderstandingEngine {
         previous: TerminalSnapshot?,
         lastOutcome: TerminalOutcomeReport?,
         wireRecords: [KimiWireRecord] = [],
-        codexWireRecords: [CodexWireRecord] = []
+        codexWireRecords: [CodexWireRecord] = [],
+        claudeWireRecords: [ClaudeSessionState] = []
     ) -> TerminalUnderstanding {
         let applicableOutcome = applicableOutcome(for: current, previous: previous, lastOutcome: lastOutcome)
         let lastEvent = extractLastMeaningfulEvent(from: current, previous: previous, lastOutcome: applicableOutcome)
@@ -22,7 +23,8 @@ struct TerminalUnderstandingEngine {
             lastOutcome: applicableOutcome,
             lastEvent: lastEvent,
             wireRecords: wireRecords,
-            codexWireRecords: codexWireRecords
+            codexWireRecords: codexWireRecords,
+            claudeWireRecords: claudeWireRecords
         )
         let state = classifyState(current: current, lastOutcome: applicableOutcome, classification: classification)
         let suggestedActions = makeSuggestions(
@@ -97,7 +99,8 @@ struct TerminalUnderstandingEngine {
         lastOutcome: TerminalOutcomeReport?,
         lastEvent: String,
         wireRecords: [KimiWireRecord],
-        codexWireRecords: [CodexWireRecord]
+        codexWireRecords: [CodexWireRecord],
+        claudeWireRecords: [ClaudeSessionState]
     ) -> AgentClassification? {
         for adapter in adapters {
             guard let identity = adapter.detect(current: current, previous: previous) else { continue }
@@ -115,6 +118,15 @@ struct TerminalUnderstandingEngine {
                let wireClassification = classifyFromCodexWireRecords(
                    identity: identity,
                    wireRecords: codexWireRecords,
+                   lastEvent: lastEvent
+               ) {
+                return wireClassification
+            }
+            // If Claude session state is available, prefer it over heuristics
+            if identity == .claudeCode, !claudeWireRecords.isEmpty,
+               let wireClassification = classifyFromClaudeWireRecords(
+                   identity: identity,
+                   wireRecords: claudeWireRecords,
                    lastEvent: lastEvent
                ) {
                 return wireClassification
@@ -211,6 +223,43 @@ struct TerminalUnderstandingEngine {
             interactionState: interactionState,
             supportLevel: .firstClass,
             evidence: [.init(source: .wireSignal, detail: "Codex wire: \(record.payload.type ?? record.type)", confidence: 0.98)],
+            context: context
+        )
+    }
+
+    private func classifyFromClaudeWireRecords(
+        identity: AgentIdentity,
+        wireRecords: [ClaudeSessionState],
+        lastEvent: String
+    ) -> AgentClassification? {
+        guard let state = wireRecords.last,
+              let context = state.asAgentInteractionContext else {
+            return nil
+        }
+
+        let interactionState: AgentInteractionState
+        switch context {
+        case .running:
+            interactionState = .running
+        case .waitingApproval:
+            interactionState = .waitingApproval
+        case .waitingChoice:
+            interactionState = .waitingChoice
+        case .waitingText:
+            interactionState = .waitingText
+        case .completed:
+            interactionState = .completed
+        case .error:
+            interactionState = .error
+        case .none:
+            return nil
+        }
+
+        return AgentClassification(
+            identity: identity,
+            interactionState: interactionState,
+            supportLevel: .firstClass,
+            evidence: [.init(source: .wireSignal, detail: "Claude status: \(state.status ?? "unknown")", confidence: 0.98)],
             context: context
         )
     }
