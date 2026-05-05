@@ -95,6 +95,57 @@ struct TerminalSnapshot: Codable, Equatable, Sendable {
         )
     }
 
+    /// Computes the delta between a previous terminal text and the current one,
+    /// returning only lines that are new or changed. Falls back to the last
+    /// portion of current text when no previous snapshot exists.
+    static func computeTextDelta(previous: String?, current: String, maxLines: Int = 50, maxChars: Int = 2000) -> String {
+        let currentNormalized = normalizeTerminalText(current)
+        
+        guard let previous, !previous.isEmpty else {
+            // No previous snapshot — return truncated current text
+            let lines = currentNormalized.split(separator: "\n", omittingEmptySubsequences: false)
+            let capped = Array(lines.suffix(maxLines))
+            let result = capped.joined(separator: "\n")
+            return String(result.suffix(maxChars))
+        }
+        
+        let previousNormalized = normalizeTerminalText(previous)
+        
+        // Fast path: current starts with previous (text was appended)
+        if currentNormalized.hasPrefix(previousNormalized) {
+            let delta = String(currentNormalized.dropFirst(previousNormalized.count))
+            let trimmed = delta.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { return "(no new output)" }
+            let lines = trimmed.split(separator: "\n", omittingEmptySubsequences: false)
+            let capped = Array(lines.suffix(maxLines))
+            let result = capped.joined(separator: "\n")
+            return String(result.suffix(maxChars))
+        }
+        
+        // Line-based diff: find lines in current not in previous
+        let prevLines = Set(previousNormalized.split(separator: "\n").map(String.init))
+        let currLines = currentNormalized.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        
+        // Find consecutive new lines at the end (most common pattern)
+        var newLineCount = 0
+        for line in currLines.reversed() {
+            if !prevLines.contains(line) {
+                newLineCount += 1
+            } else {
+                break
+            }
+        }
+        
+        let resultLines = Array(currLines.suffix(min(newLineCount, maxLines)))
+        let result = resultLines.joined(separator: "\n")
+        
+        if result.isEmpty {
+            return "(no new output)"
+        }
+        
+        return String(result.suffix(maxChars))
+    }
+
     private static func normalizeTerminalText(_ text: String) -> String {
         let canonicalLineEndings = text
             .replacingOccurrences(of: "\r\n", with: "\n")

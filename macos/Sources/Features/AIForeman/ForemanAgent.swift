@@ -207,6 +207,29 @@ actor ForemanAgent {
                 previous: previousUnderstandings
             )
 
+            // Compute delta terminals BEFORE updating previous snapshots
+            let deltaTerminals = terminals.map { terminal in
+                let previous = previousSnapshotsByTerminalID[terminal.terminalID]
+                let deltaText = TerminalSnapshot.computeTextDelta(
+                    previous: previous?.visibleText,
+                    current: terminal.visibleText
+                )
+                return TerminalSnapshot(
+                    terminalID: terminal.terminalID,
+                    windowID: terminal.windowID,
+                    tabID: terminal.tabID,
+                    title: terminal.title,
+                    cwd: terminal.cwd,
+                    isFocused: terminal.isFocused,
+                    captureMode: terminal.captureMode,
+                    visibleText: deltaText,
+                    recentScrollback: terminal.recentScrollback,
+                    lastInputPreview: terminal.lastInputPreview,
+                    runtime: terminal.runtime,
+                    signals: terminal.signals
+                )
+            }
+
             previousSnapshotsByTerminalID = Dictionary(
                 uniqueKeysWithValues: terminals.map { ($0.terminalID, $0) }
             )
@@ -219,11 +242,11 @@ actor ForemanAgent {
                 )
             }
 
-            // 2. Plan
+            // 2. Plan (with delta-truncated terminal text to keep LLM context small)
             await setStatus(.planning)
             let response = try await foremanService.agentStep(
                 conversation: conversation,
-                terminals: terminals,
+                terminals: deltaTerminals,
                 understandings: understandings,
                 overview: overview,
                 lastOutcome: lastOutcome
