@@ -68,7 +68,11 @@ final class ClaudeSessionMonitor {
     private func readSessionState() -> ClaudeSessionState? {
         if let pid {
             let path = sessionsBase.appendingPathComponent("\(pid).json")
-            return parseState(at: path)
+            if let state = parseState(at: path) {
+                DebugLogger.log("[ClaudeSessionMonitor] matched PID file \(path.lastPathComponent) status=\(state.status ?? "nil")")
+                return state
+            }
+            DebugLogger.log("[ClaudeSessionMonitor] PID file not found for \(pid), falling back to scan")
         }
 
         // Fallback: scan all session files and pick the most recently modified
@@ -80,11 +84,16 @@ final class ClaudeSessionMonitor {
             .filter { $0.hasSuffix(".json") }
             .map { sessionsBase.appendingPathComponent($0) }
 
-        return jsonFiles.compactMap { url -> (ClaudeSessionState, Date)? in
+        let result = jsonFiles.compactMap { url -> (ClaudeSessionState, Date)? in
             guard let state = parseState(at: url),
                   let modDate = fileModDate(url) else { return nil }
             return (state, modDate)
         }.max(by: { $0.1 < $1.1 })?.0
+
+        if let result {
+            DebugLogger.log("[ClaudeSessionMonitor] fallback scan matched file status=\(result.status ?? "nil") pid=\(result.pid)")
+        }
+        return result
     }
 
     private func parseState(at url: URL) -> ClaudeSessionState? {

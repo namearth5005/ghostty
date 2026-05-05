@@ -559,7 +559,7 @@ private struct ClaudeCodeTerminalAdapter: TerminalAgentAdapter {
             lastOutcome: lastOutcome,
             lastEvent: lastEvent,
             choiceMarkers: ["what do you want to do?", "enter to confirm", "esc to cancel"],
-            approvalMarkers: ["permission", "approve", "proceed", "allow once", "allow always"]
+            approvalMarkers: ["approve", "allow once", "allow always", "[y/n]", "yes / no", "allow this", "allow edit"]
         )
     }
 }
