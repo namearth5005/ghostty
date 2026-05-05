@@ -184,6 +184,13 @@ class BaseTerminalController: NSWindowController,
             )
             _ = (NSApp.delegate as? AppDelegate)?.launchManagedAgent(request)
         }
+        foremanSidebarStore.onExecuteSuggestion = { [weak self] terminalID, command in
+            guard let self else { return }
+            (NSApp.delegate as? AppDelegate)?.executeSuggestedAction(
+                terminalID: terminalID,
+                command: command
+            )
+        }
 
         // Refresh agent readiness on init
         foremanSidebarStore.refreshAgentReadiness()

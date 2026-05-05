@@ -73,7 +73,12 @@ struct ForemanSidebarView: View {
                                 .foregroundStyle(.secondary)
                         } else {
                             ForEach(store.terminalRows) { row in
-                                TerminalSummaryRow(row: row)
+                                TerminalSummaryRow(
+                                    row: row,
+                                    onExecuteSuggestion: { terminalID, command in
+                                        store.executeSuggestion(terminalID: terminalID, command: command)
+                                    }
+                                )
                             }
                         }
                     }

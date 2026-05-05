@@ -2,6 +2,7 @@ import SwiftUI
 
 struct TerminalSummaryRow: View {
     let row: TerminalSummaryRowModel
+    var onExecuteSuggestion: ((String, String) -> Void)?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -77,15 +78,31 @@ struct TerminalSummaryRow: View {
             }
 
             if !row.suggestedActions.isEmpty {
-                VStack(alignment: .leading, spacing: 4) {
+                VStack(alignment: .leading, spacing: 6) {
                     ForEach(row.suggestedActions.prefix(2), id: \.title) { action in
-                        HStack(spacing: 4) {
-                            Image(systemName: action.isRecommended ? "star.fill" : "circle")
-                                .font(.system(size: 8))
-                                .foregroundStyle(action.isRecommended ? .yellow : .secondary)
-                            Text(action.title)
-                                .font(.system(size: 11, weight: .medium))
-                                .foregroundStyle(.secondary)
+                        if let command = action.command {
+                            Button(action: {
+                                onExecuteSuggestion?(row.terminalID, command)
+                            }) {
+                                HStack(spacing: 4) {
+                                    Image(systemName: action.isRecommended ? "star.fill" : "bolt.fill")
+                                        .font(.system(size: 8))
+                                    Text(action.title)
+                                        .font(.system(size: 11, weight: .medium))
+                                }
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
+                            }
+                            .buttonStyle(SuggestedActionButtonStyle(isRecommended: action.isRecommended))
+                        } else {
+                            HStack(spacing: 4) {
+                                Image(systemName: action.isRecommended ? "star.fill" : "circle")
+                                    .font(.system(size: 8))
+                                    .foregroundStyle(action.isRecommended ? .yellow : .secondary)
+                                Text(action.title)
+                                    .font(.system(size: 11, weight: .medium))
+                                    .foregroundStyle(.secondary)
+                            }
                         }
                     }
                 }
@@ -176,5 +193,24 @@ private func colorForContextType(_ type: String) -> Color {
         return .red
     default:
         return .secondary
+    }
+}
+
+// MARK: - Suggested Action Button Style
+
+struct SuggestedActionButtonStyle: ButtonStyle {
+    let isRecommended: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .foregroundStyle(isRecommended ? Color.white : Color.primary)
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(isRecommended
+                        ? (configuration.isPressed ? Color.blue.opacity(0.7) : Color.blue)
+                        : (configuration.isPressed ? Color.secondary.opacity(0.2) : Color.secondary.opacity(0.1))
+                    )
+            )
+            .opacity(configuration.isPressed ? 0.8 : 1.0)
     }
 }

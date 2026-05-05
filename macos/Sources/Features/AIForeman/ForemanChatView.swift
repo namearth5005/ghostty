@@ -89,7 +89,12 @@ struct ForemanChatView: View {
                         Spacer()
                     }
                     ForEach(store.terminalRows) { row in
-                        TerminalSummaryRow(row: row)
+                        TerminalSummaryRow(
+                            row: row,
+                            onExecuteSuggestion: { terminalID, command in
+                                store.executeSuggestion(terminalID: terminalID, command: command)
+                            }
+                        )
                     }
                 }
                 .padding(.horizontal, 16)

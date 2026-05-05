@@ -98,6 +98,7 @@ final class ForemanSidebarStore: ObservableObject {
     var onApproveAction: (() -> Void)?
     var onSkipAction: (() -> Void)?
     var onLaunchAgent: ((AgentIdentity) -> Void)?
+    var onExecuteSuggestion: ((String, String) -> Void)?
 
     private var cancellables = Set<AnyCancellable>()
 
@@ -218,6 +219,10 @@ final class ForemanSidebarStore: ObservableObject {
 
     func skipAction() {
         onSkipAction?()
+    }
+
+    func executeSuggestion(terminalID: String, command: String) {
+        onExecuteSuggestion?(terminalID, command)
     }
 
     func applySnapshots(

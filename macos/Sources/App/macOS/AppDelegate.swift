@@ -1473,6 +1473,14 @@ extension AppDelegate {
     }
 
     @MainActor
+    func executeSuggestedAction(terminalID: String, command: String) {
+        guard let controller = terminalController(for: terminalID) else { return }
+        let item = DispatchQueueItem(terminalID: terminalID, message: command)
+        guard dispatchQueueCoordinator.send(item, through: controller) else { return }
+        terminalOutcomeEngine.register(terminalID: terminalID, sentCommand: command)
+    }
+
+    @MainActor
     private func snapshotIsKimi(_ snapshot: TerminalSnapshot) -> Bool {
         let candidates = [
             snapshot.runtime.foregroundProcessName?.lowercased(),
