@@ -69,8 +69,8 @@ final class KimiWireSessionMonitor {
         guard let path = resolvedWirePath else { return }
 
         // Read entire file using FileManager to ensure we see latest appends
-        guard let fullData = FileManager.default.contents(atPath: path.path) else {
-            // File may have been removed; reset and try to rediscover
+        guard let fullData = FileManager.default.contents(atPath: path.path), !fullData.isEmpty else {
+            // File may have been removed or truncated to empty; reset and try to rediscover
             resolvedWirePath = nil
             lastOffset = 0
             return
@@ -142,8 +142,11 @@ final class KimiWireSessionMonitor {
                 let wirePath = sessionsDir.appendingPathComponent("\(sessionID)/wire.jsonl")
                 guard FileManager.default.fileExists(atPath: wirePath.path) else { continue }
                 
+                // Skip empty files — Kimi may create a new session file before writing any records,
+                // and switching to an empty file causes us to lose the prior session's state.
                 guard let attrs = try? FileManager.default.attributesOfItem(atPath: wirePath.path),
-                      let modDate = attrs[.modificationDate] as? Date else { continue }
+                      let modDate = attrs[.modificationDate] as? Date,
+                      attrs[.size] as? UInt64 ?? 0 > 0 else { continue }
                 
                 if mostRecentDate == nil || modDate > mostRecentDate! {
                     mostRecentDate = modDate

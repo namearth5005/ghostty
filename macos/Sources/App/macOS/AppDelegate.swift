@@ -189,6 +189,7 @@ class AppDelegate: NSObject,
     private var aiForemanPreviousSnapshots: [String: TerminalSnapshot] = [:]
     private var aiForemanPreviousUnderstandings: [String: TerminalUnderstanding] = [:]
     private var kimiWireMonitors: [String: KimiWireSessionMonitor] = [:]
+    private var codexWireMonitors: [String: CodexSessionMonitor] = [:]
 
     /// Signals
     private var signals: [DispatchSourceSignal] = []
@@ -1479,13 +1480,23 @@ extension AppDelegate {
             snapshot.lastInputPreview?.lowercased(),
         ].compactMap { $0 }
         let markers = ["kimi code", "kimi"]
-        let isMatch = candidates.contains { candidate in
+        return candidates.contains { candidate in
             markers.contains(where: candidate.contains)
         }
-        if isMatch {
-            // Kimi detected
+    }
+
+    @MainActor
+    private func snapshotIsCodex(_ snapshot: TerminalSnapshot) -> Bool {
+        let candidates = [
+            snapshot.runtime.foregroundProcessName?.lowercased(),
+            snapshot.title.lowercased(),
+            snapshot.visibleText.lowercased(),
+            snapshot.lastInputPreview?.lowercased(),
+        ].compactMap { $0 }
+        let markers = ["openai codex", "codex"]
+        return candidates.contains { candidate in
+            markers.contains(where: candidate.contains)
         }
-        return isMatch
     }
 
     @MainActor
@@ -1501,18 +1512,14 @@ extension AppDelegate {
             // Start monitors for new Kimi terminals, or recreate if cwd changed
             for snapshot in snapshots where activeKimiTerminalIDs.contains(snapshot.terminalID) {
                 let monitorCwd = snapshot.cwd ?? "" // empty string triggers global session scan
-                let isGlobalScan = snapshot.cwd == nil
                 if let existing = kimiWireMonitors[snapshot.terminalID] {
                     if existing.workingDirectory != monitorCwd {
-                        DebugLogger.log("[AppDelegate] Recreating monitor for \(snapshot.terminalID.prefix(8)) cwd=\(snapshot.cwd ?? "nil") global=\(isGlobalScan)")
                         existing.stop()
                         let monitor = KimiWireSessionMonitor(workingDirectory: monitorCwd)
                         monitor.start()
                         kimiWireMonitors[snapshot.terminalID] = monitor
                     }
                 } else {
-                    DebugLogger.log("[AppDelegate] Creating monitor for \(snapshot.terminalID.prefix(8)) cwd=\(snapshot.cwd ?? "nil") global=\(isGlobalScan)")
-                    NSLog("[AppDelegate] Creating monitor for %@ cwd=%@ global=%d", String(snapshot.terminalID.prefix(8)), snapshot.cwd ?? "nil", isGlobalScan)
                     let monitor = KimiWireSessionMonitor(workingDirectory: monitorCwd)
                     monitor.start()
                     kimiWireMonitors[snapshot.terminalID] = monitor
@@ -1525,13 +1532,42 @@ extension AppDelegate {
                 kimiWireMonitors.removeValue(forKey: terminalID)
             }
 
+            // Manage Codex wire monitors per terminal
+            let activeCodexTerminalIDs = Set(snapshots
+                .filter { snapshotIsCodex($0) }
+                .map(\.terminalID))
+
+            for snapshot in snapshots where activeCodexTerminalIDs.contains(snapshot.terminalID) {
+                let monitorCwd = snapshot.cwd
+                if let existing = codexWireMonitors[snapshot.terminalID] {
+                    if existing.workingDirectory != monitorCwd {
+                        existing.stop()
+                        let monitor = CodexSessionMonitor(workingDirectory: monitorCwd)
+                        monitor.start()
+                        codexWireMonitors[snapshot.terminalID] = monitor
+                    }
+                } else {
+                    let monitor = CodexSessionMonitor(workingDirectory: monitorCwd)
+                    monitor.start()
+                    codexWireMonitors[snapshot.terminalID] = monitor
+                }
+            }
+
+            // Stop monitors for terminals that no longer run Codex
+            for terminalID in codexWireMonitors.keys where !activeCodexTerminalIDs.contains(terminalID) {
+                codexWireMonitors[terminalID]?.stop()
+                codexWireMonitors.removeValue(forKey: terminalID)
+            }
+
             let understandings = snapshots.map { snapshot in
                 let wireRecords = kimiWireMonitors[snapshot.terminalID]?.records() ?? []
+                let codexWireRecords = codexWireMonitors[snapshot.terminalID]?.records() ?? []
                 let understanding = aiForemanUnderstandingEngine.understand(
                     current: snapshot,
                     previous: aiForemanPreviousSnapshots[snapshot.terminalID],
                     lastOutcome: nil,
-                    wireRecords: wireRecords
+                    wireRecords: wireRecords,
+                    codexWireRecords: codexWireRecords
                 )
                 if understanding.agentIdentity == .kimi {
                     DebugLogger.log("[AppDelegate] understand: terminal=\(snapshot.terminalID.prefix(8)) wireRecords=\(wireRecords.count) context=\(understanding.agentInteractionContext.typeString ?? "nil") state=\(understanding.state.rawValue)")

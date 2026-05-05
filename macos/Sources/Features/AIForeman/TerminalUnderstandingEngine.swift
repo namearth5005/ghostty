@@ -11,7 +11,8 @@ struct TerminalUnderstandingEngine {
         current: TerminalSnapshot,
         previous: TerminalSnapshot?,
         lastOutcome: TerminalOutcomeReport?,
-        wireRecords: [KimiWireRecord] = []
+        wireRecords: [KimiWireRecord] = [],
+        codexWireRecords: [CodexWireRecord] = []
     ) -> TerminalUnderstanding {
         let applicableOutcome = applicableOutcome(for: current, previous: previous, lastOutcome: lastOutcome)
         let lastEvent = extractLastMeaningfulEvent(from: current, previous: previous, lastOutcome: applicableOutcome)
@@ -20,7 +21,8 @@ struct TerminalUnderstandingEngine {
             previous: previous,
             lastOutcome: applicableOutcome,
             lastEvent: lastEvent,
-            wireRecords: wireRecords
+            wireRecords: wireRecords,
+            codexWireRecords: codexWireRecords
         )
         let state = classifyState(current: current, lastOutcome: applicableOutcome, classification: classification)
         let suggestedActions = makeSuggestions(
@@ -94,7 +96,8 @@ struct TerminalUnderstandingEngine {
         previous: TerminalSnapshot?,
         lastOutcome: TerminalOutcomeReport?,
         lastEvent: String,
-        wireRecords: [KimiWireRecord]
+        wireRecords: [KimiWireRecord],
+        codexWireRecords: [CodexWireRecord]
     ) -> AgentClassification? {
         for adapter in adapters {
             guard let identity = adapter.detect(current: current, previous: previous) else { continue }
@@ -103,6 +106,15 @@ struct TerminalUnderstandingEngine {
                let wireClassification = classifyFromWireRecords(
                    identity: identity,
                    wireRecords: wireRecords,
+                   lastEvent: lastEvent
+               ) {
+                return wireClassification
+            }
+            // If Codex wire records are available, prefer them over heuristics
+            if identity == .codex, !codexWireRecords.isEmpty,
+               let wireClassification = classifyFromCodexWireRecords(
+                   identity: identity,
+                   wireRecords: codexWireRecords,
                    lastEvent: lastEvent
                ) {
                 return wireClassification
@@ -157,6 +169,48 @@ struct TerminalUnderstandingEngine {
             interactionState: interactionState,
             supportLevel: .firstClass,
             evidence: [.init(source: .wireSignal, detail: "Wire record: \(record.message.type)", confidence: 0.98)],
+            context: context
+        )
+    }
+
+    private func classifyFromCodexWireRecords(
+        identity: AgentIdentity,
+        wireRecords: [CodexWireRecord],
+        lastEvent: String
+    ) -> AgentClassification? {
+        guard let record = wireRecords.lazy.reversed().compactMap({ rec -> CodexWireRecord? in
+            rec.asAgentInteractionContext != nil ? rec : nil
+        }).first else {
+            return nil
+        }
+
+        guard let context = record.asAgentInteractionContext else {
+            return nil
+        }
+
+        let interactionState: AgentInteractionState
+        switch context {
+        case .running:
+            interactionState = .running
+        case .waitingApproval:
+            interactionState = .waitingApproval
+        case .waitingChoice:
+            interactionState = .waitingChoice
+        case .waitingText:
+            interactionState = .waitingText
+        case .completed:
+            interactionState = .completed
+        case .error:
+            interactionState = .error
+        case .none:
+            return nil
+        }
+
+        return AgentClassification(
+            identity: identity,
+            interactionState: interactionState,
+            supportLevel: .firstClass,
+            evidence: [.init(source: .wireSignal, detail: "Codex wire: \(record.payload.type ?? record.type)", confidence: 0.98)],
             context: context
         )
     }
