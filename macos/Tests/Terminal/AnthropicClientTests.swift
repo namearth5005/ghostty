@@ -144,6 +144,45 @@ struct AnthropicClientTests {
         #expect(prompt.contains("Kimi in terminal term-1 is waiting for text input."))
         #expect(prompt.contains("If Active turn is a reactive terminal event, handle that event as the current task."))
     }
+
+    @Test
+    func anthropicDraftAgentReplyUsesDedicatedSchema() async throws {
+        let transport = RecordingAnthropicTransport(
+            payload: """
+            {"thought":"Send a concrete reply.","suggestion":{"type":"reply_to_agent","terminal_id":"term-1","message":"Read README.md and summarize the project.","reason":"Kimi asked what to do next.","confidence":0.9}}
+            """
+        )
+        let client = AnthropicClient(apiKey: "test-key", transport: transport)
+        let conversation = await MainActor.run { ForemanConversation() }
+        let event = AgentNeedsAttentionEvent(
+            terminalID: "term-1",
+            agentIdentity: .kimi,
+            interactionState: .waitingText,
+            deltaText: "What would you like me to do here?",
+            timestamp: Date(timeIntervalSince1970: 1)
+        )
+
+        let response = try await client.draftAgentReply(
+            conversation: conversation,
+            event: event,
+            terminals: sampleSnapshots(),
+            understandings: [],
+            overview: .init(summary: "term-1 waiting", changedTerminalIDs: ["term-1"], primaryTerminalID: "term-1"),
+            lastOutcome: nil
+        )
+
+        let request = try #require(await transport.lastRequest)
+        #expect(request.system.contains("reply_to_agent, ask_human, or no_action"))
+        let prompt = request.messages[0].content
+        #expect(prompt.contains("Current waiting-text event:"))
+        #expect(prompt.contains("What would you like me to do here?"))
+        #expect(response.suggestion == .replyToAgent(
+            terminalID: "term-1",
+            message: "Read README.md and summarize the project.",
+            reason: "Kimi asked what to do next.",
+            confidence: 0.9
+        ))
+    }
 }
 
 @MainActor

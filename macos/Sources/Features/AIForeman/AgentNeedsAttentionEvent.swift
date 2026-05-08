@@ -2,7 +2,7 @@ import Foundation
 
 /// Fired when an AI agent (Kimi, Claude Code, Codex) transitions from
 /// actively working to a state where it needs user input or approval.
-struct AgentNeedsAttentionEvent: Sendable {
+struct AgentNeedsAttentionEvent: Codable, Sendable {
     let terminalID: String
     let agentIdentity: AgentIdentity
     let interactionState: AgentInteractionState

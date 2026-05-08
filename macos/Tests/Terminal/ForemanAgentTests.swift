@@ -470,13 +470,14 @@ struct ForemanAgentTests {
     @Test
     func draftPendingAttentionForWaitingTextExposesLLMReplyWithoutSending() async throws {
         let conversation = await MainActor.run { ForemanConversation() }
-        let client = ScriptedForemanClient(responses: [
-            try makeStepResponse(
+        let client = ScriptedForemanClient(replyDrafts: [
+            try makeReplyDraftResponse(
                 thought: "Kimi is asking what to do next.",
-                action: AgentAction.sendCommand(
+                suggestion: .replyToAgent(
                     terminalID: "term-1",
-                    command: "Read README.md and summarize what this project does.",
-                    reason: "Kimi has entered the mend repo and is asking for the next instruction."
+                    message: "Read README.md and summarize what this project does.",
+                    reason: "Kimi has entered the mend repo and is asking for the next instruction.",
+                    confidence: 1.0
                 )
             ),
         ])
@@ -511,6 +512,80 @@ struct ForemanAgentTests {
         #expect(action.title == "Read README.md and summarize what this project does.")
         #expect(action.payload == "Read README.md and summarize what this project does.")
         #expect(action.style == .primary)
+    }
+
+    @Test
+    func draftPendingAttentionForAskHumanShowsCardWithoutSendingAction() async throws {
+        let conversation = await MainActor.run { ForemanConversation() }
+        let client = ScriptedForemanClient(replyDrafts: [
+            try makeReplyDraftResponse(
+                thought: "The agent needs a goal from the human.",
+                suggestion: .askHuman(
+                    terminalID: "term-1",
+                    message: "What should Kimi do in the mend directory?",
+                    reason: "Kimi is asking for the next task and Foreman has no active user goal.",
+                    confidence: 1.0
+                )
+            ),
+        ])
+        let commandRecorder = CommandRecorder()
+        let agent = makeAgent(
+            conversation: conversation,
+            client: client,
+            commandRecorder: commandRecorder
+        )
+        let event = AgentNeedsAttentionEvent(
+            terminalID: "term-1",
+            agentIdentity: .kimi,
+            interactionState: .waitingText,
+            deltaText: "What would you like me to do here?",
+            timestamp: Date(timeIntervalSince1970: 1),
+            fingerprint: "term-1|kimi|waitingText|next"
+        )
+
+        let attention = try await agent.draftPendingAttention(
+            for: event,
+            captureSnapshots: sampleSnapshots
+        )
+
+        let commands = await commandRecorder.recordedCommands()
+        #expect(commands.isEmpty)
+        #expect(attention?.terminalID == "term-1")
+        #expect(attention?.title == "Needs direction")
+        #expect(attention?.description == "What should Kimi do in the mend directory?")
+        #expect(attention?.detail == "Kimi is asking for the next task and Foreman has no active user goal.")
+        #expect(attention?.actions.isEmpty == true)
+    }
+
+    @Test
+    func draftPendingAttentionForNoActionReturnsNil() async throws {
+        let conversation = await MainActor.run { ForemanConversation() }
+        let client = ScriptedForemanClient(replyDrafts: [
+            try makeReplyDraftResponse(
+                thought: "The waiting text is not actionable.",
+                suggestion: .noAction(reason: "Only welcome screen chrome is visible.", confidence: 1.0)
+            ),
+        ])
+        let agent = makeAgent(
+            conversation: conversation,
+            client: client,
+            commandRecorder: CommandRecorder()
+        )
+        let event = AgentNeedsAttentionEvent(
+            terminalID: "term-1",
+            agentIdentity: .kimi,
+            interactionState: .waitingText,
+            deltaText: "── input ──",
+            timestamp: Date(timeIntervalSince1970: 1),
+            fingerprint: "term-1|kimi|waitingText|chrome"
+        )
+
+        let attention = try await agent.draftPendingAttention(
+            for: event,
+            captureSnapshots: sampleSnapshots
+        )
+
+        #expect(attention == nil)
     }
 
     @Test
@@ -595,6 +670,19 @@ private func makeStepResponse(thought: String, action: AgentAction) throws -> Ag
 
     let data = try JSONEncoder().encode(StepEnvelope(thought: thought, action: action))
     return try JSONDecoder().decode(AgentStepResponse.self, from: data)
+}
+
+private func makeReplyDraftResponse(
+    thought: String,
+    suggestion: AgentReplyDraftSuggestion
+) throws -> AgentReplyDraftResponse {
+    struct DraftEnvelope: Encodable {
+        let thought: String
+        let suggestion: AgentReplyDraftSuggestion
+    }
+
+    let data = try JSONEncoder().encode(DraftEnvelope(thought: thought, suggestion: suggestion))
+    return try JSONDecoder().decode(AgentReplyDraftResponse.self, from: data)
 }
 
 private func makeAgent(
@@ -712,11 +800,16 @@ private actor CommandRecorder {
 
 private actor ScriptedForemanClient: ForemanLLMClient {
     private var responses: [AgentStepResponse]
+    private var replyDrafts: [AgentReplyDraftResponse]
     private var understandingsLog: [[TerminalUnderstanding]] = []
     private var overviewsLog: [TerminalOverview] = []
 
-    init(responses: [AgentStepResponse]) {
+    init(
+        responses: [AgentStepResponse] = [],
+        replyDrafts: [AgentReplyDraftResponse] = []
+    ) {
         self.responses = responses
+        self.replyDrafts = replyDrafts
     }
 
     func summarize(snapshot: TerminalSnapshot) async throws -> TerminalSummary {
@@ -751,6 +844,22 @@ private actor ScriptedForemanClient: ForemanLLMClient {
             throw ScriptedForemanClientError.missingResponse
         }
         return responses.removeFirst()
+    }
+
+    func draftAgentReply(
+        conversation: ForemanConversation,
+        event: AgentNeedsAttentionEvent,
+        terminals: [TerminalSnapshot],
+        understandings: [TerminalUnderstanding],
+        overview: TerminalOverview,
+        lastOutcome: TerminalOutcomeReport?
+    ) async throws -> AgentReplyDraftResponse {
+        understandingsLog.append(understandings)
+        overviewsLog.append(overview)
+        guard !replyDrafts.isEmpty else {
+            throw ScriptedForemanClientError.missingResponse
+        }
+        return replyDrafts.removeFirst()
     }
 
     func recordedUnderstandings() -> [[TerminalUnderstanding]] {

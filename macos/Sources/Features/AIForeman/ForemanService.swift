@@ -16,6 +16,15 @@ protocol ForemanLLMClient: Sendable {
         terminals: [TerminalSnapshot],
         lastOutcome: TerminalOutcomeReport?
     ) async throws -> AgentStepResponse
+
+    func draftAgentReply(
+        conversation: ForemanConversation,
+        event: AgentNeedsAttentionEvent,
+        terminals: [TerminalSnapshot],
+        understandings: [TerminalUnderstanding],
+        overview: TerminalOverview,
+        lastOutcome: TerminalOutcomeReport?
+    ) async throws -> AgentReplyDraftResponse
 }
 
 extension ForemanLLMClient {
@@ -31,6 +40,48 @@ extension ForemanLLMClient {
             terminals: terminals,
             lastOutcome: lastOutcome
         )
+    }
+
+    func draftAgentReply(
+        conversation: ForemanConversation,
+        event: AgentNeedsAttentionEvent,
+        terminals: [TerminalSnapshot],
+        understandings: [TerminalUnderstanding],
+        overview: TerminalOverview,
+        lastOutcome: TerminalOutcomeReport?
+    ) async throws -> AgentReplyDraftResponse {
+        let step = try await agentStep(
+            conversation: conversation,
+            terminals: terminals,
+            understandings: understandings,
+            overview: overview,
+            lastOutcome: lastOutcome
+        )
+
+        let suggestion: AgentReplyDraftSuggestion
+        switch step.action {
+        case .sendCommand(let terminalID, let command, let reason):
+            suggestion = .replyToAgent(
+                terminalID: terminalID,
+                message: command,
+                reason: reason,
+                confidence: 0.6
+            )
+        case .askUser(let question):
+            suggestion = .askHuman(
+                terminalID: event.terminalID,
+                message: question,
+                reason: "The generic agent step requested human input.",
+                confidence: 0.6
+            )
+        default:
+            suggestion = .noAction(
+                reason: "The generic agent step did not produce a waiting-text reply.",
+                confidence: 0.4
+            )
+        }
+
+        return AgentReplyDraftResponse(thought: step.thought, suggestion: suggestion)
     }
 }
 
@@ -58,6 +109,24 @@ actor ForemanService {
     ) async throws -> AgentStepResponse {
         try await client.agentStep(
             conversation: conversation,
+            terminals: terminals,
+            understandings: understandings,
+            overview: overview,
+            lastOutcome: lastOutcome
+        )
+    }
+
+    func draftAgentReply(
+        conversation: ForemanConversation,
+        event: AgentNeedsAttentionEvent,
+        terminals: [TerminalSnapshot],
+        understandings: [TerminalUnderstanding],
+        overview: TerminalOverview,
+        lastOutcome: TerminalOutcomeReport?
+    ) async throws -> AgentReplyDraftResponse {
+        try await client.draftAgentReply(
+            conversation: conversation,
+            event: event,
             terminals: terminals,
             understandings: understandings,
             overview: overview,

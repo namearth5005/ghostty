@@ -130,6 +130,45 @@ struct ForemanServiceTests {
     }
 
     @Test
+    func openAIClientDraftAgentReplyUsesDedicatedSchema() async throws {
+        let transport = RecordingResponsesTransport(
+            payload: """
+            {"thought":"Need human direction.","suggestion":{"type":"ask_human","terminal_id":"term-1","message":"What should Kimi do next?","reason":"No active Foreman goal exists.","confidence":0.8}}
+            """
+        )
+        let client = OpenAIClient(apiKey: "test-key", transport: transport)
+        let conversation = await MainActor.run { ForemanConversation() }
+        let event = AgentNeedsAttentionEvent(
+            terminalID: "term-1",
+            agentIdentity: .kimi,
+            interactionState: .waitingText,
+            deltaText: "What would you like me to do here?",
+            timestamp: Date(timeIntervalSince1970: 1)
+        )
+
+        let response = try await client.draftAgentReply(
+            conversation: conversation,
+            event: event,
+            terminals: sampleSnapshots(),
+            understandings: [],
+            overview: .init(summary: "term-1 waiting", changedTerminalIDs: ["term-1"], primaryTerminalID: "term-1"),
+            lastOutcome: nil
+        )
+
+        let request = try #require(await transport.lastRequest)
+        let prompt = request.input[0].content[0].text
+        #expect(prompt.contains("reply_to_agent|ask_human|no_action"))
+        #expect(prompt.contains("Current waiting-text event:"))
+        #expect(prompt.contains("What would you like me to do here?"))
+        #expect(response.suggestion == .askHuman(
+            terminalID: "term-1",
+            message: "What should Kimi do next?",
+            reason: "No active Foreman goal exists.",
+            confidence: 0.8
+        ))
+    }
+
+    @Test
     func serviceForwardsStructuredUnderstandingsToClient() async throws {
         let client = RecordingForemanClient()
         let service = ForemanService(client: client)
@@ -240,6 +279,26 @@ private actor RecordingForemanClient: ForemanLLMClient {
         lastOutcome: TerminalOutcomeReport?
     ) async throws -> AgentStepResponse {
         throw RecordingForemanClientError.unexpectedCall
+    }
+
+    func draftAgentReply(
+        conversation: ForemanConversation,
+        event: AgentNeedsAttentionEvent,
+        terminals: [TerminalSnapshot],
+        understandings: [TerminalUnderstanding],
+        overview: TerminalOverview,
+        lastOutcome: TerminalOutcomeReport?
+    ) async throws -> AgentReplyDraftResponse {
+        lastUnderstandings = understandings
+        return AgentReplyDraftResponse(
+            thought: "Asking for human direction.",
+            suggestion: .askHuman(
+                terminalID: event.terminalID,
+                message: "What should the agent do next?",
+                reason: overview.summary,
+                confidence: 1.0
+            )
+        )
     }
 }
 

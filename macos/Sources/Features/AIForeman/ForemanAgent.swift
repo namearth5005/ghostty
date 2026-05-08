@@ -204,44 +204,67 @@ actor ForemanAgent {
             )
         }
 
-        let response = try await foremanService.agentStep(
+        let response = try await foremanService.draftAgentReply(
             conversation: conversation,
+            event: event,
             terminals: deltaTerminals,
             understandings: understandings,
             overview: overview,
             lastOutcome: lastOutcome
         )
-        DebugLogger.log("[ForemanAgent] draftPendingAttention LLM action terminal=\(event.terminalID.prefix(8)) action=\(Self.describe(response.action))")
+        DebugLogger.log("[ForemanAgent] draftPendingAttention LLM suggestion terminal=\(event.terminalID.prefix(8)) suggestion=\(Self.describe(response.suggestion))")
 
         lastOutcome = nil
         await MainActor.run {
             conversation.incrementIteration()
         }
 
-        guard case .sendCommand(let terminalID, let command, let reason) = response.action,
-              terminalID == event.terminalID else {
-            DebugLogger.log("[ForemanAgent] draftPendingAttention ignored action terminal=\(event.terminalID.prefix(8)) expected=\(event.terminalID) action=\(Self.describe(response.action))")
+        switch response.suggestion {
+        case .replyToAgent(let terminalID, let message, let reason, _):
+            guard terminalID == event.terminalID else {
+                DebugLogger.log("[ForemanAgent] draftPendingAttention ignored suggestion terminal=\(event.terminalID.prefix(8)) expected=\(event.terminalID) suggestion=\(Self.describe(response.suggestion))")
+                return nil
+            }
+            DebugLogger.log("[ForemanAgent] draftPendingAttention produced suggestion terminal=\(event.terminalID.prefix(8)) message='\(message.prefix(160))' reason='\(reason.prefix(160))'")
+            return PendingAgentAttention(
+                terminalID: event.terminalID,
+                agentIdentity: event.agentIdentity,
+                interactionState: event.interactionState,
+                fingerprint: event.fingerprint,
+                title: "Suggested reply",
+                description: reason.isEmpty ? event.deltaText : reason,
+                detail: event.deltaText.isEmpty ? nil : event.deltaText,
+                actions: [
+                    .init(
+                        id: "suggested_reply",
+                        title: message,
+                        payload: message,
+                        style: .primary
+                    )
+                ]
+            )
+
+        case .askHuman(let terminalID, let message, let reason, _):
+            guard terminalID == event.terminalID else {
+                DebugLogger.log("[ForemanAgent] draftPendingAttention ignored ask-human terminal=\(event.terminalID.prefix(8)) expected=\(event.terminalID) suggestion=\(Self.describe(response.suggestion))")
+                return nil
+            }
+            DebugLogger.log("[ForemanAgent] draftPendingAttention produced ask-human terminal=\(event.terminalID.prefix(8)) message='\(message.prefix(160))' reason='\(reason.prefix(160))'")
+            return PendingAgentAttention(
+                terminalID: event.terminalID,
+                agentIdentity: event.agentIdentity,
+                interactionState: event.interactionState,
+                fingerprint: event.fingerprint,
+                title: "Needs direction",
+                description: message.isEmpty ? "The agent is waiting for your direction." : message,
+                detail: reason.isEmpty ? event.deltaText : reason,
+                actions: []
+            )
+
+        case .noAction:
+            DebugLogger.log("[ForemanAgent] draftPendingAttention no-action terminal=\(event.terminalID.prefix(8)) suggestion=\(Self.describe(response.suggestion))")
             return nil
         }
-
-        DebugLogger.log("[ForemanAgent] draftPendingAttention produced suggestion terminal=\(event.terminalID.prefix(8)) command='\(command.prefix(160))' reason='\(reason.prefix(160))'")
-        return PendingAgentAttention(
-            terminalID: event.terminalID,
-            agentIdentity: event.agentIdentity,
-            interactionState: event.interactionState,
-            fingerprint: event.fingerprint,
-            title: "Suggested reply",
-            description: reason.isEmpty ? event.deltaText : reason,
-            detail: event.deltaText.isEmpty ? nil : event.deltaText,
-            actions: [
-                .init(
-                    id: "suggested_reply",
-                    title: command,
-                    payload: command,
-                    style: .primary
-                )
-            ]
-        )
     }
 
     func receiveOutcome(_ report: TerminalOutcomeReport) {
@@ -543,6 +566,17 @@ actor ForemanAgent {
             return "declare_complete summary='\(summary.prefix(160))'"
         case .declareStuck(let reason):
             return "declare_stuck reason='\(reason.prefix(160))'"
+        }
+    }
+
+    private static func describe(_ suggestion: AgentReplyDraftSuggestion) -> String {
+        switch suggestion {
+        case .replyToAgent(let terminalID, let message, let reason, let confidence):
+            return "reply_to_agent terminal=\(terminalID) message='\(message.prefix(160))' reason='\(reason.prefix(160))' confidence=\(confidence)"
+        case .askHuman(let terminalID, let message, let reason, let confidence):
+            return "ask_human terminal=\(terminalID) message='\(message.prefix(160))' reason='\(reason.prefix(160))' confidence=\(confidence)"
+        case .noAction(let reason, let confidence):
+            return "no_action reason='\(reason.prefix(160))' confidence=\(confidence)"
         }
     }
 

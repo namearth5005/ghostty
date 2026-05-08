@@ -57,6 +57,101 @@ enum AgentStatus: String, Codable, Sendable, Equatable {
     case stuck
 }
 
+struct AgentReplyDraftResponse: Codable, Equatable, Sendable {
+    let thought: String
+    let suggestion: AgentReplyDraftSuggestion
+}
+
+enum AgentReplyDraftSuggestion: Codable, Equatable, Sendable {
+    case replyToAgent(terminalID: String, message: String, reason: String, confidence: Double)
+    case askHuman(terminalID: String, message: String, reason: String, confidence: Double)
+    case noAction(reason: String, confidence: Double)
+
+    enum CodingKeys: String, CodingKey {
+        case type
+        case terminalID = "terminal_id"
+        case message
+        case reason
+        case confidence
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let type = try container.decode(String.self, forKey: .type)
+        let message = try container.decodeIfPresent(String.self, forKey: .message) ?? ""
+        let reason = try container.decodeIfPresent(String.self, forKey: .reason) ?? ""
+        let confidence = try container.decodeIfPresent(Double.self, forKey: .confidence) ?? 1.0
+
+        switch type {
+        case "reply_to_agent", "replyToAgent":
+            let terminalID = try Self.decodeFlexibleString(from: container, forKey: .terminalID)
+            self = .replyToAgent(
+                terminalID: terminalID,
+                message: message,
+                reason: reason,
+                confidence: confidence
+            )
+        case "ask_human", "askHuman":
+            let terminalID = try Self.decodeFlexibleString(from: container, forKey: .terminalID)
+            self = .askHuman(
+                terminalID: terminalID,
+                message: message,
+                reason: reason,
+                confidence: confidence
+            )
+        case "no_action", "noAction":
+            self = .noAction(reason: reason.isEmpty ? message : reason, confidence: confidence)
+        default:
+            throw DecodingError.dataCorruptedError(
+                forKey: .type,
+                in: container,
+                debugDescription: "Unknown reply draft suggestion type: \(type)"
+            )
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case .replyToAgent(let terminalID, let message, let reason, let confidence):
+            try container.encode("reply_to_agent", forKey: .type)
+            try container.encode(terminalID, forKey: .terminalID)
+            try container.encode(message, forKey: .message)
+            try container.encode(reason, forKey: .reason)
+            try container.encode(confidence, forKey: .confidence)
+        case .askHuman(let terminalID, let message, let reason, let confidence):
+            try container.encode("ask_human", forKey: .type)
+            try container.encode(terminalID, forKey: .terminalID)
+            try container.encode(message, forKey: .message)
+            try container.encode(reason, forKey: .reason)
+            try container.encode(confidence, forKey: .confidence)
+        case .noAction(let reason, let confidence):
+            try container.encode("no_action", forKey: .type)
+            try container.encode(reason, forKey: .reason)
+            try container.encode(confidence, forKey: .confidence)
+        }
+    }
+
+    private static func decodeFlexibleString(
+        from container: KeyedDecodingContainer<CodingKeys>,
+        forKey key: CodingKeys
+    ) throws -> String {
+        if let string = try? container.decode(String.self, forKey: key) {
+            return string
+        }
+        if let int = try? container.decode(Int.self, forKey: key) {
+            return String(int)
+        }
+        if let double = try? container.decode(Double.self, forKey: key) {
+            return String(double)
+        }
+        throw DecodingError.typeMismatch(
+            String.self,
+            .init(codingPath: container.codingPath + [key], debugDescription: "Expected string-like value")
+        )
+    }
+}
+
 enum AgentAction: Codable, Equatable, Sendable {
     case respond(message: String)
     case sendCommand(terminalID: String, command: String, reason: String)

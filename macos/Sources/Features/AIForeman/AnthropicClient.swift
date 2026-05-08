@@ -145,6 +145,39 @@ struct AnthropicClient: ForemanLLMClient, Sendable {
         return try Self.decodeJSON(AgentStepResponse.self, from: payload, decoder: decoder)
     }
 
+    func draftAgentReply(
+        conversation: ForemanConversation,
+        event: AgentNeedsAttentionEvent,
+        terminals: [TerminalSnapshot],
+        understandings: [TerminalUnderstanding],
+        overview: TerminalOverview,
+        lastOutcome: TerminalOutcomeReport?
+    ) async throws -> AgentReplyDraftResponse {
+        let goal = await MainActor.run { conversation.goal ?? "" }
+        let messages = await MainActor.run { conversation.messages }
+        let hiddenContext = await MainActor.run { conversation.hiddenContext }
+
+        let request = Request(
+            model: plannerModel,
+            system: Self.replyDraftInstructions,
+            maxTokens: 900,
+            messages: [.user(Self.replyDraftPrompt(
+                goal: goal,
+                messages: messages,
+                hiddenContext: hiddenContext,
+                event: event,
+                understandings: understandings,
+                overview: overview,
+                terminals: terminals,
+                lastOutcome: lastOutcome,
+                using: encoder
+            ))]
+        )
+
+        let payload = try await perform(request)
+        return try Self.decodeJSON(AgentReplyDraftResponse.self, from: payload, decoder: decoder)
+    }
+
     func agentStep(
         conversation: ForemanConversation,
         terminals: [TerminalSnapshot],
@@ -208,6 +241,17 @@ extension AnthropicClient {
         Only ask the user if the terminal history does not provide enough context to determine what to send next.
         """
     }
+
+    private static let replyDraftInstructions = """
+    You draft the next interactive reply for a human supervising AI agent terminals.
+    Return JSON only. Do not wrap the JSON in markdown code blocks.
+    Choose exactly one suggestion type: reply_to_agent, ask_human, or no_action.
+    Use reply_to_agent when terminal history gives enough context to send a useful raw message to the AI agent.
+    Use ask_human when the AI agent needs a real goal or choice that is absent from terminal history.
+    Use no_action only when the waiting text is duplicate, cosmetic, or not actionable.
+    For reply_to_agent, terminal_id must exactly match one terminal_id from Terminal snapshots.
+    A reply_to_agent message is raw text sent to Kimi, Claude Code, or Codex. Do not use shell syntax, printf, or echo.
+    """
 
     private static func summaryPrompt(for snapshot: TerminalSnapshot, using encoder: JSONEncoder) -> String {
         """
@@ -288,6 +332,55 @@ extension AnthropicClient {
         If Active turn is a reactive terminal event, handle that event as the current task.
         Mode: \(mode)
         Iteration: \(iterationCount)/20
+
+        Conversation history:
+        \(encode(messages, using: encoder))
+
+        Hidden reactive context:
+        \(encode(hiddenContext, using: encoder))
+
+        Structured terminal overview:
+        \(encode(overview, using: encoder))
+
+        Structured terminal understandings:
+        \(encode(understandings, using: encoder))
+
+        Terminal snapshots:
+        \(encode(terminals, using: encoder))
+
+        Last outcome (if any):
+        \(lastOutcome.map { encode($0, using: encoder) } ?? "none")
+        """
+    }
+
+    private static func replyDraftPrompt(
+        goal: String,
+        messages: [ConversationMessage],
+        hiddenContext: [String],
+        event: AgentNeedsAttentionEvent,
+        understandings: [TerminalUnderstanding],
+        overview: TerminalOverview,
+        terminals: [TerminalSnapshot],
+        lastOutcome: TerminalOutcomeReport?,
+        using encoder: JSONEncoder
+    ) -> String {
+        """
+        Return one JSON object with this exact shape:
+        {
+          "thought": "string",
+          "suggestion": {
+            "type": "reply_to_agent|ask_human|no_action",
+            "terminal_id": "string (for reply_to_agent and ask_human)",
+            "message": "string (raw reply to send, or human-facing question)",
+            "reason": "string",
+            "confidence": 0.0
+          }
+        }
+
+        Session goal: \(goal.isEmpty ? "none" : goal)
+
+        Current waiting-text event:
+        \(encode(event, using: encoder))
 
         Conversation history:
         \(encode(messages, using: encoder))
