@@ -166,14 +166,14 @@ enum ConversationUIPhase: Equatable {
         status: AgentStatus,
         lastAction: AgentAction?
     ) -> Self {
-        guard goal != nil else { return .readyToStart }
-
         if status == .waitingForUser {
             if case .sendCommand(_, let command, _) = lastAction {
                 return .awaitingApproval(command: command)
             }
             return .awaitingReply
         }
+
+        guard goal != nil else { return .readyToStart }
 
         if isRunning {
             switch status {

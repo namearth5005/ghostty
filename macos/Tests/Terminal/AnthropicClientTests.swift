@@ -92,6 +92,7 @@ struct AnthropicClientTests {
 
         await MainActor.run {
             conversation.start(goal: "list files", mode: .interactive)
+            conversation.addHiddenContext("Kimi in terminal term-1 is waiting for text input.")
         }
 
         _ = try await client.agentStep(
@@ -106,10 +107,42 @@ struct AnthropicClientTests {
         #expect(request.system.contains("Use structured terminal understanding as your primary context"))
         let prompt = request.messages[0].content
         #expect(prompt.contains("Structured terminal overview:"))
+        #expect(prompt.contains("Hidden reactive context:"))
+        #expect(prompt.contains("Kimi in terminal term-1 is waiting for text input."))
         #expect(prompt.contains("term-1 failed because `hfind` is not installed."))
         #expect(prompt.contains("\"terminalID\":\"term-1\""))
         #expect(prompt.contains("\"command\":\"find . -print\""))
         #expect(prompt.contains("\"isRecommended\":true"))
+    }
+
+    @Test
+    func anthropicPromptPromotesReactiveContextWhenNoUserGoalExists() async throws {
+        let transport = RecordingAnthropicTransport(
+            payload: """
+            {"thought":"Drafting a reply for Kimi.","action":{"type":"send_command","terminal_id":"term-1","command":"Read the README and summarize the project.","reason":"Kimi asked what to do next."}}
+            """
+        )
+        let client = AnthropicClient(apiKey: "test-key", transport: transport)
+        let conversation = await MainActor.run { ForemanConversation() }
+        await MainActor.run {
+            conversation.addHiddenContext(
+                "Kimi in terminal term-1 is waiting for text input.\n\nRecent output:\nWhat would you like me to do here?"
+            )
+        }
+
+        _ = try await client.agentStep(
+            conversation: conversation,
+            terminals: sampleSnapshots(),
+            understandings: [],
+            overview: .init(summary: "term-1 waiting", changedTerminalIDs: ["term-1"], primaryTerminalID: "term-1"),
+            lastOutcome: nil
+        )
+
+        let request = try #require(await transport.lastRequest)
+        let prompt = request.messages[0].content
+        #expect(prompt.contains("Active turn:"))
+        #expect(prompt.contains("Kimi in terminal term-1 is waiting for text input."))
+        #expect(prompt.contains("If Active turn is a reactive terminal event, handle that event as the current task."))
     }
 }
 

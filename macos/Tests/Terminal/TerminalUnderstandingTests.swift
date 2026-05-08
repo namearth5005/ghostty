@@ -311,6 +311,36 @@ struct TerminalUnderstandingTests {
     }
 
     @Test
+    func engineDoesNotClassifyChoiceMarkerWithoutOptionsAsWaitingChoice() {
+        let engine = TerminalUnderstandingEngine()
+        let snapshot = TerminalSnapshot.makePreview(
+            terminalID: "term-6",
+            windowID: "win-1",
+            tabID: "tab-6",
+            title: "Claude Code",
+            cwd: "/tmp/project",
+            isFocused: true,
+            visibleText: """
+            What do you want to do?
+
+            ›
+            """,
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessName: "claude"
+        )
+
+        let understanding = engine.understand(
+            current: snapshot,
+            previous: nil,
+            lastOutcome: nil
+        )
+
+        #expect(understanding.agentIdentity == .claudeCode)
+        #expect(understanding.agentInteractionState == .waitingText)
+    }
+
+    @Test
     func engineClassifiesCodexPromptAsWaitingText() {
         let engine = TerminalUnderstandingEngine()
         let snapshot = TerminalSnapshot.makePreview(
@@ -342,5 +372,56 @@ struct TerminalUnderstandingTests {
         #expect(understanding.agentInteractionState == .waitingText)
         #expect(understanding.state == .waiting)
         #expect(understanding.shortExplanation.contains("waiting"))
+    }
+
+    @Test
+    func engineKeepsKimiQuestionAboveInputChromeAsWaitingTextPrompt() {
+        let engine = TerminalUnderstandingEngine()
+        let snapshot = TerminalSnapshot.makePreview(
+            terminalID: "term-8",
+            windowID: "win-1",
+            tabID: "tab-8",
+            title: "Kimi Code",
+            cwd: "/Users/nambouchara/speed2",
+            isFocused: true,
+            visibleText: """
+            I'm now in the /Users/nambouchara/speed2/mend directory. Here's what's inside:
+            .claude/
+            docs/
+            hooks/
+            install.sh
+            journal-skill/
+            skill/
+            templates/
+            LICENSE
+            README.md
+            .gitignore
+
+            What would you like me to do here?
+
+            ─ input ─────────────────────────────────────────────────────────
+
+
+            agent (Kimi-k2.6 ●)  ~/speed2  ctrl-x: toggle mode | shift-tab: plan mode
+            context: 5.4% (14.3k/262.1k)
+            """,
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessName: "kimi",
+            cursorIsAtPrompt: true,
+            usingAlternateScreen: true
+        )
+
+        let understanding = engine.understand(
+            current: snapshot,
+            previous: nil,
+            lastOutcome: nil
+        )
+
+        #expect(understanding.agentIdentity == .kimi)
+        #expect(understanding.agentInteractionState == .waitingText)
+        #expect(understanding.lastMeaningfulEvent == "What would you like me to do here?")
+        #expect(understanding.shortExplanation.contains("What would you like me to do here?"))
+        #expect(understanding.importantDetails.contains("What would you like me to do here?"))
     }
 }

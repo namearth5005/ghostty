@@ -209,23 +209,45 @@ struct ForemanAgentTests {
 
         await MainActor.run {
             conversation.updateTerminalContext(overview: overview, understandings: [understanding])
+            conversation.addHiddenContext("Hidden context from previous reactive event.")
             conversation.start(goal: "new session", mode: .interactive)
         }
 
         let clearedOnStart = await MainActor.run {
-            conversation.lastOverview == nil && conversation.lastUnderstandings.isEmpty
+            conversation.lastOverview == nil &&
+            conversation.lastUnderstandings.isEmpty &&
+            conversation.hiddenContext.isEmpty
         }
         #expect(clearedOnStart)
 
         await MainActor.run {
             conversation.updateTerminalContext(overview: overview, understandings: [understanding])
+            conversation.addHiddenContext("Hidden context from stopped reactive event.")
             conversation.stop()
         }
 
         let clearedOnStop = await MainActor.run {
-            conversation.lastOverview == nil && conversation.lastUnderstandings.isEmpty
+            conversation.lastOverview == nil &&
+            conversation.lastUnderstandings.isEmpty &&
+            conversation.hiddenContext.isEmpty
         }
         #expect(clearedOnStop)
+    }
+
+    @Test
+    func hiddenContextKeepsOnlyRecentEntries() async {
+        let conversation = await MainActor.run { ForemanConversation() }
+
+        await MainActor.run {
+            for index in 0..<12 {
+                conversation.addHiddenContext("reactive context \(index)")
+            }
+        }
+
+        let hiddenContext = await MainActor.run { conversation.hiddenContext }
+        #expect(hiddenContext.count == 8)
+        #expect(hiddenContext.first == "reactive context 4")
+        #expect(hiddenContext.last == "reactive context 11")
     }
 
     @Test
@@ -282,6 +304,22 @@ struct ForemanAgentTests {
     }
 
     @Test
+    func uiPhaseCanAwaitApprovalWithoutGoal() {
+        let phase = ConversationUIPhase.resolve(
+            goal: nil,
+            isRunning: true,
+            status: .waitingForUser,
+            lastAction: .sendCommand(
+                terminalID: "term-1",
+                command: "1",
+                reason: "Approve once"
+            )
+        )
+
+        #expect(phase == .awaitingApproval(command: "1"))
+    }
+
+    @Test
     func statusDisplayTreatsPendingCommandAsApprovalNeeded() {
         let display = ConversationStatusDisplay.resolve(
             status: .waitingForUser,
@@ -299,6 +337,253 @@ struct ForemanAgentTests {
         )
 
         #expect(display == .chatting)
+    }
+
+    // MARK: - Reactive Auto-Drive Tests
+
+    @Test
+    func reactToEventRunsOneIterationAndStops() async throws {
+        let conversation = await MainActor.run { ForemanConversation() }
+        let client = ScriptedForemanClient(responses: [
+            try makeStepResponse(
+                thought: "Kimi needs approval.",
+                action: AgentAction.respond(message: "Kimi is waiting for approval.")
+            ),
+        ])
+        let agent = makeAgent(
+            conversation: conversation,
+            client: client,
+            commandRecorder: CommandRecorder()
+        )
+
+        let event = AgentNeedsAttentionEvent(
+            terminalID: "term-1",
+            agentIdentity: .kimi,
+            interactionState: .waitingApproval,
+            deltaText: "Allow edit to auth.ts? [y/n]",
+            timestamp: Date()
+        )
+        await agent.react(to: event, captureSnapshots: sampleSnapshots)
+
+        try await waitFor {
+            await MainActor.run { conversation.messages.count >= 1 }
+        }
+
+        let messages = await MainActor.run { conversation.messages }
+        #expect(!messages.contains { $0.role == .user && $0.content.contains("Recent output:") })
+        #expect(messages.contains { $0.role == .agent && $0.content == "Kimi is waiting for approval." })
+        #expect(messages.first { $0.content == "Kimi is waiting for approval." }?.terminalID == "term-1")
+        let isRunning = await MainActor.run { conversation.isRunning }
+        #expect(isRunning == false)
+    }
+
+    @Test
+    func reactToEventDoesNotDuplicateGoalMessages() async throws {
+        let conversation = await MainActor.run { ForemanConversation() }
+        let client = ScriptedForemanClient(responses: [
+            try makeStepResponse(
+                thought: "First reaction.",
+                action: AgentAction.respond(message: "First.")
+            ),
+            try makeStepResponse(
+                thought: "Second reaction.",
+                action: AgentAction.respond(message: "Second.")
+            ),
+        ])
+        let agent = makeAgent(
+            conversation: conversation,
+            client: client,
+            commandRecorder: CommandRecorder()
+        )
+
+        let event1 = AgentNeedsAttentionEvent(
+            terminalID: "term-1",
+            agentIdentity: .kimi,
+            interactionState: .waitingApproval,
+            deltaText: "First approval request",
+            timestamp: Date()
+        )
+        await agent.react(to: event1, captureSnapshots: sampleSnapshots)
+
+        try await waitFor {
+            await MainActor.run { conversation.messages.count >= 1 }
+        }
+
+        // React again to a second event
+        let event2 = AgentNeedsAttentionEvent(
+            terminalID: "term-1",
+            agentIdentity: .kimi,
+            interactionState: .waitingText,
+            deltaText: "Second text request",
+            timestamp: Date()
+        )
+        await agent.react(to: event2, captureSnapshots: sampleSnapshots)
+
+        try await waitFor {
+            await MainActor.run {
+                conversation.messages.contains { $0.content == "Second." }
+            }
+        }
+
+        let messages = await MainActor.run { conversation.messages }
+        let goalMessages = messages.filter { $0.role == .user && $0.content.contains("Monitor") }
+        #expect(goalMessages.isEmpty, "Should not add generic goal messages")
+        #expect(!messages.contains { $0.content.contains("Error reacting to event") })
+    }
+
+    @Test
+    func reactToEventStoresContextAsHiddenPromptContext() async throws {
+        let conversation = await MainActor.run { ForemanConversation() }
+        let client = ScriptedForemanClient(responses: [
+            try makeStepResponse(
+                thought: "Kimi needs a reply.",
+                action: AgentAction.respond(message: "I can handle that.")
+            ),
+        ])
+        let agent = makeAgent(
+            conversation: conversation,
+            client: client,
+            commandRecorder: CommandRecorder()
+        )
+
+        let event = AgentNeedsAttentionEvent(
+            terminalID: "term-1",
+            agentIdentity: .kimi,
+            interactionState: .waitingText,
+            deltaText: "User asked for a concise answer.",
+            timestamp: Date(timeIntervalSince1970: 1),
+            fingerprint: "term-1|kimi|waitingText|concise"
+        )
+
+        await agent.react(to: event, captureSnapshots: sampleSnapshots)
+
+        try await waitFor {
+            await MainActor.run { conversation.messages.count >= 1 }
+        }
+
+        let visibleMessages = await MainActor.run { conversation.messages }
+        let hiddenContext = await MainActor.run { conversation.hiddenContext }
+        #expect(!visibleMessages.contains { $0.content.contains("User asked for a concise answer.") })
+        #expect(hiddenContext.contains { $0.contains("User asked for a concise answer.") })
+    }
+
+    @Test
+    func draftPendingAttentionForWaitingTextExposesLLMReplyWithoutSending() async throws {
+        let conversation = await MainActor.run { ForemanConversation() }
+        let client = ScriptedForemanClient(responses: [
+            try makeStepResponse(
+                thought: "Kimi is asking what to do next.",
+                action: AgentAction.sendCommand(
+                    terminalID: "term-1",
+                    command: "Read README.md and summarize what this project does.",
+                    reason: "Kimi has entered the mend repo and is asking for the next instruction."
+                )
+            ),
+        ])
+        let commandRecorder = CommandRecorder()
+        let agent = makeAgent(
+            conversation: conversation,
+            client: client,
+            commandRecorder: commandRecorder
+        )
+        let event = AgentNeedsAttentionEvent(
+            terminalID: "term-1",
+            agentIdentity: .kimi,
+            interactionState: .waitingText,
+            deltaText: "What would you like me to do here?",
+            timestamp: Date(timeIntervalSince1970: 1),
+            fingerprint: "term-1|kimi|waitingText|next"
+        )
+
+        let attention = try await agent.draftPendingAttention(
+            for: event,
+            captureSnapshots: sampleSnapshots
+        )
+
+        let commands = await commandRecorder.recordedCommands()
+        let action = try #require(attention?.actions.first)
+        #expect(commands.isEmpty)
+        #expect(attention?.terminalID == "term-1")
+        #expect(attention?.agentIdentity == .kimi)
+        #expect(attention?.interactionState == .waitingText)
+        #expect(attention?.fingerprint == "term-1|kimi|waitingText|next")
+        #expect(attention?.title == "Suggested reply")
+        #expect(action.title == "Read README.md and summarize what this project does.")
+        #expect(action.payload == "Read README.md and summarize what this project does.")
+        #expect(action.style == .primary)
+    }
+
+    @Test
+    func reactAutonomousModeExecutesCommandDirectly() async throws {
+        let conversation = await MainActor.run {
+            let c = ForemanConversation()
+            c.mode = .autonomous
+            return c
+        }
+        let client = ScriptedForemanClient(responses: [
+            try makeStepResponse(
+                thought: "Terminal needs a command.",
+                action: AgentAction.sendCommand(terminalID: "term-1", command: "yes", reason: "Approve Kimi's edit.")
+            ),
+        ])
+        let commandRecorder = CommandRecorder()
+        let agent = makeAgent(
+            conversation: conversation,
+            client: client,
+            commandRecorder: commandRecorder
+        )
+
+        let event = AgentNeedsAttentionEvent(
+            terminalID: "term-1",
+            agentIdentity: .kimi,
+            interactionState: .waitingApproval,
+            deltaText: "Allow edit to auth.ts? [y/n]",
+            timestamp: Date()
+        )
+        await agent.react(to: event, captureSnapshots: sampleSnapshots)
+
+        try await waitFor {
+            let commands = await commandRecorder.recordedCommands()
+            return commands.contains { $0.terminalID == "term-1" && $0.command == "yes" }
+        }
+
+        let messages = await MainActor.run { conversation.messages }
+        #expect(messages.contains { $0.role == .agent && $0.content == "▶️ Sent: yes" })
+    }
+
+    @Test
+    func reactInteractiveModePausesForApproval() async throws {
+        let conversation = await MainActor.run { ForemanConversation() }
+        let client = ScriptedForemanClient(responses: [
+            try makeStepResponse(
+                thought: "Terminal needs a command.",
+                action: AgentAction.sendCommand(terminalID: "term-1", command: "yes", reason: "Approve Kimi's edit.")
+            ),
+        ])
+        let commandRecorder = CommandRecorder()
+        let agent = makeAgent(
+            conversation: conversation,
+            client: client,
+            commandRecorder: commandRecorder
+        )
+
+        let event = AgentNeedsAttentionEvent(
+            terminalID: "term-1",
+            agentIdentity: .kimi,
+            interactionState: .waitingApproval,
+            deltaText: "Allow edit to auth.ts? [y/n]",
+            timestamp: Date()
+        )
+        await agent.react(to: event, captureSnapshots: sampleSnapshots)
+
+        try await waitForStatus(.waitingForUser, in: conversation)
+
+        let commands = await commandRecorder.recordedCommands()
+        #expect(commands.isEmpty)
+
+        let messages = await MainActor.run { conversation.messages }
+        #expect(messages.contains { $0.role == .agent && $0.content == "Approve Kimi's edit." })
+        #expect(messages.first { $0.content == "Approve Kimi's edit." }?.terminalID == "term-1")
     }
 }
 

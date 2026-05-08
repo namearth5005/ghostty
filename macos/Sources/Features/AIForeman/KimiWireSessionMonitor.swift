@@ -5,16 +5,25 @@ import CryptoKit
 final class KimiWireSessionMonitor {
     let workingDirectory: String
 
+    private let sessionsBaseDirectory: URL
+    private let now: () -> Date
     private var timer: Timer?
     private var lastOffset: UInt64 = 0
     private var resolvedWirePath: URL?
     private var recordBuffer: [KimiWireRecord] = []
+    private var monitorStartedAt: Date?
 
     var onEvent: ((KimiWireRecord) -> Void)?
     var onError: ((Error) -> Void)?
 
-    init(workingDirectory: String) {
+    init(
+        workingDirectory: String,
+        sessionsBaseDirectory: URL = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".kimi/sessions"),
+        now: @escaping () -> Date = Date.init
+    ) {
         self.workingDirectory = workingDirectory
+        self.sessionsBaseDirectory = sessionsBaseDirectory
+        self.now = now
     }
 
     func start() {
@@ -22,6 +31,7 @@ final class KimiWireSessionMonitor {
         resolvedWirePath = nil
         lastOffset = 0
         recordBuffer.removeAll()
+        monitorStartedAt = now()
 
         // Attempt immediate discovery — only accept recent files on first start
         // to avoid picking up stale wire.jsonl from previous sessions.
@@ -130,8 +140,9 @@ final class KimiWireSessionMonitor {
     /// Only considers files modified within the last 10 minutes to avoid picking up
     /// stale session files from previous Kimi runs.
     private func resolveWirePath() -> URL? {
-        let baseDir = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".kimi/sessions")
-        let stalenessThreshold = Date(timeIntervalSinceNow: -600) // 10 minutes
+        let baseDir = sessionsBaseDirectory
+        let stalenessThreshold = now().addingTimeInterval(-600) // 10 minutes
+        let globalScanStartedAt = monitorStartedAt?.addingTimeInterval(-5)
 
         var candidateDirs: [URL] = []
 
@@ -167,6 +178,15 @@ final class KimiWireSessionMonitor {
                 // Skip stale files from previous sessions
                 guard modDate > stalenessThreshold else { continue }
 
+                // If cwd is unavailable, global scanning cannot prove that a
+                // recent file belongs to this terminal. Only accept files that
+                // appeared after this monitor started, with a short launch-race grace.
+                if workingDirectory.isEmpty,
+                   let globalScanStartedAt,
+                   modDate < globalScanStartedAt {
+                    continue
+                }
+
                 if mostRecentDate == nil || modDate > mostRecentDate! {
                     mostRecentDate = modDate
                     mostRecentPath = wirePath
@@ -191,6 +211,6 @@ final class KimiWireSessionMonitor {
 
     private func fileIsRecent(_ url: URL, within seconds: TimeInterval) -> Bool {
         guard let modDate = fileModDate(url) else { return false }
-        return Date().timeIntervalSince(modDate) < seconds
+        return now().timeIntervalSince(modDate) < seconds
     }
 }

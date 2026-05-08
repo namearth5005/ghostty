@@ -104,6 +104,15 @@ struct TerminalUnderstandingEngine {
     ) -> AgentClassification? {
         for adapter in adapters {
             guard let identity = adapter.detect(current: current, previous: previous) else { continue }
+
+            // CRITICAL: Check for explicit approval UI on screen BEFORE trusting wire records.
+            // Kimi's wire protocol does not emit ApprovalRequest for shell command approvals,
+            // so the wire records may say .running while the screen shows a blocking approval prompt.
+            if identity == .kimi,
+               let approvalClassification = detectKimiScreenApproval(current: current, lastEvent: lastEvent) {
+                return approvalClassification
+            }
+
             // If wire records are available and this is Kimi, prefer wire signals over heuristics
             if identity == .kimi, !wireRecords.isEmpty,
                let wireClassification = classifyFromWireRecords(
@@ -142,6 +151,32 @@ struct TerminalUnderstandingEngine {
         return nil
     }
 
+    /// Detects Kimi's shell-command approval UI when the wire protocol fails to emit ApprovalRequest.
+    /// Looks for very specific on-screen markers to avoid false positives.
+    private func detectKimiScreenApproval(current: TerminalSnapshot, lastEvent: String) -> AgentClassification? {
+        let lowered = current.visibleText.lowercased()
+
+        // Primary marker: the exact approval prompt header Kimi displays
+        let hasApprovalHeader = lowered.contains("shell is requesting approval to run command")
+
+        // Secondary markers: the exact option text Kimi shows
+        let hasApproveOption = lowered.contains("approve once") || lowered.contains("approve for this session")
+        let hasRejectOption = lowered.contains("reject, tell the model what to do instead")
+
+        // Must have the header AND at least one option to avoid false positives
+        guard hasApprovalHeader && (hasApproveOption || hasRejectOption) else {
+            return nil
+        }
+
+        return AgentClassification(
+            identity: .kimi,
+            interactionState: .waitingApproval,
+            supportLevel: .firstClass,
+            evidence: [.init(source: .screenHeuristic, detail: "Kimi shell approval UI detected on screen", confidence: 0.95)],
+            context: .waitingApproval(description: lastEvent, tool: nil)
+        )
+    }
+
     private func classifyFromWireRecords(
         identity: AgentIdentity,
         wireRecords: [KimiWireRecord],
@@ -157,9 +192,10 @@ struct TerminalUnderstandingEngine {
         guard let context = record.asAgentInteractionContext else {
             return nil
         }
+        let enrichedContext = enrichKimiWireContext(context, from: wireRecords)
 
         let interactionState: AgentInteractionState
-        switch context {
+        switch enrichedContext {
         case .running:
             interactionState = .running
         case .waitingApproval:
@@ -181,8 +217,38 @@ struct TerminalUnderstandingEngine {
             interactionState: interactionState,
             supportLevel: .firstClass,
             evidence: [.init(source: .wireSignal, detail: "Wire record: \(record.message.type)", confidence: 0.98)],
-            context: context
+            context: enrichedContext
         )
+    }
+
+    private func enrichKimiWireContext(
+        _ context: AgentInteractionContext,
+        from wireRecords: [KimiWireRecord]
+    ) -> AgentInteractionContext {
+        guard case .waitingText(let question) = context,
+              question?.isEmpty ?? true,
+              let wireQuestion = latestKimiTextQuestion(from: wireRecords) else {
+            return context
+        }
+
+        return .waitingText(question: wireQuestion)
+    }
+
+    private func latestKimiTextQuestion(from wireRecords: [KimiWireRecord]) -> String? {
+        for record in wireRecords.reversed() where record.message.type == "ContentPart" {
+            guard let text = record.message.payload.text ?? record.message.payload.content else {
+                continue
+            }
+
+            if let question = text
+                .split(separator: "\n")
+                .map({ String($0).trimmingCharacters(in: .whitespacesAndNewlines) })
+                .last(where: { !$0.isEmpty && $0.contains("?") }) {
+                return question
+            }
+        }
+
+        return nil
     }
 
     private func classifyFromCodexWireRecords(
@@ -322,10 +388,7 @@ struct TerminalUnderstandingEngine {
             return summary
         }
         let previousText = previous?.visibleText ?? ""
-        let currentLines = current.visibleText
-            .split(separator: "\n")
-            .map(String.init)
-            .filter { !looksLikePrompt($0) }
+        let currentLines = meaningfulTerminalLines(from: current.visibleText)
         let previousLines = Set(previousText.split(separator: "\n").map(String.init))
         return currentLines.last(where: { !previousLines.contains($0) && !$0.trimmingCharacters(in: .whitespaces).isEmpty })
             ?? currentLines.last(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty })
@@ -378,7 +441,14 @@ struct TerminalUnderstandingEngine {
     }
 
     private func importantDetails(from visibleText: String, state: TerminalUnderstandingState) -> [String] {
-        let lines = visibleText.split(separator: "\n").map(String.init)
+        let lines: [String]
+        switch state {
+        case .waiting:
+            lines = meaningfulTerminalLines(from: visibleText)
+        default:
+            lines = visibleText.split(separator: "\n").map(String.init)
+        }
+
         switch state {
         case .failed:
             return Array(lines.suffix(3))
@@ -477,6 +547,50 @@ struct TerminalUnderstandingEngine {
         line.trimmingCharacters(in: .whitespacesAndNewlines).contains("?")
     }
 
+    private func meaningfulTerminalLines(from text: String) -> [String] {
+        text.split(separator: "\n")
+            .map(String.init)
+            .filter { line in
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                return !trimmed.isEmpty &&
+                    !looksLikePrompt(trimmed) &&
+                    !looksLikeTerminalInputChrome(trimmed)
+            }
+    }
+
+    private func looksLikeTerminalInputChrome(_ line: String) -> Bool {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        let lowered = trimmed.lowercased()
+
+        if lowered == "input" {
+            return true
+        }
+
+        let withoutInput = lowered
+            .replacingOccurrences(of: "input", with: "")
+            .trimmingCharacters(in: .whitespaces)
+        let inputChromeRun = withoutInput.filter { !$0.isWhitespace }
+        if lowered.contains("input"),
+           !inputChromeRun.isEmpty,
+           inputChromeRun.allSatisfy({ $0 == "-" || $0 == "─" || $0 == "━" }) {
+            return true
+        }
+
+        if lowered.hasPrefix("agent ("),
+           lowered.contains("context:") ||
+            lowered.contains("ctrl-") ||
+            lowered.contains("shift-tab") ||
+            lowered.contains("@:") {
+            return true
+        }
+
+        if lowered.hasPrefix("context:") {
+            return true
+        }
+
+        return false
+    }
+
     private func applicableOutcome(
         for current: TerminalSnapshot,
         previous: TerminalSnapshot?,
@@ -542,7 +656,10 @@ private struct AgentClassification {
 
 private struct ClaudeCodeTerminalAdapter: TerminalAgentAdapter {
     func detect(current: TerminalSnapshot, previous: TerminalSnapshot?) -> AgentIdentity? {
-        guard current.matchesAgent(markers: ["claude code", "claude"]) else { return nil }
+        guard current.matchesAgent(
+            primaryMarkers: ["claude code", "claude"],
+            visibleMarkers: ["claude code"]
+        ) else { return nil }
         return .claudeCode
     }
 
@@ -566,7 +683,10 @@ private struct ClaudeCodeTerminalAdapter: TerminalAgentAdapter {
 
 private struct CodexTerminalAdapter: TerminalAgentAdapter {
     func detect(current: TerminalSnapshot, previous: TerminalSnapshot?) -> AgentIdentity? {
-        guard current.matchesAgent(markers: ["openai codex", "codex"]) else { return nil }
+        guard current.matchesAgent(
+            primaryMarkers: ["openai codex", "codex"],
+            visibleMarkers: ["openai codex"]
+        ) else { return nil }
         return .codex
     }
 
@@ -590,7 +710,10 @@ private struct CodexTerminalAdapter: TerminalAgentAdapter {
 
 private struct KimiTerminalAdapter: TerminalAgentAdapter {
     func detect(current: TerminalSnapshot, previous: TerminalSnapshot?) -> AgentIdentity? {
-        guard current.matchesAgent(markers: ["kimi code", "kimi"]) else { return nil }
+        guard current.matchesAgent(
+            primaryMarkers: ["kimi code", "kimi"],
+            visibleMarkers: ["welcome to kimi code cli", "agent (kimi"]
+        ) else { return nil }
         return .kimi
     }
 
@@ -614,6 +737,18 @@ private struct KimiTerminalAdapter: TerminalAgentAdapter {
                 .screenHeuristic,
                 "Kimi welcome screen detected — awaiting first input.",
                 0.88,
+                .waitingText(question: nil)
+            )
+        }
+
+        if lowered.contains("agent (kimi"),
+           lowered.contains("input") {
+            return classification(
+                identity,
+                .waitingText,
+                .screenHeuristic,
+                "Kimi input region detected - awaiting next message.",
+                0.82,
                 .waitingText(question: nil)
             )
         }
@@ -655,6 +790,10 @@ private func classifyCommonAgent(
 
     if containsAny(lowered, markers: choiceMarkers) || looksLikeNumberedChoiceMenu(current.visibleText) {
         let options = extractNumberedOptions(current.visibleText)
+        guard !options.isEmpty else {
+            return classification(identity, .waitingText, .screenHeuristic, "Detected an interactive prompt without parsed choice options.", 0.78, .waitingText(question: lastEvent))
+        }
+
         return classification(identity, .waitingChoice, .screenHeuristic, "Detected an interactive choice menu.", 0.86, .waitingChoice(question: lastEvent, options: options))
     }
 
@@ -734,16 +873,20 @@ private func looksLikeQuestion(_ text: String) -> Bool {
 }
 
 private extension TerminalSnapshot {
-    func matchesAgent(markers: [String]) -> Bool {
-        let candidates = [
+    func matchesAgent(primaryMarkers: [String], visibleMarkers: [String]) -> Bool {
+        let primaryCandidates = [
             runtime.foregroundProcessName?.lowercased(),
             title.lowercased(),
-            visibleText.lowercased(),
             lastInputPreview?.lowercased(),
         ].compactMap { $0 }
 
-        return candidates.contains { candidate in
-            markers.contains(where: candidate.contains)
+        if primaryCandidates.contains(where: { candidate in
+            primaryMarkers.contains(where: candidate.contains)
+        }) {
+            return true
         }
+
+        let visible = visibleText.lowercased()
+        return visibleMarkers.contains(where: visible.contains)
     }
 }

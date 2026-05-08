@@ -131,6 +131,7 @@ class AppDelegate: NSObject,
         return nil
     }()
     var foremanAgent: ForemanAgent?
+    private weak var foremanAgentStore: ForemanSidebarStore?
     lazy var dispatchQueueCoordinator = DispatchQueueCoordinator()
     let storeManager = StoreManager.shared
     let foremanNotifier = ForemanNotifier.shared
@@ -188,6 +189,7 @@ class AppDelegate: NSObject,
     private let aiForemanUnderstandingEngine = TerminalUnderstandingEngine()
     private var aiForemanPreviousSnapshots: [String: TerminalSnapshot] = [:]
     private var aiForemanPreviousUnderstandings: [String: TerminalUnderstanding] = [:]
+    private let agentStateMonitor = AgentStateMonitor()
     private var kimiWireMonitors: [String: KimiWireSessionMonitor] = [:]
     private var codexWireMonitors: [String: CodexSessionMonitor] = [:]
     private var claudeWireMonitors: [String: ClaudeSessionMonitor] = [:]
@@ -308,6 +310,91 @@ class AppDelegate: NSObject,
             }
         }
         refreshAIForemanSidebar()
+
+        // Wire up reactive AI agent trigger
+        agentStateMonitor.onEvent = { [weak self] event in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+
+                guard let targetController = self.terminalController(for: event.terminalID) else {
+                    return
+                }
+
+                let store = targetController.foremanSidebarStore
+                let understanding = self.aiForemanPreviousUnderstandings[event.terminalID]
+
+                if let attention = self.makePendingAttention(from: event, understanding: understanding) {
+                    store.upsertPendingAttention(attention)
+                    return
+                }
+
+                let needsAgentForStore = self.foremanAgentStore.map { $0 !== store } ?? true
+
+                // Ensure an agent exists for this sidebar store — create one on demand if needed.
+                if self.foremanAgent == nil || needsAgentForStore {
+                    guard let foremanService = self.foremanService else { return }
+                    if self.foremanAgent != nil {
+                        await self.foremanAgent?.stop()
+                    }
+                    self.foremanAgent = ForemanAgent(
+                        conversation: store.conversation,
+                        foremanService: foremanService,
+                        onSendCommand: { [weak self] terminalID, command in
+                            guard let self else { return false }
+                            guard let controller = self.terminalController(for: terminalID) else { return false }
+                            let item = DispatchQueueItem(terminalID: terminalID, message: command)
+                            guard self.dispatchQueueCoordinator.send(item, through: controller) else { return false }
+                            self.terminalOutcomeEngine.register(terminalID: terminalID, sentCommand: command)
+                            return true
+                        },
+                        onStatusChange: { _ in },
+                        onAction: { _, _ in }
+                    )
+                    self.foremanAgentStore = store
+                }
+
+                // Notify monitor that Foreman is about to react, preventing spam loops
+                self.agentStateMonitor.notifyForemanReacted(terminalID: event.terminalID, state: event.interactionState)
+
+                let snapshotProvider: @MainActor () -> [TerminalSnapshot] = {
+                    var allSnapshots: [TerminalSnapshot] = []
+                    for controller in TerminalController.all {
+                        allSnapshots.append(contentsOf: controller.captureTerminalSnapshots())
+                    }
+                    return allSnapshots
+                }
+
+                if event.interactionState == .waitingText {
+                    do {
+                        DebugLogger.log("[AppDelegate] drafting waitingText attention terminal=\(event.terminalID.prefix(8)) fingerprint='\(event.fingerprint)'")
+                        if let attention = try await self.foremanAgent?.draftPendingAttention(
+                            for: event,
+                            captureSnapshots: snapshotProvider
+                        ) {
+                            DebugLogger.log("[AppDelegate] drafted waitingText attention terminal=\(event.terminalID.prefix(8)) actions=\(attention.actions.count)")
+                            store.upsertPendingAttention(attention)
+                            return
+                        }
+                    } catch {
+                        store.errorMessage = error.localizedDescription
+                        DebugLogger.log("[AppDelegate] waitingText draft error terminal=\(event.terminalID.prefix(8)) error='\(error.localizedDescription)'")
+                        Self.logger.error("AI Foreman failed to draft waitingText attention for terminal \(event.terminalID, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                        return
+                    }
+
+                    guard Self.shouldFallBackToForemanChat(
+                        afterDraftFor: event.interactionState,
+                        draftedAttention: nil
+                    ) else {
+                        DebugLogger.log("[AppDelegate] waitingText draft returned nil terminal=\(event.terminalID.prefix(8)); skipping chat fallback")
+                        Self.logger.info("AI Foreman draft returned no waitingText suggestion for terminal \(event.terminalID, privacy: .public); skipping chat fallback")
+                        return
+                    }
+                }
+
+                await self.foremanAgent?.react(to: event, captureSnapshots: snapshotProvider)
+            }
+        }
 
         // This registers the Ghostty => Services menu to exist.
         NSApp.servicesMenu = menuServices
@@ -1390,9 +1477,10 @@ extension AppDelegate {
         }
         FeatureGate.recordBasicAIUsage()
 
-        // Cancel any existing agent
-        Task { [weak self] in
-            await self?.foremanAgent?.stop()
+        // Cancel any existing agent.
+        let previousAgent = foremanAgent
+        Task {
+            await previousAgent?.stop()
         }
 
         let conversation = store.conversation
@@ -1416,6 +1504,7 @@ extension AppDelegate {
         )
 
         self.foremanAgent = agent
+        self.foremanAgentStore = store
 
         Task {
             await agent.start(
@@ -1445,6 +1534,7 @@ extension AppDelegate {
         Task { [weak self] in
             await self?.foremanAgent?.stop()
             self?.foremanAgent = nil
+            self?.foremanAgentStore = nil
         }
     }
 
@@ -1478,6 +1568,127 @@ extension AppDelegate {
         let item = DispatchQueueItem(terminalID: terminalID, message: command)
         guard dispatchQueueCoordinator.send(item, through: controller) else { return }
         terminalOutcomeEngine.register(terminalID: terminalID, sentCommand: command)
+    }
+
+    @MainActor
+    func executePendingAttentionAction(
+        _ attention: PendingAgentAttention,
+        action: PendingAgentAction,
+        store: ForemanSidebarStore
+    ) {
+        store.markPendingAttentionSending(
+            terminalID: attention.terminalID,
+            fingerprint: attention.fingerprint
+        )
+
+        guard let controller = terminalController(for: attention.terminalID) else {
+            store.markPendingAttentionFailed(
+                terminalID: attention.terminalID,
+                fingerprint: attention.fingerprint,
+                errorMessage: "This terminal is no longer available."
+            )
+            return
+        }
+
+        let item = DispatchQueueItem(terminalID: attention.terminalID, message: action.payload)
+        guard dispatchQueueCoordinator.send(item, through: controller) else {
+            store.markPendingAttentionFailed(
+                terminalID: attention.terminalID,
+                fingerprint: attention.fingerprint,
+                errorMessage: "Unable to send this action."
+            )
+            return
+        }
+
+        terminalOutcomeEngine.register(terminalID: attention.terminalID, sentCommand: action.payload)
+        agentStateMonitor.resolve(
+            terminalID: attention.terminalID,
+            fingerprint: attention.fingerprint
+        )
+        store.resolvePendingAttention(
+            terminalID: attention.terminalID,
+            fingerprint: attention.fingerprint
+        )
+        refreshAIForemanSidebar()
+    }
+
+    @MainActor
+    private func makePendingAttention(
+        from event: AgentNeedsAttentionEvent,
+        understanding: TerminalUnderstanding?
+    ) -> PendingAgentAttention? {
+        switch event.interactionState {
+        case .waitingApproval:
+            let actions: [PendingAgentAction]
+            if event.agentIdentity == .kimi {
+                actions = [
+                    .init(id: "approve_once", title: "Approve once", payload: "1", style: .primary),
+                    .init(id: "approve_session", title: "Approve session", payload: "2", style: .secondary),
+                    .init(id: "reject", title: "Reject", payload: "3", style: .destructive),
+                ]
+            } else {
+                actions = [
+                    .init(id: "approve", title: "Approve", payload: "y", style: .primary),
+                    .init(id: "reject", title: "Reject", payload: "n", style: .destructive),
+                ]
+            }
+
+            return PendingAgentAttention(
+                terminalID: event.terminalID,
+                agentIdentity: event.agentIdentity,
+                interactionState: event.interactionState,
+                fingerprint: event.fingerprint,
+                title: "Needs your approval",
+                description: understanding?.agentInteractionContext.descriptionString ?? event.deltaText,
+                detail: understanding?.agentInteractionContext.detailString,
+                actions: actions
+            )
+
+        case .waitingChoice:
+            let options = understanding?.agentInteractionContext.optionsArray ?? []
+            guard !options.isEmpty else {
+                return nil
+            }
+
+            let actions = options.prefix(4).enumerated().map { index, option in
+                PendingAgentAction(
+                    id: "choice_\(index + 1)",
+                    title: option,
+                    payload: "\(index + 1)",
+                    style: index == 0 ? .primary : .secondary
+                )
+            }
+
+            return PendingAgentAttention(
+                terminalID: event.terminalID,
+                agentIdentity: event.agentIdentity,
+                interactionState: event.interactionState,
+                fingerprint: event.fingerprint,
+                title: "Choose an option",
+                description: understanding?.agentInteractionContext.descriptionString ?? event.deltaText,
+                detail: nil,
+                actions: actions
+            )
+
+        default:
+            return nil
+        }
+    }
+
+    static func shouldFallBackToForemanChat(
+        afterDraftFor interactionState: AgentInteractionState,
+        draftedAttention: PendingAgentAttention?
+    ) -> Bool {
+        if draftedAttention != nil {
+            return false
+        }
+
+        switch interactionState {
+        case .waitingText:
+            return false
+        case .waitingApproval, .waitingChoice, .error, .unknown, .running, .completed:
+            return true
+        }
     }
 
     @MainActor
@@ -1524,116 +1735,125 @@ extension AppDelegate {
 
     @MainActor
     private func refreshAIForemanSidebar() {
-        for controller in TerminalController.all {
-            let snapshots = controller.captureTerminalSnapshots()
+        let snapshotsByController: [(controller: TerminalController, snapshots: [TerminalSnapshot])] =
+            TerminalController.all.map { controller in
+                (controller, controller.captureTerminalSnapshots())
+            }
+        let allSnapshots = snapshotsByController.flatMap(\.snapshots)
 
-            // Manage Kimi wire monitors per terminal
-            let activeKimiTerminalIDs = Set(snapshots
-                .filter { snapshotIsKimi($0) }
-                .map(\.terminalID))
+        // Manage Kimi wire monitors per terminal
+        let activeKimiTerminalIDs = Set(allSnapshots
+            .filter { snapshotIsKimi($0) }
+            .map(\.terminalID))
 
-            // Start monitors for new Kimi terminals, or recreate if cwd changed
-            for snapshot in snapshots where activeKimiTerminalIDs.contains(snapshot.terminalID) {
-                let monitorCwd = snapshot.cwd ?? "" // empty string triggers global session scan
-                if let existing = kimiWireMonitors[snapshot.terminalID] {
-                    if existing.workingDirectory != monitorCwd {
-                        existing.stop()
-                        let monitor = KimiWireSessionMonitor(workingDirectory: monitorCwd)
-                        monitor.start()
-                        kimiWireMonitors[snapshot.terminalID] = monitor
-                    }
-                } else {
+        // Start monitors for new Kimi terminals, or recreate if cwd changed
+        for snapshot in allSnapshots where activeKimiTerminalIDs.contains(snapshot.terminalID) {
+            let monitorCwd = snapshot.cwd ?? "" // empty string triggers global session scan
+            if let existing = kimiWireMonitors[snapshot.terminalID] {
+                if existing.workingDirectory != monitorCwd {
+                    existing.stop()
                     let monitor = KimiWireSessionMonitor(workingDirectory: monitorCwd)
                     monitor.start()
                     kimiWireMonitors[snapshot.terminalID] = monitor
                 }
+            } else {
+                let monitor = KimiWireSessionMonitor(workingDirectory: monitorCwd)
+                monitor.start()
+                kimiWireMonitors[snapshot.terminalID] = monitor
             }
+        }
 
-            // Stop monitors for terminals that no longer run Kimi
-            for terminalID in kimiWireMonitors.keys where !activeKimiTerminalIDs.contains(terminalID) {
-                kimiWireMonitors[terminalID]?.stop()
-                kimiWireMonitors.removeValue(forKey: terminalID)
-            }
+        // Stop monitors for terminals that no longer run Kimi
+        for terminalID in kimiWireMonitors.keys where !activeKimiTerminalIDs.contains(terminalID) {
+            kimiWireMonitors[terminalID]?.stop()
+            kimiWireMonitors.removeValue(forKey: terminalID)
+        }
 
-            // Manage Codex wire monitors per terminal
-            let activeCodexTerminalIDs = Set(snapshots
-                .filter { snapshotIsCodex($0) }
-                .map(\.terminalID))
+        // Manage Codex wire monitors per terminal
+        let activeCodexTerminalIDs = Set(allSnapshots
+            .filter { snapshotIsCodex($0) }
+            .map(\.terminalID))
 
-            for snapshot in snapshots where activeCodexTerminalIDs.contains(snapshot.terminalID) {
-                let monitorCwd = snapshot.cwd
-                if let existing = codexWireMonitors[snapshot.terminalID] {
-                    if existing.workingDirectory != monitorCwd {
-                        existing.stop()
-                        let monitor = CodexSessionMonitor(workingDirectory: monitorCwd)
-                        monitor.start()
-                        codexWireMonitors[snapshot.terminalID] = monitor
-                    }
-                } else {
+        for snapshot in allSnapshots where activeCodexTerminalIDs.contains(snapshot.terminalID) {
+            let monitorCwd = snapshot.cwd
+            if let existing = codexWireMonitors[snapshot.terminalID] {
+                if existing.workingDirectory != monitorCwd {
+                    existing.stop()
                     let monitor = CodexSessionMonitor(workingDirectory: monitorCwd)
                     monitor.start()
                     codexWireMonitors[snapshot.terminalID] = monitor
                 }
+            } else {
+                let monitor = CodexSessionMonitor(workingDirectory: monitorCwd)
+                monitor.start()
+                codexWireMonitors[snapshot.terminalID] = monitor
             }
+        }
 
-            // Stop monitors for terminals that no longer run Codex
-            for terminalID in codexWireMonitors.keys where !activeCodexTerminalIDs.contains(terminalID) {
-                codexWireMonitors[terminalID]?.stop()
-                codexWireMonitors.removeValue(forKey: terminalID)
-            }
+        // Stop monitors for terminals that no longer run Codex
+        for terminalID in codexWireMonitors.keys where !activeCodexTerminalIDs.contains(terminalID) {
+            codexWireMonitors[terminalID]?.stop()
+            codexWireMonitors.removeValue(forKey: terminalID)
+        }
 
-            // Manage Claude wire monitors per terminal
-            let activeClaudeTerminalIDs = Set(snapshots
-                .filter { snapshotIsClaude($0) }
-                .map(\.terminalID))
+        // Manage Claude wire monitors per terminal
+        let activeClaudeTerminalIDs = Set(allSnapshots
+            .filter { snapshotIsClaude($0) }
+            .map(\.terminalID))
 
-            for snapshot in snapshots where activeClaudeTerminalIDs.contains(snapshot.terminalID) {
-                let monitorPID = snapshot.runtime.foregroundProcessID
-                if let existing = claudeWireMonitors[snapshot.terminalID] {
-                    if existing.pid != monitorPID {
-                        existing.stop()
-                        let monitor = ClaudeSessionMonitor(pid: monitorPID)
-                        monitor.start()
-                        claudeWireMonitors[snapshot.terminalID] = monitor
-                    }
-                } else {
+        for snapshot in allSnapshots where activeClaudeTerminalIDs.contains(snapshot.terminalID) {
+            let monitorPID = snapshot.runtime.foregroundProcessID
+            if let existing = claudeWireMonitors[snapshot.terminalID] {
+                if existing.pid != monitorPID {
+                    existing.stop()
                     let monitor = ClaudeSessionMonitor(pid: monitorPID)
                     monitor.start()
                     claudeWireMonitors[snapshot.terminalID] = monitor
                 }
+            } else {
+                let monitor = ClaudeSessionMonitor(pid: monitorPID)
+                monitor.start()
+                claudeWireMonitors[snapshot.terminalID] = monitor
             }
+        }
 
-            // Stop monitors for terminals that no longer run Claude
-            for terminalID in claudeWireMonitors.keys where !activeClaudeTerminalIDs.contains(terminalID) {
-                claudeWireMonitors[terminalID]?.stop()
-                claudeWireMonitors.removeValue(forKey: terminalID)
-            }
+        // Stop monitors for terminals that no longer run Claude
+        for terminalID in claudeWireMonitors.keys where !activeClaudeTerminalIDs.contains(terminalID) {
+            claudeWireMonitors[terminalID]?.stop()
+            claudeWireMonitors.removeValue(forKey: terminalID)
+        }
 
-            let understandings = snapshots.map { snapshot in
-                let wireRecords = kimiWireMonitors[snapshot.terminalID]?.records() ?? []
-                let codexWireRecords = codexWireMonitors[snapshot.terminalID]?.records() ?? []
-                let claudeWireRecords = claudeWireMonitors[snapshot.terminalID]?.records() ?? []
-                let understanding = aiForemanUnderstandingEngine.understand(
-                    current: snapshot,
-                    previous: aiForemanPreviousSnapshots[snapshot.terminalID],
-                    lastOutcome: nil,
-                    wireRecords: wireRecords,
-                    codexWireRecords: codexWireRecords,
-                    claudeWireRecords: claudeWireRecords
-                )
-                if understanding.agentIdentity == .kimi {
-                    DebugLogger.log("[AppDelegate] understand: terminal=\(snapshot.terminalID.prefix(8)) wireRecords=\(wireRecords.count) context=\(understanding.agentInteractionContext.typeString ?? "nil") state=\(understanding.state.rawValue)")
-                }
-                return understanding
-            }
-            let understandingsByTerminalID = Dictionary(
-                uniqueKeysWithValues: understandings.map { ($0.terminalID, $0) }
+        let understandings = allSnapshots.map { snapshot in
+            let wireRecords = kimiWireMonitors[snapshot.terminalID]?.records() ?? []
+            let codexWireRecords = codexWireMonitors[snapshot.terminalID]?.records() ?? []
+            let claudeWireRecords = claudeWireMonitors[snapshot.terminalID]?.records() ?? []
+            let understanding = aiForemanUnderstandingEngine.understand(
+                current: snapshot,
+                previous: aiForemanPreviousSnapshots[snapshot.terminalID],
+                lastOutcome: nil,
+                wireRecords: wireRecords,
+                codexWireRecords: codexWireRecords,
+                claudeWireRecords: claudeWireRecords
             )
-            aiForemanPreviousSnapshots = Dictionary(
-                uniqueKeysWithValues: snapshots.map { ($0.terminalID, $0) }
-            )
-            aiForemanPreviousUnderstandings = understandingsByTerminalID
+            if understanding.agentIdentity == .kimi {
+                DebugLogger.log("[AppDelegate] understand: terminal=\(snapshot.terminalID.prefix(8)) wireRecords=\(wireRecords.count) context=\(understanding.agentInteractionContext.typeString ?? "nil") state=\(understanding.state.rawValue)")
+            }
+            return understanding
+        }
+        let understandingsByTerminalID = Dictionary(
+            uniqueKeysWithValues: understandings.map { ($0.terminalID, $0) }
+        )
 
+        aiForemanPreviousUnderstandings = understandingsByTerminalID
+
+        // Feed AI agent understandings to the reactive trigger monitor
+        agentStateMonitor.observe(understandings: understandings)
+
+        aiForemanPreviousSnapshots = Dictionary(
+            uniqueKeysWithValues: allSnapshots.map { ($0.terminalID, $0) }
+        )
+
+        for (controller, snapshots) in snapshotsByController {
             controller.foremanSidebarStore.applySnapshots(
                 snapshots,
                 summariesByTerminalID: currentAISummaries(for: snapshots),

@@ -59,6 +59,13 @@ enum AgentInteractionContext: Codable, Equatable, Sendable {
         }
     }
 
+    var optionsArray: [String]? {
+        switch self {
+        case .waitingChoice(_, let options): return options
+        default: return nil
+        }
+    }
+
     // MARK: - Codable
 
     enum CodingKeys: String, CodingKey {

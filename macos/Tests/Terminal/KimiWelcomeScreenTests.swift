@@ -103,4 +103,91 @@ struct KimiWelcomeScreenTests {
         #expect(understanding.agentInteractionState == .running,
                 "Wire signal should override welcome heuristic when records exist")
     }
+
+    @Test
+    func kimiCompletedTurnWithClaudePathMentionRemainsKimiWaitingText() {
+        let engine = TerminalUnderstandingEngine()
+        let snapshot = TerminalSnapshot.makePreview(
+            terminalID: "test-terminal",
+            windowID: "w1",
+            tabID: "t1",
+            title: "Kimi Code",
+            cwd: "/Users/nambouchara/speed2",
+            isFocused: true,
+            visibleText: """
+            ✨ go to the mend directory please
+            • Used Shell (cd /Users/nambouchara/speed2/mend && pwd && ls -la)
+            • I'm now in the mend directory at /Users/nambouchara/speed2/mend.
+              The directory contains:
+              • .claude/ – Claude configuration
+              • .git/ – Git repository
+              • docs/ – Documentation
+
+            ── input ─────────────────────────────────────────────────────────────────
+
+            agent (Kimi-k2.6 ●)  ~/speed2  ctrl-v: paste clipboard | @: mention files
+            context: 5.4% (14.3k/262.1k)
+            """,
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessName: "kimi"
+        )
+
+        let understanding = engine.understand(
+            current: snapshot,
+            previous: nil,
+            lastOutcome: nil,
+            wireRecords: []
+        )
+
+        #expect(understanding.agentIdentity == .kimi)
+        #expect(understanding.agentInteractionState == .waitingText)
+        #expect(understanding.state == .waiting)
+    }
+
+    @Test
+    func kimiTurnEndUsesPreviousTextContentAsWaitingQuestion() throws {
+        let engine = TerminalUnderstandingEngine()
+        let snapshot = TerminalSnapshot.makePreview(
+            terminalID: "test-terminal",
+            windowID: "w1",
+            tabID: "t1",
+            title: "Kimi Code",
+            cwd: "/Users/nambouchara/speed2",
+            isFocused: true,
+            visibleText: """
+            ─ input ─────────────────────────────────────────────────────────
+
+            agent (Kimi-k2.6 ●)  ~/speed2  ctrl-x: toggle mode | shift-tab: plan mode
+            context: 5.4% (14.3k/262.1k)
+            """,
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessName: "kimi",
+            cursorIsAtPrompt: true,
+            usingAlternateScreen: true
+        )
+        let decoder = JSONDecoder()
+        let records = try [
+            """
+            {"timestamp":1,"message":{"type":"ContentPart","payload":{"type":"text","text":"I'm now in the mend directory.\\n\\nWhat would you like to do here?"}}}
+            """,
+            """
+            {"timestamp":2,"message":{"type":"TurnEnd","payload":{}}}
+            """,
+        ].map { line in
+            try decoder.decode(KimiWireRecord.self, from: Data(line.utf8))
+        }
+
+        let understanding = engine.understand(
+            current: snapshot,
+            previous: nil,
+            lastOutcome: nil,
+            wireRecords: records
+        )
+
+        #expect(understanding.agentIdentity == .kimi)
+        #expect(understanding.agentInteractionState == .waitingText)
+        #expect(understanding.agentInteractionContext.descriptionString == "What would you like to do here?")
+    }
 }

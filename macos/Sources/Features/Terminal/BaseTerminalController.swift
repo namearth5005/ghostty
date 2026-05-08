@@ -191,6 +191,14 @@ class BaseTerminalController: NSWindowController,
                 command: command
             )
         }
+        foremanSidebarStore.onExecutePendingAttentionAction = { [weak self] attention, action in
+            guard let self else { return }
+            (NSApp.delegate as? AppDelegate)?.executePendingAttentionAction(
+                attention,
+                action: action,
+                store: self.foremanSidebarStore
+            )
+        }
 
         // Refresh agent readiness on init
         foremanSidebarStore.refreshAgentReadiness()

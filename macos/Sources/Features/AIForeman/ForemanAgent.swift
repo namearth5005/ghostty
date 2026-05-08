@@ -110,9 +110,17 @@ actor ForemanAgent {
             let sent = await onSendCommand(terminalID, command)
             await MainActor.run {
                 if sent {
-                    conversation.addMessage(role: .agent, content: "▶️ Sent: \(command)")
+                    conversation.addMessage(
+                        role: .agent,
+                        content: "▶️ Sent: \(command)",
+                        terminalID: terminalID
+                    )
                 } else {
-                    conversation.addMessage(role: .agent, content: "❌ Failed to send: \(command)")
+                    conversation.addMessage(
+                        role: .agent,
+                        content: "❌ Failed to send: \(command)",
+                        terminalID: terminalID
+                    )
                 }
             }
             // Give terminal time to process command and display output
@@ -121,6 +129,119 @@ actor ForemanAgent {
         default:
             break
         }
+    }
+
+    func react(
+        to event: AgentNeedsAttentionEvent,
+        captureSnapshots: (@MainActor () -> [TerminalSnapshot])? = nil
+    ) async {
+        let snapshotProvider = captureSnapshots ?? self.captureSnapshots
+        guard let snapshotProvider else { return }
+
+        cancelCurrentTask()
+
+        let task = Task {
+            let contextMessage = makeContextMessage(for: event)
+            await MainActor.run {
+                conversation.addHiddenContext(contextMessage)
+            }
+
+            do {
+                try Task.checkCancellation()
+                try await runSingleIteration(
+                    event: event,
+                    captureSnapshots: snapshotProvider
+                )
+            } catch is CancellationError {
+                return
+            } catch {
+                await MainActor.run {
+                    conversation.addMessage(
+                        role: .agent,
+                        content: "⚠️ Error reacting to event: \(error.localizedDescription)"
+                    )
+                }
+            }
+        }
+
+        currentTask = task
+        await task.value
+    }
+
+    func draftPendingAttention(
+        for event: AgentNeedsAttentionEvent,
+        captureSnapshots: @escaping @MainActor () -> [TerminalSnapshot]
+    ) async throws -> PendingAgentAttention? {
+        let contextMessage = makeContextMessage(for: event)
+        DebugLogger.log("[ForemanAgent] draftPendingAttention start terminal=\(event.terminalID.prefix(8)) state=\(event.interactionState) delta='\(event.deltaText.prefix(160))'")
+        await MainActor.run {
+            conversation.addHiddenContext(contextMessage)
+        }
+
+        let terminals = await captureSnapshots()
+        let understandings = terminals.map { snapshot in
+            understandingEngine.understand(
+                current: snapshot,
+                previous: previousSnapshotsByTerminalID[snapshot.terminalID],
+                lastOutcome: lastOutcome
+            )
+        }
+        let overview = understandingEngine.makeOverview(
+            current: understandings,
+            previous: previousUnderstandings
+        )
+        let deltaTerminals = makeDeltaTerminals(from: terminals)
+
+        previousSnapshotsByTerminalID = Dictionary(
+            uniqueKeysWithValues: terminals.map { ($0.terminalID, $0) }
+        )
+        previousUnderstandings = understandings
+
+        await MainActor.run {
+            conversation.updateTerminalContext(
+                overview: overview,
+                understandings: understandings
+            )
+        }
+
+        let response = try await foremanService.agentStep(
+            conversation: conversation,
+            terminals: deltaTerminals,
+            understandings: understandings,
+            overview: overview,
+            lastOutcome: lastOutcome
+        )
+        DebugLogger.log("[ForemanAgent] draftPendingAttention LLM action terminal=\(event.terminalID.prefix(8)) action=\(Self.describe(response.action))")
+
+        lastOutcome = nil
+        await MainActor.run {
+            conversation.incrementIteration()
+        }
+
+        guard case .sendCommand(let terminalID, let command, let reason) = response.action,
+              terminalID == event.terminalID else {
+            DebugLogger.log("[ForemanAgent] draftPendingAttention ignored action terminal=\(event.terminalID.prefix(8)) expected=\(event.terminalID) action=\(Self.describe(response.action))")
+            return nil
+        }
+
+        DebugLogger.log("[ForemanAgent] draftPendingAttention produced suggestion terminal=\(event.terminalID.prefix(8)) command='\(command.prefix(160))' reason='\(reason.prefix(160))'")
+        return PendingAgentAttention(
+            terminalID: event.terminalID,
+            agentIdentity: event.agentIdentity,
+            interactionState: event.interactionState,
+            fingerprint: event.fingerprint,
+            title: "Suggested reply",
+            description: reason.isEmpty ? event.deltaText : reason,
+            detail: event.deltaText.isEmpty ? nil : event.deltaText,
+            actions: [
+                .init(
+                    id: "suggested_reply",
+                    title: command,
+                    payload: command,
+                    style: .primary
+                )
+            ]
+        )
     }
 
     func receiveOutcome(_ report: TerminalOutcomeReport) {
@@ -208,27 +329,7 @@ actor ForemanAgent {
             )
 
             // Compute delta terminals BEFORE updating previous snapshots
-            let deltaTerminals = terminals.map { terminal in
-                let previous = previousSnapshotsByTerminalID[terminal.terminalID]
-                let deltaText = TerminalSnapshot.computeTextDelta(
-                    previous: previous?.visibleText,
-                    current: terminal.visibleText
-                )
-                return TerminalSnapshot(
-                    terminalID: terminal.terminalID,
-                    windowID: terminal.windowID,
-                    tabID: terminal.tabID,
-                    title: terminal.title,
-                    cwd: terminal.cwd,
-                    isFocused: terminal.isFocused,
-                    captureMode: terminal.captureMode,
-                    visibleText: deltaText,
-                    recentScrollback: terminal.recentScrollback,
-                    lastInputPreview: terminal.lastInputPreview,
-                    runtime: terminal.runtime,
-                    signals: terminal.signals
-                )
-            }
+            let deltaTerminals = makeDeltaTerminals(from: terminals)
 
             previousSnapshotsByTerminalID = Dictionary(
                 uniqueKeysWithValues: terminals.map { ($0.terminalID, $0) }
@@ -253,6 +354,7 @@ actor ForemanAgent {
             )
 
             lastOutcome = nil
+            try Task.checkCancellation()
 
             await MainActor.run {
                 conversation.incrementIteration()
@@ -260,6 +362,7 @@ actor ForemanAgent {
 
             // 3. Execute
             let shouldContinue = try await executeAction(response)
+            try Task.checkCancellation()
             guard shouldContinue else { break }
         }
 
@@ -286,7 +389,10 @@ actor ForemanAgent {
         }
     }
 
-    private func executeAction(_ response: AgentStepResponse) async throws -> Bool {
+    private func executeAction(
+        _ response: AgentStepResponse,
+        terminalID messageTerminalID: String? = nil
+    ) async throws -> Bool {
         await MainActor.run {
             onAction(response.action, response.thought)
         }
@@ -294,33 +400,58 @@ actor ForemanAgent {
         switch response.action {
         case .respond(let message):
             await MainActor.run {
-                conversation.addMessage(role: .agent, content: message)
+                conversation.addMessage(
+                    role: .agent,
+                    content: message,
+                    terminalID: messageTerminalID
+                )
             }
             return false
 
         case .sendCommand(let terminalID, let command, let reason):
-            return try await handleSendCommand(terminalID: terminalID, command: command, reason: reason)
+            return try await handleSendCommand(
+                terminalID: terminalID,
+                command: command,
+                reason: reason,
+                messageTerminalID: messageTerminalID
+            )
 
         case .askUser(let question):
-            return try await handleAskUser(question: question)
+            return try await handleAskUser(
+                question: question,
+                terminalID: messageTerminalID
+            )
 
         case .declareComplete(let summary):
             await MainActor.run {
-                conversation.addMessage(role: .agent, content: "✅ \(summary)")
+                conversation.addMessage(
+                    role: .agent,
+                    content: "✅ \(summary)",
+                    terminalID: messageTerminalID
+                )
                 conversation.setStatus(.complete)
             }
             return false
 
         case .declareStuck(let reason):
             await MainActor.run {
-                conversation.addMessage(role: .agent, content: "⚠️ I'm stuck: \(reason)")
+                conversation.addMessage(
+                    role: .agent,
+                    content: "⚠️ I'm stuck: \(reason)",
+                    terminalID: messageTerminalID
+                )
                 conversation.setStatus(.stuck)
             }
             return false
         }
     }
 
-    private func handleSendCommand(terminalID: String, command: String, reason: String) async throws -> Bool {
+    private func handleSendCommand(
+        terminalID: String,
+        command: String,
+        reason: String,
+        messageTerminalID: String? = nil
+    ) async throws -> Bool {
         // In interactive mode, ask user before executing
         let mode = await MainActor.run { conversation.mode }
 
@@ -331,7 +462,8 @@ actor ForemanAgent {
                 conversation.addMessage(
                     role: .agent,
                     content: message,
-                    action: action
+                    action: action,
+                    terminalID: messageTerminalID
                 )
                 conversation.setStatus(.waitingForUser)
             }
@@ -345,11 +477,19 @@ actor ForemanAgent {
 
         if sent {
             await MainActor.run {
-                conversation.addMessage(role: .agent, content: "▶️ Sent: \(command)")
+                conversation.addMessage(
+                    role: .agent,
+                    content: "▶️ Sent: \(command)",
+                    terminalID: messageTerminalID ?? terminalID
+                )
             }
         } else {
             await MainActor.run {
-                conversation.addMessage(role: .agent, content: "❌ Failed to send: \(command)")
+                conversation.addMessage(
+                    role: .agent,
+                    content: "❌ Failed to send: \(command)",
+                    terminalID: messageTerminalID ?? terminalID
+                )
             }
         }
 
@@ -359,16 +499,136 @@ actor ForemanAgent {
         return true
     }
 
-    private func handleAskUser(question: String) async throws -> Bool {
+    private func handleAskUser(question: String, terminalID: String? = nil) async throws -> Bool {
         await MainActor.run {
             conversation.addMessage(
                 role: .agent,
                 content: question,
-                action: .askUser(question: question)
+                action: .askUser(question: question),
+                terminalID: terminalID
             )
             conversation.setStatus(.waitingForUser)
         }
         pauseState = .awaitingUserReply(question: question)
         return false
+    }
+
+    // MARK: - One-Shot Reactive Helpers
+
+    private func makeContextMessage(for event: AgentNeedsAttentionEvent) -> String {
+        let agentName = event.agentIdentity.displayName ?? "AI agent"
+        switch event.interactionState {
+        case .waitingApproval:
+            return "\(agentName) in terminal \(event.terminalID.prefix(8)) is waiting for approval.\n\nRecent output:\n\(event.deltaText)"
+        case .waitingChoice:
+            return "\(agentName) in terminal \(event.terminalID.prefix(8)) is waiting for a choice.\n\nRecent output:\n\(event.deltaText)"
+        case .waitingText:
+            return "\(agentName) in terminal \(event.terminalID.prefix(8)) is waiting for text input.\n\nRecent output:\n\(event.deltaText)"
+        case .error:
+            return "\(agentName) in terminal \(event.terminalID.prefix(8)) encountered an error.\n\nRecent output:\n\(event.deltaText)"
+        default:
+            return "\(agentName) in terminal \(event.terminalID.prefix(8)) needs attention.\n\nRecent output:\n\(event.deltaText)"
+        }
+    }
+
+    private static func describe(_ action: AgentAction) -> String {
+        switch action {
+        case .respond(let message):
+            return "respond message='\(message.prefix(160))'"
+        case .sendCommand(let terminalID, let command, let reason):
+            return "send_command terminal=\(terminalID) command='\(command.prefix(160))' reason='\(reason.prefix(160))'"
+        case .askUser(let question):
+            return "ask_user question='\(question.prefix(160))'"
+        case .declareComplete(let summary):
+            return "declare_complete summary='\(summary.prefix(160))'"
+        case .declareStuck(let reason):
+            return "declare_stuck reason='\(reason.prefix(160))'"
+        }
+    }
+
+    private func runSingleIteration(
+        event: AgentNeedsAttentionEvent,
+        captureSnapshots: @escaping @MainActor () -> [TerminalSnapshot]
+    ) async throws {
+        await setStatus(.observing)
+        let terminals = await captureSnapshots()
+        let understandings = terminals.map { snapshot in
+            understandingEngine.understand(
+                current: snapshot,
+                previous: previousSnapshotsByTerminalID[snapshot.terminalID],
+                lastOutcome: lastOutcome
+            )
+        }
+        let overview = understandingEngine.makeOverview(
+            current: understandings,
+            previous: previousUnderstandings
+        )
+
+        // Delta truncation for LLM context efficiency
+        let deltaTerminals = makeDeltaTerminals(from: terminals)
+
+        previousSnapshotsByTerminalID = Dictionary(
+            uniqueKeysWithValues: terminals.map { ($0.terminalID, $0) }
+        )
+        previousUnderstandings = understandings
+
+        await MainActor.run {
+            conversation.updateTerminalContext(
+                overview: overview,
+                understandings: understandings
+            )
+        }
+
+        // Plan
+        await setStatus(.planning)
+        let response = try await foremanService.agentStep(
+            conversation: conversation,
+            terminals: deltaTerminals,
+            understandings: understandings,
+            overview: overview,
+            lastOutcome: lastOutcome
+        )
+
+        lastOutcome = nil
+        try Task.checkCancellation()
+
+        await MainActor.run {
+            conversation.incrementIteration()
+        }
+
+        // Execute (one action, then stop)
+        _ = try await executeAction(response, terminalID: event.terminalID)
+        try Task.checkCancellation()
+
+        await MainActor.run {
+            if conversation.status != .waitingForUser {
+                conversation.status = .idle
+                conversation.isRunning = false
+            }
+        }
+    }
+
+    private func makeDeltaTerminals(from terminals: [TerminalSnapshot]) -> [TerminalSnapshot] {
+        terminals.map { terminal in
+            let previous = previousSnapshotsByTerminalID[terminal.terminalID]
+            let deltaText = TerminalSnapshot.computeTextDelta(
+                previous: previous?.visibleText,
+                current: terminal.visibleText
+            )
+            return TerminalSnapshot(
+                terminalID: terminal.terminalID,
+                windowID: terminal.windowID,
+                tabID: terminal.tabID,
+                title: terminal.title,
+                cwd: terminal.cwd,
+                isFocused: terminal.isFocused,
+                captureMode: terminal.captureMode,
+                visibleText: deltaText,
+                recentScrollback: terminal.recentScrollback,
+                lastInputPreview: terminal.lastInputPreview,
+                runtime: terminal.runtime,
+                signals: terminal.signals
+            )
+        }
     }
 }

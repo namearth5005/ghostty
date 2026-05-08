@@ -10,6 +10,7 @@ struct ConversationMessage: Identifiable, Codable, Equatable, Sendable {
     let role: ConversationMessageRole
     let content: String
     let action: AgentAction?
+    let terminalID: String?
     let timestamp: Date
 
     init(
@@ -17,18 +18,22 @@ struct ConversationMessage: Identifiable, Codable, Equatable, Sendable {
         role: ConversationMessageRole,
         content: String,
         action: AgentAction? = nil,
+        terminalID: String? = nil,
         timestamp: Date = Date()
     ) {
         self.id = id
         self.role = role
         self.content = content
         self.action = action
+        self.terminalID = terminalID
         self.timestamp = timestamp
     }
 }
 
 @MainActor
 final class ForemanConversation: ObservableObject {
+    private static let maxHiddenContextEntries = 8
+
     @Published var messages: [ConversationMessage] = []
     @Published var goal: String?
     @Published var mode: AgentMode = .interactive
@@ -38,6 +43,7 @@ final class ForemanConversation: ObservableObject {
     @Published var errorMessage: String?
     @Published var lastOverview: TerminalOverview?
     @Published var lastUnderstandings: [TerminalUnderstanding] = []
+    @Published private(set) var hiddenContext: [String] = []
 
     let maxIterations = 20
 
@@ -50,6 +56,7 @@ final class ForemanConversation: ObservableObject {
         self.errorMessage = nil
         self.lastOverview = nil
         self.lastUnderstandings = []
+        self.hiddenContext = []
         addMessage(role: .user, content: goal)
     }
 
@@ -58,10 +65,37 @@ final class ForemanConversation: ObservableObject {
         status = .idle
         lastOverview = nil
         lastUnderstandings = []
+        hiddenContext = []
     }
 
-    func addMessage(role: ConversationMessageRole, content: String, action: AgentAction? = nil) {
-        messages.append(ConversationMessage(role: role, content: content, action: action))
+    func addMessage(
+        role: ConversationMessageRole,
+        content: String,
+        action: AgentAction? = nil,
+        terminalID: String? = nil
+    ) {
+        messages.append(ConversationMessage(
+            role: role,
+            content: content,
+            action: action,
+            terminalID: terminalID
+        ))
+    }
+
+    func visibleMessages(selectedTerminalID: String?) -> [ConversationMessage] {
+        messages.filter { message in
+            guard let messageTerminalID = message.terminalID else {
+                return true
+            }
+            return messageTerminalID == selectedTerminalID
+        }
+    }
+
+    func addHiddenContext(_ content: String) {
+        hiddenContext.append(content)
+        if hiddenContext.count > Self.maxHiddenContextEntries {
+            hiddenContext.removeFirst(hiddenContext.count - Self.maxHiddenContextEntries)
+        }
     }
 
     func setStatus(_ status: AgentStatus) {

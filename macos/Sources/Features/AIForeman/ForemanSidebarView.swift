@@ -77,6 +77,9 @@ struct ForemanSidebarView: View {
                                     row: row,
                                     onExecuteSuggestion: { terminalID, command in
                                         store.executeSuggestion(terminalID: terminalID, command: command)
+                                    },
+                                    onExecutePendingAttentionAction: { attention, action in
+                                        store.executePendingAttentionAction(attention, action: action)
                                     }
                                 )
                             }

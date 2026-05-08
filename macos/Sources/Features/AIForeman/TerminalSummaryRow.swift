@@ -3,6 +3,7 @@ import SwiftUI
 struct TerminalSummaryRow: View {
     let row: TerminalSummaryRowModel
     var onExecuteSuggestion: ((String, String) -> Void)?
+    var onExecutePendingAttentionAction: ((PendingAgentAttention, PendingAgentAction) -> Void)?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -77,6 +78,58 @@ struct TerminalSummaryRow: View {
                 .foregroundStyle(.secondary)
             }
 
+            if let attention = row.pendingAttention {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 6) {
+                        Image(systemName: iconForContextType(attention.interactionState.rawValue))
+                            .font(.system(size: 11))
+                            .foregroundStyle(colorForContextType(attention.interactionState.rawValue))
+
+                        Text(attention.title)
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(colorForContextType(attention.interactionState.rawValue))
+
+                        Spacer(minLength: 8)
+
+                        if attention.status == .sending {
+                            ProgressView()
+                                .controlSize(.small)
+                        }
+                    }
+
+                    Text(attention.description)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.primary)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    if let detail = attention.detail, !detail.isEmpty {
+                        Text(detail)
+                            .font(.system(size: 10, weight: .medium, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(3)
+                    }
+
+                    HStack(spacing: 6) {
+                        ForEach(attention.actions.prefix(4)) { action in
+                            Button(action.title) {
+                                onExecutePendingAttentionAction?(attention, action)
+                            }
+                            .buttonStyle(PendingAgentActionButtonStyle(style: action.style))
+                            .controlSize(.small)
+                            .disabled(attention.status == .sending)
+                        }
+                    }
+
+                    if let errorMessage = attention.errorMessage, !errorMessage.isEmpty {
+                        Text(errorMessage)
+                            .font(.system(size: 10))
+                            .foregroundStyle(.red)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .padding(.top, 6)
+            }
+
             if !row.suggestedActions.isEmpty {
                 VStack(alignment: .leading, spacing: 6) {
                     ForEach(row.suggestedActions.prefix(2), id: \.title) { action in
@@ -142,6 +195,9 @@ struct TerminalSummaryRow: View {
     }
 
     private var attentionBorderColor: Color {
+        if row.pendingAttention != nil {
+            return Color.orange.opacity(0.6)
+        }
         if !row.isFocused, row.agentContextType == "waitingApproval" || row.agentContextType == "waitingChoice" || row.agentContextType == "waitingText" {
             return Color.orange.opacity(0.5)
         }
@@ -149,6 +205,9 @@ struct TerminalSummaryRow: View {
     }
 
     private var attentionBorderWidth: CGFloat {
+        if row.pendingAttention != nil {
+            return 2
+        }
         if !row.isFocused, row.agentContextType == "waitingApproval" || row.agentContextType == "waitingChoice" || row.agentContextType == "waitingText" {
             return 2
         }
@@ -193,6 +252,43 @@ private func colorForContextType(_ type: String) -> Color {
         return .red
     default:
         return .secondary
+    }
+}
+
+struct PendingAgentActionButtonStyle: ButtonStyle {
+    let style: PendingAgentAction.Style
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 11, weight: .semibold))
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .foregroundStyle(foregroundColor)
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(backgroundColor(isPressed: configuration.isPressed))
+            )
+            .opacity(configuration.isPressed ? 0.8 : 1)
+    }
+
+    private var foregroundColor: Color {
+        switch style {
+        case .primary, .destructive:
+            return .white
+        case .secondary:
+            return .primary
+        }
+    }
+
+    private func backgroundColor(isPressed: Bool) -> Color {
+        switch style {
+        case .primary:
+            return isPressed ? Color.blue.opacity(0.75) : Color.blue
+        case .secondary:
+            return isPressed ? Color.secondary.opacity(0.25) : Color.secondary.opacity(0.12)
+        case .destructive:
+            return isPressed ? Color.red.opacity(0.75) : Color.red
+        }
     }
 }
 

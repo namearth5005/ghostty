@@ -93,6 +93,9 @@ struct ForemanChatView: View {
                             row: row,
                             onExecuteSuggestion: { terminalID, command in
                                 store.executeSuggestion(terminalID: terminalID, command: command)
+                            },
+                            onExecutePendingAttentionAction: { attention, action in
+                                store.executePendingAttentionAction(attention, action: action)
                             }
                         )
                     }
@@ -107,14 +110,14 @@ struct ForemanChatView: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     VStack(alignment: .leading, spacing: 12) {
-                        ForEach(store.conversation.messages) { message in
+                        ForEach(store.visibleConversationMessages) { message in
                             ChatBubble(message: message)
                         }
                     }
                     .padding(16)
                 }
-                .onChange(of: store.conversation.messages.count) { _ in
-                    if let last = store.conversation.messages.last {
+                .onChange(of: store.visibleConversationMessages.count) { _ in
+                    if let last = store.visibleConversationMessages.last {
                         withAnimation {
                             proxy.scrollTo(last.id, anchor: .bottom)
                         }
@@ -261,7 +264,7 @@ struct ForemanChatView: View {
             goal: store.conversation.goal,
             isRunning: store.conversation.isRunning,
             status: store.conversation.status,
-            lastAction: store.conversation.messages.last?.action
+            lastAction: store.visibleConversationMessages.last?.action
         )
     }
 

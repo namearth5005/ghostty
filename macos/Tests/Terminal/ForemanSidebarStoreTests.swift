@@ -71,6 +71,37 @@ struct ForemanSidebarStoreTests {
 
     @MainActor
     @Test
+    func visibleConversationMessagesKeepsGlobalMessagesAndSelectedTerminalThread() {
+        let conversation = ForemanConversation()
+        conversation.addMessage(role: .user, content: "Coordinate these terminals.")
+        conversation.addMessage(role: .agent, content: "Kimi is waiting.", terminalID: "term-1")
+        conversation.addMessage(role: .agent, content: "Claude is waiting.", terminalID: "term-2")
+        let store = ForemanSidebarStore(
+            selectedTerminalID: "term-1",
+            conversation: conversation
+        )
+
+        #expect(store.visibleConversationMessages.map(\.content) == [
+            "Coordinate these terminals.",
+            "Kimi is waiting.",
+        ])
+
+        store.selectedTerminalID = "term-2"
+
+        #expect(store.visibleConversationMessages.map(\.content) == [
+            "Coordinate these terminals.",
+            "Claude is waiting.",
+        ])
+
+        store.selectedTerminalID = nil
+
+        #expect(store.visibleConversationMessages.map(\.content) == [
+            "Coordinate these terminals.",
+        ])
+    }
+
+    @MainActor
+    @Test
     func applySnapshotsUsesStructuredUnderstandingStateAndExplanation() {
         let store = ForemanSidebarStore()
         let snapshots = [
@@ -465,4 +496,231 @@ struct ForemanSidebarStoreTests {
         #expect(store.terminalRows[0].summary == "Tests failed because a module is missing.")
         #expect(store.terminalRows[0].suggestedActions.isEmpty)
     }
+
+    @MainActor
+    @Test
+    func upsertingPendingAttentionSelectsTerminalAndShowsSidebar() {
+        let store = ForemanSidebarStore()
+        let attention = makePendingAttention(terminalID: "term-2")
+
+        store.upsertPendingAttention(attention)
+
+        #expect(store.pendingAttentionByTerminalID["term-2"] == attention)
+        #expect(store.selectedTerminalID == "term-2")
+        #expect(store.isSidebarVisible == true)
+    }
+
+    @MainActor
+    @Test
+    func applySnapshotsProjectsPendingAttentionIntoRows() {
+        let store = ForemanSidebarStore()
+        let attention = makePendingAttention(terminalID: "term-1")
+        store.upsertPendingAttention(attention)
+
+        store.applySnapshots([
+            TerminalSnapshot.makePreview(
+                terminalID: "term-1",
+                windowID: "win-1",
+                tabID: "tab-1",
+                title: "Claude",
+                cwd: "/tmp/project",
+                isFocused: true,
+                visibleText: "Do you want to continue?",
+                recentScrollbackLines: [],
+                lastInputPreview: nil,
+                foregroundProcessName: "claude"
+            )
+        ])
+
+        #expect(store.terminalRows.count == 1)
+        #expect(store.terminalRows[0].pendingAttention == attention)
+    }
+
+    @MainActor
+    @Test
+    func applySnapshotsClearsPendingAttentionWhenAgentNoLongerNeedsAttention() {
+        let store = ForemanSidebarStore()
+        let attention = makePendingAttention(terminalID: "term-1")
+        store.upsertPendingAttention(attention)
+        let snapshot = TerminalSnapshot.makePreview(
+            terminalID: "term-1",
+            windowID: "win-1",
+            tabID: "tab-1",
+            title: "Claude",
+            cwd: "/tmp/project",
+            isFocused: true,
+            visibleText: "Working...",
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessName: "claude"
+        )
+        let understanding = TerminalUnderstanding.preview(
+            terminalID: "term-1",
+            state: .running,
+            shortExplanation: "Claude is working.",
+            lastMeaningfulEvent: "Working...",
+            importantDetails: ["Working..."],
+            suggestedNextActions: [],
+            agentIdentity: .claudeCode,
+            agentInteractionState: .running
+        )
+
+        store.applySnapshots(
+            [snapshot],
+            understandingsByTerminalID: ["term-1": understanding]
+        )
+
+        #expect(store.pendingAttentionByTerminalID["term-1"] == nil)
+        #expect(store.terminalRows[0].pendingAttention == nil)
+    }
+
+    @MainActor
+    @Test
+    func resolvingPendingAttentionClearsDictionaryAndRow() {
+        let store = ForemanSidebarStore()
+        let attention = makePendingAttention(terminalID: "term-1", fingerprint: "fp-1")
+        store.applySnapshots([
+            TerminalSnapshot.makePreview(
+                terminalID: "term-1",
+                windowID: "win-1",
+                tabID: "tab-1",
+                title: "Claude",
+                cwd: "/tmp/project",
+                isFocused: true,
+                visibleText: "Do you want to continue?",
+                recentScrollbackLines: [],
+                lastInputPreview: nil,
+                foregroundProcessName: "claude"
+            )
+        ])
+        store.upsertPendingAttention(attention)
+
+        store.resolvePendingAttention(terminalID: "term-1", fingerprint: "fp-1")
+
+        #expect(store.pendingAttentionByTerminalID["term-1"] == nil)
+        #expect(store.terminalRows[0].pendingAttention == nil)
+    }
+
+    @MainActor
+    @Test
+    func failedPendingAttentionKeepsErrorMessageInDictionaryAndRow() {
+        let store = ForemanSidebarStore()
+        let attention = makePendingAttention(terminalID: "term-1", fingerprint: "fp-1")
+        store.applySnapshots([
+            TerminalSnapshot.makePreview(
+                terminalID: "term-1",
+                windowID: "win-1",
+                tabID: "tab-1",
+                title: "Claude",
+                cwd: "/tmp/project",
+                isFocused: true,
+                visibleText: "Do you want to continue?",
+                recentScrollbackLines: [],
+                lastInputPreview: nil,
+                foregroundProcessName: "claude"
+            )
+        ])
+        store.upsertPendingAttention(attention)
+
+        store.markPendingAttentionSending(terminalID: "term-1", fingerprint: "fp-1")
+        store.markPendingAttentionFailed(
+            terminalID: "term-1",
+            fingerprint: "fp-1",
+            errorMessage: "Terminal was no longer available."
+        )
+
+        let storedAttention = try! #require(store.pendingAttentionByTerminalID["term-1"])
+        let rowAttention = try! #require(store.terminalRows[0].pendingAttention)
+        #expect(storedAttention.status == .failed)
+        #expect(storedAttention.errorMessage == "Terminal was no longer available.")
+        #expect(rowAttention.status == .failed)
+        #expect(rowAttention.errorMessage == "Terminal was no longer available.")
+    }
+
+    @MainActor
+    @Test
+    func executingPendingAttentionActionForwardsAttentionAndAction() {
+        let store = ForemanSidebarStore()
+        let action = PendingAgentAction(
+            id: "continue",
+            title: "Continue",
+            payload: "1",
+            style: .primary
+        )
+        let attention = makePendingAttention(terminalID: "term-1", actions: [action])
+        var forwardedAttention: PendingAgentAttention?
+        var forwardedAction: PendingAgentAction?
+        store.onExecutePendingAttentionAction = { attention, action in
+            forwardedAttention = attention
+            forwardedAction = action
+        }
+        store.upsertPendingAttention(attention)
+
+        store.executePendingAttentionAction(terminalID: "term-1", actionID: "continue")
+
+        #expect(forwardedAttention == attention)
+        #expect(forwardedAction == action)
+    }
+
+    @MainActor
+    @Test
+    func executingStalePendingAttentionActionDoesNotForward() {
+        let store = ForemanSidebarStore()
+        let currentAction = PendingAgentAction(
+            id: "current",
+            title: "Current",
+            payload: "2",
+            style: .primary
+        )
+        let staleAction = PendingAgentAction(
+            id: "stale",
+            title: "Stale",
+            payload: "1",
+            style: .primary
+        )
+        let currentAttention = makePendingAttention(
+            terminalID: "term-1",
+            fingerprint: "current-fp",
+            actions: [currentAction]
+        )
+        let staleAttention = makePendingAttention(
+            terminalID: "term-1",
+            fingerprint: "stale-fp",
+            actions: [staleAction]
+        )
+        var forwardedAction: PendingAgentAction?
+        store.onExecutePendingAttentionAction = { _, action in
+            forwardedAction = action
+        }
+        store.upsertPendingAttention(currentAttention)
+
+        store.executePendingAttentionAction(staleAttention, action: staleAction)
+
+        #expect(forwardedAction == nil)
+    }
+
+    private func makePendingAttention(
+        terminalID: String,
+        fingerprint: String = "fp-1",
+        actions: [PendingAgentAction] = [
+            .init(
+                id: "continue",
+                title: "Continue",
+                payload: "1",
+                style: .primary
+            )
+        ]
+    ) -> PendingAgentAttention {
+        PendingAgentAttention(
+            terminalID: terminalID,
+            agentIdentity: .claudeCode,
+            interactionState: .waitingChoice,
+            fingerprint: fingerprint,
+            title: "Claude needs a choice",
+            description: "Select the continue option.",
+            detail: "1. Continue\n2. Stop",
+            actions: actions
+        )
+    }
+
 }

@@ -72,6 +72,64 @@ struct ForemanServiceTests {
     }
 
     @Test
+    func openAIPromptIncludesHiddenReactiveContext() async throws {
+        let transport = RecordingResponsesTransport(
+            payload: """
+            {"thought":"Using hidden context.","action":{"type":"respond","message":"Kimi is waiting for input."}}
+            """
+        )
+        let client = OpenAIClient(apiKey: "test-key", transport: transport)
+        let conversation = await MainActor.run { ForemanConversation() }
+        await MainActor.run {
+            conversation.start(goal: "watch Kimi", mode: .interactive)
+            conversation.addHiddenContext("Kimi in terminal term-1 is waiting for text input.")
+        }
+
+        _ = try await client.agentStep(
+            conversation: conversation,
+            terminals: sampleSnapshots(),
+            understandings: [],
+            overview: .init(summary: "term-1 waiting", changedTerminalIDs: ["term-1"], primaryTerminalID: "term-1"),
+            lastOutcome: nil
+        )
+
+        let request = try #require(await transport.lastRequest)
+        let prompt = request.input[0].content[0].text
+        #expect(prompt.contains("Hidden reactive context:"))
+        #expect(prompt.contains("Kimi in terminal term-1 is waiting for text input."))
+    }
+
+    @Test
+    func openAIPromptPromotesReactiveContextWhenNoUserGoalExists() async throws {
+        let transport = RecordingResponsesTransport(
+            payload: """
+            {"thought":"Drafting a reply for Kimi.","action":{"type":"send_command","terminal_id":"term-1","command":"Read the README and summarize the project.","reason":"Kimi asked what to do next."}}
+            """
+        )
+        let client = OpenAIClient(apiKey: "test-key", transport: transport)
+        let conversation = await MainActor.run { ForemanConversation() }
+        await MainActor.run {
+            conversation.addHiddenContext(
+                "Kimi in terminal term-1 is waiting for text input.\n\nRecent output:\nWhat would you like me to do here?"
+            )
+        }
+
+        _ = try await client.agentStep(
+            conversation: conversation,
+            terminals: sampleSnapshots(),
+            understandings: [],
+            overview: .init(summary: "term-1 waiting", changedTerminalIDs: ["term-1"], primaryTerminalID: "term-1"),
+            lastOutcome: nil
+        )
+
+        let request = try #require(await transport.lastRequest)
+        let prompt = request.input[0].content[0].text
+        #expect(prompt.contains("Active turn:"))
+        #expect(prompt.contains("Kimi in terminal term-1 is waiting for text input."))
+        #expect(prompt.contains("If Active turn is a reactive terminal event, handle that event as the current task."))
+    }
+
+    @Test
     func serviceForwardsStructuredUnderstandingsToClient() async throws {
         let client = RecordingForemanClient()
         let service = ForemanService(client: client)
@@ -210,6 +268,20 @@ private actor LegacyRecordingForemanClient: ForemanLLMClient {
 
     func didUseLegacyPath() -> Bool {
         legacyCallCount == 1
+    }
+}
+
+private actor RecordingResponsesTransport: OpenAIResponsesTransport {
+    let payload: String
+    private(set) var lastRequest: OpenAIClient.Request?
+
+    init(payload: String) {
+        self.payload = payload
+    }
+
+    func send(_ request: OpenAIClient.Request, apiKey: String) async throws -> String {
+        lastRequest = request
+        return payload
     }
 }
 

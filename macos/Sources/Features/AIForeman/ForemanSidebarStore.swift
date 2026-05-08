@@ -14,12 +14,14 @@ struct TerminalSummaryRowModel: Identifiable, Equatable, Sendable {
     var evidenceSummary: String?
     var isFocused: Bool
     var suggestedActions: [TerminalSuggestedAction]
+    var pendingAttention: PendingAgentAttention?
     
     // NEW: Rich agent context for UX
     var agentContextType: String?
     var agentContextTitle: String?
     var agentContextDescription: String?
     var agentContextDetail: String?
+    var agentContextOptions: [String]?
 
     var id: String { terminalID }
 }
@@ -46,6 +48,77 @@ struct DispatchQueueItem: Identifiable, Equatable, Sendable {
         self.terminalID = terminalID
         self.message = message
         self.state = state
+    }
+}
+
+enum PendingAgentAttentionStatus: String, Equatable, Sendable {
+    case awaitingUser
+    case sending
+    case failed
+    case resolved
+}
+
+struct PendingAgentAction: Identifiable, Equatable, Sendable {
+    enum Style: String, Equatable, Sendable {
+        case primary
+        case secondary
+        case destructive
+    }
+
+    let id: String
+    let title: String
+    let payload: String
+    let style: Style
+
+    init(
+        id: String,
+        title: String,
+        payload: String,
+        style: Style = .secondary
+    ) {
+        self.id = id
+        self.title = title
+        self.payload = payload
+        self.style = style
+    }
+}
+
+struct PendingAgentAttention: Identifiable, Equatable, Sendable {
+    var id: String { "\(terminalID)|\(fingerprint)" }
+
+    let terminalID: String
+    let agentIdentity: AgentIdentity
+    let interactionState: AgentInteractionState
+    let fingerprint: String
+    var title: String
+    var description: String
+    var detail: String?
+    var actions: [PendingAgentAction]
+    var status: PendingAgentAttentionStatus
+    var errorMessage: String?
+
+    init(
+        terminalID: String,
+        agentIdentity: AgentIdentity,
+        interactionState: AgentInteractionState,
+        fingerprint: String,
+        title: String,
+        description: String,
+        detail: String? = nil,
+        actions: [PendingAgentAction],
+        status: PendingAgentAttentionStatus = .awaitingUser,
+        errorMessage: String? = nil
+    ) {
+        self.terminalID = terminalID
+        self.agentIdentity = agentIdentity
+        self.interactionState = interactionState
+        self.fingerprint = fingerprint
+        self.title = title
+        self.description = description
+        self.detail = detail
+        self.actions = actions
+        self.status = status
+        self.errorMessage = errorMessage
     }
 }
 
@@ -86,6 +159,7 @@ final class ForemanSidebarStore: ObservableObject {
     @Published var isGeneratingDrafts: Bool
     @Published var activityLog: [DispatchActivityLogEntry]
     @Published var lastActionMessage: String?
+    @Published private(set) var pendingAttentionByTerminalID: [String: PendingAgentAttention] = [:]
 
     // Agentic conversation state
     @Published var conversation: ForemanConversation
@@ -99,6 +173,7 @@ final class ForemanSidebarStore: ObservableObject {
     var onSkipAction: (() -> Void)?
     var onLaunchAgent: ((AgentIdentity) -> Void)?
     var onExecuteSuggestion: ((String, String) -> Void)?
+    var onExecutePendingAttentionAction: ((PendingAgentAttention, PendingAgentAction) -> Void)?
 
     private var cancellables = Set<AnyCancellable>()
 
@@ -149,6 +224,7 @@ final class ForemanSidebarStore: ObservableObject {
                     evidenceSummary: nil,
                     isFocused: true,
                     suggestedActions: [],
+                    pendingAttention: nil,
                     agentContextType: nil,
                     agentContextTitle: nil,
                     agentContextDescription: nil,
@@ -168,6 +244,29 @@ final class ForemanSidebarStore: ObservableObject {
                     suggestedActions: [
                         .init(title: "Review the approval request", command: nil, reason: "Run shell command: git push origin main", isRecommended: true)
                     ],
+                    pendingAttention: .init(
+                        terminalID: "term-2",
+                        agentIdentity: .kimi,
+                        interactionState: .waitingApproval,
+                        fingerprint: "preview-approval",
+                        title: "Kimi needs approval",
+                        description: "Run shell command: git push origin main",
+                        detail: "Shell",
+                        actions: [
+                            .init(
+                                id: "approve",
+                                title: "Approve",
+                                payload: "y",
+                                style: .primary
+                            ),
+                            .init(
+                                id: "deny",
+                                title: "Deny",
+                                payload: "n",
+                                style: .secondary
+                            )
+                        ]
+                    ),
                     agentContextType: "waitingApproval",
                     agentContextTitle: "Needs your approval",
                     agentContextDescription: "Run shell command: git push origin main",
@@ -208,6 +307,10 @@ final class ForemanSidebarStore: ObservableObject {
         onSendChatMessage?(text)
     }
 
+    var visibleConversationMessages: [ConversationMessage] {
+        conversation.visibleMessages(selectedTerminalID: selectedTerminalID)
+    }
+
     func stopAgent() {
         isAgentRunning = false
         onStopAgent?()
@@ -225,11 +328,65 @@ final class ForemanSidebarStore: ObservableObject {
         onExecuteSuggestion?(terminalID, command)
     }
 
+    func upsertPendingAttention(_ attention: PendingAgentAttention) {
+        DebugLogger.log("[ForemanSidebarStore] upsertPendingAttention terminal=\(attention.terminalID.prefix(8)) fingerprint='\(attention.fingerprint)' title='\(attention.title)' actions=\(attention.actions.count)")
+        pendingAttentionByTerminalID[attention.terminalID] = attention
+        updateTerminalRowPendingAttention(terminalID: attention.terminalID)
+        selectedTerminalID = attention.terminalID
+        showSidebar()
+        DebugLogger.log("[ForemanSidebarStore] upsertPendingAttention complete terminal=\(attention.terminalID.prefix(8)) selected=\(selectedTerminalID ?? "nil") visible=\(isSidebarVisible) rowHasAttention=\(terminalRows.first(where: { $0.terminalID == attention.terminalID })?.pendingAttention != nil)")
+    }
+
+    func markPendingAttentionSending(terminalID: String, fingerprint: String) {
+        updatePendingAttention(terminalID: terminalID, fingerprint: fingerprint) { attention in
+            attention.status = .sending
+            attention.errorMessage = nil
+        }
+    }
+
+    func markPendingAttentionFailed(terminalID: String, fingerprint: String, errorMessage: String) {
+        updatePendingAttention(terminalID: terminalID, fingerprint: fingerprint) { attention in
+            attention.status = .failed
+            attention.errorMessage = errorMessage
+        }
+    }
+
+    func resolvePendingAttention(terminalID: String, fingerprint: String) {
+        guard pendingAttentionByTerminalID[terminalID]?.fingerprint == fingerprint else {
+            return
+        }
+
+        pendingAttentionByTerminalID.removeValue(forKey: terminalID)
+        updateTerminalRowPendingAttention(terminalID: terminalID)
+    }
+
+    func executePendingAttentionAction(terminalID: String, actionID: String) {
+        guard let attention = pendingAttentionByTerminalID[terminalID],
+              let action = attention.actions.first(where: { $0.id == actionID }) else {
+            return
+        }
+
+        executePendingAttentionAction(attention, action: action)
+    }
+
+    func executePendingAttentionAction(_ attention: PendingAgentAttention, action: PendingAgentAction) {
+        guard pendingAttentionByTerminalID[attention.terminalID] == attention else {
+            return
+        }
+
+        onExecutePendingAttentionAction?(attention, action)
+    }
+
     func applySnapshots(
         _ snapshots: [TerminalSnapshot],
         summariesByTerminalID: [String: TerminalSummary] = [:],
         understandingsByTerminalID: [String: TerminalUnderstanding] = [:]
     ) {
+        reconcilePendingAttention(
+            snapshots: snapshots,
+            understandingsByTerminalID: understandingsByTerminalID
+        )
+
         terminalRows = snapshots.map { snapshot in
             if let understanding = understandingsByTerminalID[snapshot.terminalID] {
                 let context = understanding.agentInteractionContext
@@ -245,10 +402,12 @@ final class ForemanSidebarStore: ObservableObject {
                     evidenceSummary: understanding.evidence.first?.source.rawValue,
                     isFocused: snapshot.isFocused,
                     suggestedActions: understanding.suggestedNextActions,
+                    pendingAttention: pendingAttentionByTerminalID[snapshot.terminalID],
                     agentContextType: context.typeString,
                     agentContextTitle: context.titleString,
                     agentContextDescription: context.descriptionString,
-                    agentContextDetail: context.detailString
+                    agentContextDetail: context.detailString,
+                    agentContextOptions: context.optionsArray
                 )
             }
 
@@ -265,6 +424,7 @@ final class ForemanSidebarStore: ObservableObject {
                     evidenceSummary: nil,
                     isFocused: snapshot.isFocused,
                     suggestedActions: [],
+                    pendingAttention: pendingAttentionByTerminalID[snapshot.terminalID],
                     agentContextType: nil,
                     agentContextTitle: nil,
                     agentContextDescription: nil,
@@ -284,6 +444,7 @@ final class ForemanSidebarStore: ObservableObject {
                 evidenceSummary: nil,
                 isFocused: snapshot.isFocused,
                 suggestedActions: [],
+                pendingAttention: pendingAttentionByTerminalID[snapshot.terminalID],
                 agentContextType: nil,
                 agentContextTitle: nil,
                 agentContextDescription: nil,
@@ -306,6 +467,45 @@ final class ForemanSidebarStore: ObservableObject {
         }
 
         selectedTerminalID = nextPendingTerminalID ?? waitingTerminalID ?? focusedTerminalID ?? firstTerminalID
+    }
+
+    private func reconcilePendingAttention(
+        snapshots: [TerminalSnapshot],
+        understandingsByTerminalID: [String: TerminalUnderstanding]
+    ) {
+        let activeTerminalIDs = Set(snapshots.map(\.terminalID))
+
+        pendingAttentionByTerminalID = pendingAttentionByTerminalID.filter { terminalID, attention in
+            guard activeTerminalIDs.contains(terminalID) else {
+                return false
+            }
+
+            guard let understanding = understandingsByTerminalID[terminalID] else {
+                return true
+            }
+
+            return Self.pendingAttentionIsStillRelevant(attention, for: understanding)
+        }
+    }
+
+    private static func pendingAttentionIsStillRelevant(
+        _ attention: PendingAgentAttention,
+        for understanding: TerminalUnderstanding
+    ) -> Bool {
+        guard understanding.agentIdentity == attention.agentIdentity else {
+            return false
+        }
+
+        guard understanding.agentInteractionState == attention.interactionState else {
+            return false
+        }
+
+        switch understanding.agentInteractionState {
+        case .waitingApproval, .waitingChoice, .waitingText, .error:
+            return true
+        case .unknown, .running, .completed:
+            return false
+        }
     }
 
     func applyDispatchPlan(
@@ -401,6 +601,29 @@ final class ForemanSidebarStore: ObservableObject {
         agentReadiness = ManagedAgentRegistry.supportedAgents.map { agent in
             (agent.identity, ManagedAgentRegistry.readiness(for: agent.identity))
         }
+    }
+
+    private func updatePendingAttention(
+        terminalID: String,
+        fingerprint: String,
+        mutate: (inout PendingAgentAttention) -> Void
+    ) {
+        guard var attention = pendingAttentionByTerminalID[terminalID],
+              attention.fingerprint == fingerprint else {
+            return
+        }
+
+        mutate(&attention)
+        pendingAttentionByTerminalID[terminalID] = attention
+        updateTerminalRowPendingAttention(terminalID: terminalID)
+    }
+
+    private func updateTerminalRowPendingAttention(terminalID: String) {
+        guard let index = terminalRows.firstIndex(where: { $0.terminalID == terminalID }) else {
+            return
+        }
+
+        terminalRows[index].pendingAttention = pendingAttentionByTerminalID[terminalID]
     }
 
     private static func snapshotState(for snapshot: TerminalSnapshot) -> String {

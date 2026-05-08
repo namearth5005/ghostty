@@ -18,6 +18,10 @@ struct KimiWireMessage: Codable, Equatable, Sendable {
 // MARK: - Wire Payload
 
 struct KimiWirePayload: Codable, Equatable, Sendable {
+    // ContentPart payloads
+    let type: String?
+    let text: String?
+
     // Event payloads
     let user_input: [ContentPart]?
     let n: Int?                          // StepBegin
@@ -47,6 +51,8 @@ struct KimiWirePayload: Codable, Equatable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case user_input
+        case type
+        case text
         case n
         case context_usage
         case context_tokens
@@ -65,6 +71,52 @@ struct KimiWirePayload: Codable, Equatable, Sendable {
         case finish_reason
         case code
         case message
+    }
+
+    init(
+        user_input: [ContentPart]? = nil,
+        n: Int? = nil,
+        context_usage: Double? = nil,
+        context_tokens: Int? = nil,
+        max_context_tokens: Int? = nil,
+        plan_mode: Bool? = nil,
+        id: String? = nil,
+        tool_call_id: String? = nil,
+        sender: String? = nil,
+        action: String? = nil,
+        description: String? = nil,
+        display: [DisplayBlock]? = nil,
+        questions: [QuestionItem]? = nil,
+        name: String? = nil,
+        arguments: String? = nil,
+        content: String? = nil,
+        finish_reason: String? = nil,
+        code: String? = nil,
+        message: String? = nil,
+        type: String? = nil,
+        text: String? = nil
+    ) {
+        self.user_input = user_input
+        self.n = n
+        self.context_usage = context_usage
+        self.context_tokens = context_tokens
+        self.max_context_tokens = max_context_tokens
+        self.plan_mode = plan_mode
+        self.id = id
+        self.tool_call_id = tool_call_id
+        self.sender = sender
+        self.action = action
+        self.description = description
+        self.display = display
+        self.questions = questions
+        self.name = name
+        self.arguments = arguments
+        self.content = content
+        self.finish_reason = finish_reason
+        self.code = code
+        self.message = message
+        self.type = type
+        self.text = text
     }
 }
 

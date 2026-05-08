@@ -117,7 +117,9 @@ struct AnthropicClient: ForemanLLMClient, Sendable {
         let mode = await MainActor.run { conversation.mode.rawValue }
         let iterationCount = await MainActor.run { conversation.iterationCount }
         let messages = await MainActor.run { conversation.messages }
+        let hiddenContext = await MainActor.run { conversation.hiddenContext }
         let latestUserMessage = messages.last(where: { $0.role == .user })?.content ?? goal
+        let activeTurn = latestUserMessage.isEmpty ? hiddenContext.last ?? "" : latestUserMessage
 
         let request = Request(
             model: plannerModel,
@@ -126,9 +128,11 @@ struct AnthropicClient: ForemanLLMClient, Sendable {
             messages: [.user(Self.agentStepPrompt(
                 goal: goal,
                 latestUserMessage: latestUserMessage,
+                activeTurn: activeTurn,
                 mode: mode,
                 iterationCount: iterationCount,
                 messages: messages,
+                hiddenContext: hiddenContext,
                 understandings: understandings,
                 overview: overview,
                 terminals: terminals,
@@ -190,10 +194,18 @@ extension AnthropicClient {
         Available action types (use exact snake_case strings): respond, send_command, ask_user, declare_complete, declare_stuck.
         Treat the latest user message as the active turn. Earlier goal text is session context only and may be superseded by a follow-up.
         Use structured terminal understanding as your primary context. Use raw terminal snapshots only as supporting evidence.
+        Treat Active turn as the current task. If Active turn is a reactive terminal event, handle that event as the current task.
         Use respond for plain conversational replies that do not require terminal actions or a blocking follow-up.
         Use ask_user only when you genuinely need information from the user before you can continue a task.
         For send_command, terminal_id must exactly match one of the terminal_id values from Terminal snapshots.
         When sending commands, prefer non-interactive flags (e.g., -y, --no-pager, --batch-mode) to avoid hanging.
+        IMPORTANT: Some terminals are running AI agents (Kimi, Claude Code, Codex), not shell prompts.
+        When an AI agent is waiting for text input (waitingText), send_command sends a raw message to the agent — NOT a shell command.
+        Do NOT wrap agent messages in printf, echo, or any shell syntax. Send the raw text only.
+        Do NOT echo text you see in the terminal output back to the agent.
+        When an AI agent is waiting for text input, read the full terminal output to understand the conversation history and infer the user's goal.
+        If the context is clear from the terminal history, generate an appropriate response directly.
+        Only ask the user if the terminal history does not provide enough context to determine what to send next.
         """
     }
 
@@ -243,9 +255,11 @@ extension AnthropicClient {
     private static func agentStepPrompt(
         goal: String,
         latestUserMessage: String,
+        activeTurn: String,
         mode: String,
         iterationCount: Int,
         messages: [ConversationMessage],
+        hiddenContext: [String],
         understandings: [TerminalUnderstanding],
         overview: TerminalOverview,
         terminals: [TerminalSnapshot],
@@ -270,11 +284,16 @@ extension AnthropicClient {
 
         Session goal: \(goal)
         Latest user message: \(latestUserMessage)
+        Active turn: \(activeTurn.isEmpty ? "none" : activeTurn)
+        If Active turn is a reactive terminal event, handle that event as the current task.
         Mode: \(mode)
         Iteration: \(iterationCount)/20
 
         Conversation history:
         \(encode(messages, using: encoder))
+
+        Hidden reactive context:
+        \(encode(hiddenContext, using: encoder))
 
         Structured terminal overview:
         \(encode(overview, using: encoder))

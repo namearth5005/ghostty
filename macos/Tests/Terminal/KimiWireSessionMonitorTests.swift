@@ -186,6 +186,80 @@ struct KimiWireSessionMonitorTests {
         let empty = monitor.records()
         #expect(empty.isEmpty)
     }
+
+    @Test
+    func globalScanIgnoresWireFilesOlderThanMonitorStart() throws {
+        let baseDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("kimi-sessions-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: baseDir) }
+
+        let startDate = Date()
+        let wirePath = try writeKimiWire(
+            baseDir: baseDir,
+            modifiedAt: startDate.addingTimeInterval(-60),
+            messageType: "StepBegin",
+            payload: #"{"n":1}"#
+        )
+        #expect(FileManager.default.fileExists(atPath: wirePath.path))
+
+        let monitor = KimiWireSessionMonitor(
+            workingDirectory: "",
+            sessionsBaseDirectory: baseDir,
+            now: { startDate }
+        )
+        monitor.start()
+        defer { monitor.stop() }
+        monitor.poll()
+
+        #expect(monitor.records().isEmpty)
+    }
+
+    @Test
+    func globalScanAcceptsWireFilesCreatedAfterMonitorStart() throws {
+        let baseDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("kimi-sessions-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: baseDir) }
+
+        var now = Date()
+        let monitor = KimiWireSessionMonitor(
+            workingDirectory: "",
+            sessionsBaseDirectory: baseDir,
+            now: { now }
+        )
+        monitor.start()
+        defer { monitor.stop() }
+
+        now = now.addingTimeInterval(1)
+        _ = try writeKimiWire(
+            baseDir: baseDir,
+            modifiedAt: now,
+            messageType: "StepBegin",
+            payload: #"{"n":1}"#
+        )
+
+        monitor.poll()
+
+        #expect(monitor.records().count == 1)
+        #expect(monitor.records().first?.message.type == "StepBegin")
+    }
+}
+
+private func writeKimiWire(
+    baseDir: URL,
+    modifiedAt: Date,
+    messageType: String,
+    payload: String
+) throws -> URL {
+    let sessionDir = baseDir
+        .appendingPathComponent(UUID().uuidString.replacingOccurrences(of: "-", with: ""))
+        .appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: sessionDir, withIntermediateDirectories: true)
+
+    let wirePath = sessionDir.appendingPathComponent("wire.jsonl")
+    let json = #"{"timestamp":1,"message":{"type":"\#(messageType)","payload":\#(payload)}}"# + "\n"
+    try json.write(to: wirePath, atomically: true, encoding: .utf8)
+    try FileManager.default.setAttributes([.modificationDate: modifiedAt], ofItemAtPath: wirePath.path)
+    return wirePath
 }
 
 struct WireRecordsOutrankHeuristicsTests {
