@@ -375,6 +375,11 @@ actor ForemanAgent {
                 )
             }
 
+            if let runningAgent = runningAgentWithoutAttention(in: understandings) {
+                await pauseUntilAgentNeedsAttention(runningAgent)
+                break
+            }
+
             // 2. Plan (with delta-truncated terminal text to keep LLM context small)
             await setStatus(.planning)
             let response = try await foremanService.agentStep(
@@ -622,6 +627,11 @@ actor ForemanAgent {
             )
         }
 
+        if let runningAgent = runningAgentWithoutAttention(in: understandings) {
+            await pauseUntilAgentNeedsAttention(runningAgent)
+            return
+        }
+
         // Plan
         await setStatus(.planning)
         let response = try await foremanService.agentStep(
@@ -672,6 +682,31 @@ actor ForemanAgent {
                 runtime: terminal.runtime,
                 signals: terminal.signals
             )
+        }
+    }
+
+    private func runningAgentWithoutAttention(in understandings: [TerminalUnderstanding]) -> TerminalUnderstanding? {
+        let agentUnderstandings = understandings.filter { $0.agentIdentity != .none }
+        guard !agentUnderstandings.contains(where: Self.needsHumanAttention) else {
+            return nil
+        }
+        return agentUnderstandings.first { $0.agentInteractionState == .running }
+    }
+
+    private static func needsHumanAttention(_ understanding: TerminalUnderstanding) -> Bool {
+        switch understanding.agentInteractionState {
+        case .waitingApproval, .waitingChoice, .waitingText, .error:
+            return true
+        case .unknown, .running, .completed:
+            return false
+        }
+    }
+
+    private func pauseUntilAgentNeedsAttention(_ understanding: TerminalUnderstanding) async {
+        DebugLogger.log("[ForemanAgent] deferring plan while \(understanding.agentIdentity) terminal=\(understanding.terminalID.prefix(8)) is running")
+        await MainActor.run {
+            conversation.setStatus(.idle)
+            conversation.isRunning = false
         }
     }
 }

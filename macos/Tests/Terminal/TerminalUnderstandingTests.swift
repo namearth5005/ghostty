@@ -4,6 +4,44 @@ import Testing
 
 struct TerminalUnderstandingTests {
     @Test
+    func engineKeepsKimiIdentityWhenOutputMentionsClaudeCode() {
+        let engine = TerminalUnderstandingEngine()
+        let snapshot = TerminalSnapshot.makePreview(
+            terminalID: "term-kimi",
+            windowID: "win-1",
+            tabID: "tab-1",
+            title: "Kimi Code",
+            cwd: "/Users/nambouchara/speed2",
+            isFocused: true,
+            visibleText: """
+            Kimi is analyzing how this project can work with Claude Code, ChatGPT, and Cursor.
+
+            What do you want to do?
+
+            ❯ 1. Keep the core clinical content as provider-agnostic files
+              2. Create different adapters for each platform
+
+            agent (Kimi-k2.6 *) ~/speed2
+            """,
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessName: "kimi",
+            cursorIsAtPrompt: true,
+            usingAlternateScreen: true
+        )
+
+        let understanding = engine.understand(
+            current: snapshot,
+            previous: nil,
+            lastOutcome: nil
+        )
+
+        #expect(understanding.agentIdentity == .kimi)
+        #expect(understanding.shortExplanation.contains("Kimi"))
+        #expect(!understanding.shortExplanation.contains("Claude Code"))
+    }
+
+    @Test
     func engineClassifiesCommandNotFoundAsFailedWithRankedSuggestions() {
         let engine = TerminalUnderstandingEngine()
         let snapshot = TerminalSnapshot.makePreview(

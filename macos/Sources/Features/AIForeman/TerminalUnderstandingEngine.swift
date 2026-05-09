@@ -2,9 +2,9 @@ import Foundation
 
 struct TerminalUnderstandingEngine {
     private let adapters: [any TerminalAgentAdapter] = [
-        ClaudeCodeTerminalAdapter(),
-        CodexTerminalAdapter(),
         KimiTerminalAdapter(),
+        CodexTerminalAdapter(),
+        ClaudeCodeTerminalAdapter(),
     ]
 
     func understand(
@@ -656,10 +656,7 @@ private struct AgentClassification {
 
 private struct ClaudeCodeTerminalAdapter: TerminalAgentAdapter {
     func detect(current: TerminalSnapshot, previous: TerminalSnapshot?) -> AgentIdentity? {
-        guard current.matchesAgent(
-            primaryMarkers: ["claude code", "claude"],
-            visibleMarkers: ["claude code"]
-        ) else { return nil }
+        guard AgentTerminalMatcher.matches(current, identity: .claudeCode) else { return nil }
         return .claudeCode
     }
 
@@ -683,10 +680,7 @@ private struct ClaudeCodeTerminalAdapter: TerminalAgentAdapter {
 
 private struct CodexTerminalAdapter: TerminalAgentAdapter {
     func detect(current: TerminalSnapshot, previous: TerminalSnapshot?) -> AgentIdentity? {
-        guard current.matchesAgent(
-            primaryMarkers: ["openai codex", "codex"],
-            visibleMarkers: ["openai codex"]
-        ) else { return nil }
+        guard AgentTerminalMatcher.matches(current, identity: .codex) else { return nil }
         return .codex
     }
 
@@ -710,10 +704,7 @@ private struct CodexTerminalAdapter: TerminalAgentAdapter {
 
 private struct KimiTerminalAdapter: TerminalAgentAdapter {
     func detect(current: TerminalSnapshot, previous: TerminalSnapshot?) -> AgentIdentity? {
-        guard current.matchesAgent(
-            primaryMarkers: ["kimi code", "kimi"],
-            visibleMarkers: ["welcome to kimi code cli", "agent (kimi"]
-        ) else { return nil }
+        guard AgentTerminalMatcher.matches(current, identity: .kimi) else { return nil }
         return .kimi
     }
 
@@ -870,23 +861,4 @@ private func looksLikeNumberedChoiceMenu(_ text: String) -> Bool {
 
 private func looksLikeQuestion(_ text: String) -> Bool {
     text.trimmingCharacters(in: .whitespacesAndNewlines).contains("?")
-}
-
-private extension TerminalSnapshot {
-    func matchesAgent(primaryMarkers: [String], visibleMarkers: [String]) -> Bool {
-        let primaryCandidates = [
-            runtime.foregroundProcessName?.lowercased(),
-            title.lowercased(),
-            lastInputPreview?.lowercased(),
-        ].compactMap { $0 }
-
-        if primaryCandidates.contains(where: { candidate in
-            primaryMarkers.contains(where: candidate.contains)
-        }) {
-            return true
-        }
-
-        let visible = visibleText.lowercased()
-        return visibleMarkers.contains(where: visible.contains)
-    }
 }

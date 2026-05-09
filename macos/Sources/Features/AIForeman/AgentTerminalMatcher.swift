@@ -34,7 +34,6 @@ enum AgentTerminalMatcher {
         let primaryCandidates = [
             snapshot.runtime.foregroundProcessName?.lowercased(),
             snapshot.title.lowercased(),
-            snapshot.lastInputPreview?.lowercased(),
         ].compactMap { $0 }
 
         if primaryCandidates.contains(where: { candidate in

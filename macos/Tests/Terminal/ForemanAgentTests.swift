@@ -113,6 +113,49 @@ struct ForemanAgentTests {
     }
 
     @Test
+    func approvedInteractiveCommandWaitsWhenTargetAgentIsStillRunning() async throws {
+        let conversation = await MainActor.run { ForemanConversation() }
+        let responses: [AgentStepResponse] = [
+            try makeStepResponse(
+                thought: "Need to ask Kimi to work.",
+                action: AgentAction.sendCommand(terminalID: "term-1", command: "finish the analysis", reason: "Ask Kimi to finish the analysis.")
+            ),
+            try makeStepResponse(
+                thought: "Should not be called while Kimi is still running.",
+                action: AgentAction.sendCommand(terminalID: "term-1", command: "do another thing", reason: "This would interrupt Kimi.")
+            ),
+        ]
+        let client = ScriptedForemanClient(responses: responses)
+        let commandRecorder = CommandRecorder()
+        let agent = makeAgent(
+            conversation: conversation,
+            client: client,
+            commandRecorder: commandRecorder
+        )
+
+        await agent.start(goal: "Finish the analysis", mode: AgentMode.interactive, captureSnapshots: sampleSnapshots)
+
+        try await waitForStatus(.waitingForUser, in: conversation)
+
+        await agent.approvePendingAction(captureSnapshots: runningKimiSnapshots)
+
+        try await waitFor {
+            let commands = await commandRecorder.recordedCommands()
+            return commands.count == 1 && commands[0].command == "finish the analysis"
+        }
+
+        try await Task.sleep(nanoseconds: 2_000_000_000)
+
+        let status = await MainActor.run { conversation.status }
+        let messages = await MainActor.run { conversation.messages }
+        let stepCalls = await client.agentStepCallCount()
+
+        #expect(stepCalls == 1)
+        #expect(status != .waitingForUser)
+        #expect(!messages.contains { $0.content.contains("This would interrupt Kimi.") })
+    }
+
+    @Test
     func followUpMessageAfterCompleteStartsANewLoop() async throws {
         let conversation = await MainActor.run { ForemanConversation() }
         let responses: [AgentStepResponse] = [
@@ -725,6 +768,31 @@ private func sampleSnapshots() -> [TerminalSnapshot] {
 }
 
 @MainActor
+private func runningKimiSnapshots() -> [TerminalSnapshot] {
+    [
+        TerminalSnapshot.makePreview(
+            terminalID: "term-1",
+            windowID: "win-1",
+            tabID: "tab-1",
+            title: "Kimi Code",
+            cwd: "/tmp/project",
+            isFocused: true,
+            visibleText: """
+            • The user asked me to finish the analysis. I am reading the project and preparing the final answer.
+            ⠋ Using WriteFile (mend/docs/generalization-analysis.md)
+
+            agent (Kimi-k2.6 *) ~/speed2
+            """,
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessName: "kimi",
+            cursorIsAtPrompt: false,
+            usingAlternateScreen: true
+        ),
+    ]
+}
+
+@MainActor
 private func failedFindSnapshots() -> [TerminalSnapshot] {
     [
         TerminalSnapshot.makePreview(
@@ -807,6 +875,7 @@ private actor ScriptedForemanClient: ForemanLLMClient {
     private var replyDrafts: [AgentReplyDraftResponse]
     private var understandingsLog: [[TerminalUnderstanding]] = []
     private var overviewsLog: [TerminalOverview] = []
+    private var stepCallCount = 0
 
     init(
         responses: [AgentStepResponse] = [],
@@ -831,6 +900,7 @@ private actor ScriptedForemanClient: ForemanLLMClient {
         overview: TerminalOverview,
         lastOutcome: TerminalOutcomeReport?
     ) async throws -> AgentStepResponse {
+        stepCallCount += 1
         understandingsLog.append(understandings)
         overviewsLog.append(overview)
         guard !responses.isEmpty else {
@@ -844,6 +914,7 @@ private actor ScriptedForemanClient: ForemanLLMClient {
         terminals: [TerminalSnapshot],
         lastOutcome: TerminalOutcomeReport?
     ) async throws -> AgentStepResponse {
+        stepCallCount += 1
         guard !responses.isEmpty else {
             throw ScriptedForemanClientError.missingResponse
         }
@@ -872,6 +943,10 @@ private actor ScriptedForemanClient: ForemanLLMClient {
 
     func recordedOverviews() -> [TerminalOverview] {
         overviewsLog
+    }
+
+    func agentStepCallCount() -> Int {
+        stepCallCount
     }
 }
 
