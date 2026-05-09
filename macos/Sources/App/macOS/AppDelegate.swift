@@ -1693,44 +1693,17 @@ extension AppDelegate {
 
     @MainActor
     private func snapshotIsKimi(_ snapshot: TerminalSnapshot) -> Bool {
-        let candidates = [
-            snapshot.runtime.foregroundProcessName?.lowercased(),
-            snapshot.title.lowercased(),
-            snapshot.visibleText.lowercased(),
-            snapshot.lastInputPreview?.lowercased(),
-        ].compactMap { $0 }
-        let markers = ["kimi code", "kimi"]
-        return candidates.contains { candidate in
-            markers.contains(where: candidate.contains)
-        }
+        AgentTerminalMatcher.matches(snapshot, identity: .kimi)
     }
 
     @MainActor
     private func snapshotIsCodex(_ snapshot: TerminalSnapshot) -> Bool {
-        let candidates = [
-            snapshot.runtime.foregroundProcessName?.lowercased(),
-            snapshot.title.lowercased(),
-            snapshot.visibleText.lowercased(),
-            snapshot.lastInputPreview?.lowercased(),
-        ].compactMap { $0 }
-        let markers = ["openai codex", "codex"]
-        return candidates.contains { candidate in
-            markers.contains(where: candidate.contains)
-        }
+        AgentTerminalMatcher.matches(snapshot, identity: .codex)
     }
 
     @MainActor
     private func snapshotIsClaude(_ snapshot: TerminalSnapshot) -> Bool {
-        let candidates = [
-            snapshot.runtime.foregroundProcessName?.lowercased(),
-            snapshot.title.lowercased(),
-            snapshot.visibleText.lowercased(),
-            snapshot.lastInputPreview?.lowercased(),
-        ].compactMap { $0 }
-        let markers = ["claude code", "claude"]
-        return candidates.contains { candidate in
-            markers.contains(where: candidate.contains)
-        }
+        AgentTerminalMatcher.matches(snapshot, identity: .claudeCode)
     }
 
     @MainActor
