@@ -258,7 +258,14 @@ actor ForemanAgent {
                 title: "Needs direction",
                 description: message.isEmpty ? "The agent is waiting for your direction." : message,
                 detail: reason.isEmpty ? event.deltaText : reason,
-                actions: []
+                actions: [
+                    .init(
+                        id: "recommend_next_step",
+                        title: "Ask Kimi to recommend next step",
+                        payload: Self.recommendNextStepPrompt,
+                        style: .primary
+                    ),
+                ]
             )
 
         case .noAction:
@@ -286,6 +293,8 @@ actor ForemanAgent {
         currentTask?.cancel()
         currentTask = nil
     }
+
+    private static let recommendNextStepPrompt = "Please inspect README.md and the current project structure, then suggest the most useful next task and explain why before making changes."
 
     private func shouldResumeAfterUserMessage() async -> Bool {
         await MainActor.run {

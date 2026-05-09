@@ -515,7 +515,7 @@ struct ForemanAgentTests {
     }
 
     @Test
-    func draftPendingAttentionForAskHumanShowsCardWithoutSendingAction() async throws {
+    func draftPendingAttentionForAskHumanShowsClickableFallbackAction() async throws {
         let conversation = await MainActor.run { ForemanConversation() }
         let client = ScriptedForemanClient(replyDrafts: [
             try makeReplyDraftResponse(
@@ -549,12 +549,16 @@ struct ForemanAgentTests {
         )
 
         let commands = await commandRecorder.recordedCommands()
+        let action = try #require(attention?.actions.first)
         #expect(commands.isEmpty)
         #expect(attention?.terminalID == "term-1")
         #expect(attention?.title == "Needs direction")
         #expect(attention?.description == "What should Kimi do in the mend directory?")
         #expect(attention?.detail == "Kimi is asking for the next task and Foreman has no active user goal.")
-        #expect(attention?.actions.isEmpty == true)
+        #expect(attention?.actions.count == 1)
+        #expect(action.title == "Ask Kimi to recommend next step")
+        #expect(action.payload == "Please inspect README.md and the current project structure, then suggest the most useful next task and explain why before making changes.")
+        #expect(action.style == .primary)
     }
 
     @Test
