@@ -806,6 +806,62 @@ struct ForemanAgentTests {
     }
 
     @Test
+    func draftPendingAttentionWithObservedContextKeepsLaunchPathParity() async throws {
+        let cases: [(terminalID: String, title: String, isFocused: Bool)] = [
+            ("kimi-observed-existing", "shell", true),
+            ("kimi-observed-new-tab", "nambouchara@Nams-MacBook-Pro:~", false),
+            ("kimi-observed-managed", "Kimi Code", false),
+        ]
+
+        var signatures: [PendingAttentionSignature] = []
+        var forwardedUnderstandings: [UnderstandingSignature] = []
+
+        for entry in cases {
+            let snapshots = kimiInputChromeSnapshots(
+                terminalID: entry.terminalID,
+                title: entry.title,
+                isFocused: entry.isFocused
+            )
+            let observedContext = kimiObservedWaitingTextContext(
+                terminalID: entry.terminalID,
+                snapshots: snapshots
+            )
+            let result = try await draftPendingAttentionCase(
+                snapshots: snapshots,
+                observedContext: observedContext,
+                event: AgentNeedsAttentionEvent(
+                    terminalID: entry.terminalID,
+                    agentIdentity: .kimi,
+                    interactionState: .waitingText,
+                    deltaText: "── input ──",
+                    timestamp: Date(timeIntervalSince1970: 1),
+                    fingerprint: "\(entry.terminalID)|kimi|waitingText|wire"
+                ),
+                replyDraft: try makeReplyDraftResponse(
+                    thought: "Kimi is waiting for a scoped next step.",
+                    suggestion: .replyToAgent(
+                        terminalID: entry.terminalID,
+                        message: "Summarize the repository first.",
+                        reason: "The current wire-aware question is specific enough to answer directly.",
+                        confidence: 1.0
+                    )
+                )
+            )
+
+            signatures.append(try #require(result.signature))
+            forwardedUnderstandings.append(try #require(result.understanding))
+        }
+
+        #expect(signatures.dropFirst().allSatisfy { $0 == signatures.first })
+        #expect(forwardedUnderstandings.dropFirst().allSatisfy { $0 == forwardedUnderstandings.first })
+        #expect(forwardedUnderstandings.first?.interactionContext == .waitingText(question: "What should I do here?"))
+        #expect(forwardedUnderstandings.first?.lastMeaningfulEvent == "What should I do here?")
+        #expect(signatures.first?.title == "Suggested reply")
+        #expect(signatures.first?.description == "The current wire-aware question is specific enough to answer directly.")
+        #expect(signatures.first?.actions.first?.title == "Summarize the repository first.")
+    }
+
+    @Test
     func draftPendingAttentionForKimiInputChromeReturnsNilAcrossLaunchPaths() async throws {
         let cases: [(terminalID: String, snapshots: [TerminalSnapshot])] = [
             ("kimi-input-existing", kimiInputChromeSnapshots(terminalID: "kimi-input-existing", title: "shell", isFocused: true)),
@@ -1022,6 +1078,51 @@ struct ForemanAgentTests {
         #expect(forwarded.lastMeaningfulEvent == "What should I do here?")
         let lastUnderstandings = await MainActor.run { conversation.lastUnderstandings }
         #expect(lastUnderstandings.first?.agentInteractionContext == .waitingText(question: "What should I do here?"))
+    }
+
+    @Test
+    func reactiveObservedContextKeepsLaunchPathParity() async throws {
+        let cases: [(terminalID: String, title: String, isFocused: Bool)] = [
+            ("kimi-reactive-existing", "shell", true),
+            ("kimi-reactive-new-tab", "nambouchara@Nams-MacBook-Pro:~", false),
+            ("kimi-reactive-managed", "Kimi Code", false),
+        ]
+
+        var forwardedUnderstandings: [UnderstandingSignature] = []
+
+        for entry in cases {
+            let snapshots = kimiInputChromeSnapshots(
+                terminalID: entry.terminalID,
+                title: entry.title,
+                isFocused: entry.isFocused
+            )
+            let observedContext = kimiObservedWaitingTextContext(
+                terminalID: entry.terminalID,
+                snapshots: snapshots
+            )
+            let result = try await reactiveIterationCase(
+                snapshots: snapshots,
+                observedContext: observedContext,
+                event: AgentNeedsAttentionEvent(
+                    terminalID: entry.terminalID,
+                    agentIdentity: .kimi,
+                    interactionState: .waitingText,
+                    deltaText: "── input ──",
+                    timestamp: Date(timeIntervalSince1970: 1),
+                    fingerprint: "\(entry.terminalID)|kimi|waitingText|wire"
+                ),
+                response: try makeStepResponse(
+                    thought: "The question is already clear from the structured context.",
+                    action: .respond(message: "Use the structured waiting question.")
+                )
+            )
+
+            forwardedUnderstandings.append(try #require(result.understanding))
+        }
+
+        #expect(forwardedUnderstandings.dropFirst().allSatisfy { $0 == forwardedUnderstandings.first })
+        #expect(forwardedUnderstandings.first?.interactionContext == .waitingText(question: "What should I do here?"))
+        #expect(forwardedUnderstandings.first?.lastMeaningfulEvent == "What should I do here?")
     }
 
     @Test
@@ -1319,6 +1420,46 @@ private func draftPendingAttentionCase(
     return (
         signature: pendingAttentionSignature(attention),
         understanding: understandingSignature(understandings.first?.first)
+    )
+}
+
+private func reactiveIterationCase(
+    snapshots: [TerminalSnapshot],
+    observedContext: ForemanObservedTerminalContext? = nil,
+    event: AgentNeedsAttentionEvent,
+    response: AgentStepResponse
+) async throws -> (
+    understanding: ForemanAgentTests.UnderstandingSignature?,
+    messages: [ConversationMessage]
+) {
+    let conversation = await MainActor.run { ForemanConversation() }
+    let client = ScriptedForemanClient(responses: [response])
+    let commandRecorder = CommandRecorder()
+    let agent = makeAgent(
+        conversation: conversation,
+        client: client,
+        commandRecorder: commandRecorder
+    )
+
+    await agent.react(
+        to: event,
+        observedContext: observedContext,
+        captureSnapshots: { snapshots }
+    )
+
+    try await waitFor {
+        let payloads = await client.recordedUnderstandings()
+        return !payloads.isEmpty
+    }
+
+    let commands = await commandRecorder.recordedCommands()
+    #expect(commands.isEmpty)
+    let understandings = await client.recordedUnderstandings()
+    let messages = await MainActor.run { conversation.messages }
+
+    return (
+        understanding: understandingSignature(understandings.first?.first),
+        messages: messages
     )
 }
 
