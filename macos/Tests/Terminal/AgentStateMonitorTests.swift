@@ -548,7 +548,7 @@ struct AgentStateMonitorTests {
     }
 
     @Test
-    func managedAndManualKimiWelcomeScreensDoNotFireAttentionEvents() {
+    func managedManualAndNewTabKimiWelcomeScreensDoNotFireAttentionEvents() {
         let monitor = AgentStateMonitor()
         var capturedEvents: [AgentNeedsAttentionEvent] = []
         monitor.onEvent = { event in
@@ -557,6 +557,19 @@ struct AgentStateMonitorTests {
 
         let manual = TerminalUnderstanding.preview(
             terminalID: "kimi-manual",
+            state: .waiting,
+            shortExplanation: "Kimi is waiting for your response.",
+            lastMeaningfulEvent: "Welcome to Kimi Code CLI!",
+            importantDetails: [
+                "Welcome to Kimi Code CLI!",
+                "Directory: /tmp/kimi",
+            ],
+            suggestedNextActions: [],
+            agentIdentity: .kimi,
+            agentInteractionState: .waitingText
+        )
+        let newTab = TerminalUnderstanding.preview(
+            terminalID: "kimi-new-tab",
             state: .waiting,
             shortExplanation: "Kimi is waiting for your response.",
             lastMeaningfulEvent: "Welcome to Kimi Code CLI!",
@@ -582,13 +595,13 @@ struct AgentStateMonitorTests {
             agentInteractionState: .waitingText
         )
 
-        monitor.observe(understandings: [manual, managed])
+        monitor.observe(understandings: [manual, newTab, managed])
 
         #expect(capturedEvents.isEmpty)
     }
 
     @Test
-    func managedAndManualCodexQuestionPromptsFireEquivalentAttentionEvents() {
+    func managedManualAndNewTabCodexQuestionPromptsFireEquivalentAttentionEvents() {
         let monitor = AgentStateMonitor()
         var capturedEvents: [AgentNeedsAttentionEvent] = []
         monitor.onEvent = { event in
@@ -597,6 +610,17 @@ struct AgentStateMonitorTests {
 
         let manual = TerminalUnderstanding.preview(
             terminalID: "codex-manual",
+            state: .waiting,
+            shortExplanation: "Codex is waiting for your response.",
+            lastMeaningfulEvent: "What should I work on next?",
+            importantDetails: ["What should I work on next?"],
+            suggestedNextActions: [],
+            agentIdentity: .codex,
+            agentInteractionState: .waitingText,
+            agentInteractionContext: .waitingText(question: "What should I work on next?")
+        )
+        let newTab = TerminalUnderstanding.preview(
+            terminalID: "codex-new-tab",
             state: .waiting,
             shortExplanation: "Codex is waiting for your response.",
             lastMeaningfulEvent: "What should I work on next?",
@@ -618,9 +642,9 @@ struct AgentStateMonitorTests {
             agentInteractionContext: .waitingText(question: "What should I work on next?")
         )
 
-        monitor.observe(understandings: [manual, managed])
+        monitor.observe(understandings: [manual, newTab, managed])
 
-        #expect(capturedEvents.count == 2)
+        #expect(capturedEvents.count == 3)
         #expect(capturedEvents.allSatisfy { $0.agentIdentity == .codex })
         #expect(capturedEvents.allSatisfy { $0.interactionState == .waitingText })
         #expect(Set(capturedEvents.map(\.deltaText)) == ["What should I work on next?"])
