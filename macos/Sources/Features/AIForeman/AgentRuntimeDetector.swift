@@ -5,6 +5,7 @@ struct AgentRuntimeDetector {
 
     private let identityDetector = AgentIdentityDetector()
     private let rawRuntimeDetector = AgentRawRuntimeDetector()
+    private let contextResolver = AgentInteractionContextResolver()
 
     struct Detection: Equatable, Sendable {
         let identity: AgentIdentity
@@ -59,40 +60,22 @@ struct AgentRuntimeDetector {
         codexWireRecords: [CodexWireRecord],
         claudeWireRecords: [ClaudeSessionState]
     ) -> Detection? {
-        switch identity {
-        case .kimi:
-            guard let context = kimiWireRecords
-                .lazy
-                .reversed()
-                .compactMap(\.asAgentInteractionContext)
-                .first else {
-                return nil
-            }
-            return detection(identity: identity, state: State(context: context), detail: "Kimi wire state", source: .wireSignal, confidence: 0.98)
-
-        case .codex:
-            guard let context = codexWireRecords
-                .lazy
-                .reversed()
-                .compactMap(\.asAgentInteractionContext)
-                .first else {
-                return nil
-            }
-            return detection(identity: identity, state: State(context: context), detail: "Codex wire state", source: .wireSignal, confidence: 0.98)
-
-        case .claudeCode:
-            guard let context = claudeWireRecords
-                .lazy
-                .reversed()
-                .compactMap(\.asAgentInteractionContext)
-                .first else {
-                return nil
-            }
-            return detection(identity: identity, state: State(context: context), detail: "Claude session state", source: .wireSignal, confidence: 0.98)
-
-        case .none, .unknown:
+        guard let resolved = contextResolver.resolve(
+            identity: identity,
+            kimiWireRecords: kimiWireRecords,
+            codexWireRecords: codexWireRecords,
+            claudeWireRecords: claudeWireRecords
+        ) else {
             return nil
         }
+
+        return detection(
+            identity: identity,
+            state: State(context: resolved.context),
+            detail: resolved.detail,
+            source: .wireSignal,
+            confidence: 0.98
+        )
     }
 
     private func detection(

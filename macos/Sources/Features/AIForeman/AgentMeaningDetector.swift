@@ -11,6 +11,7 @@ struct AgentMeaningDetector {
     }
 
     private let runtimeDetector = AgentRuntimeDetector()
+    private let contextResolver = AgentInteractionContextResolver()
 
     func detect(
         current: TerminalSnapshot,
@@ -41,27 +42,16 @@ struct AgentMeaningDetector {
             return approvalDetection
         }
 
-        if identity == .kimi, !wireRecords.isEmpty,
-           let wireDetection = detectFromKimiWireRecords(
-               identity: identity,
-               wireRecords: wireRecords
-           ) {
-            return wireDetection
-        }
-
-        if identity == .codex, !codexWireRecords.isEmpty,
-           let wireDetection = detectFromCodexWireRecords(
-               identity: identity,
-               wireRecords: codexWireRecords
-           ) {
-            return wireDetection
-        }
-
-        if identity == .claudeCode, !claudeWireRecords.isEmpty,
-           let wireDetection = detectFromClaudeWireRecords(
-               identity: identity,
-               wireRecords: claudeWireRecords
-           ) {
+        if let resolvedContext = contextResolver.resolve(
+            identity: identity,
+            kimiWireRecords: wireRecords,
+            codexWireRecords: codexWireRecords,
+            claudeWireRecords: claudeWireRecords
+        ), let wireDetection = detectionFromContext(
+            identity: identity,
+            context: resolvedContext.context,
+            detail: resolvedContext.detail
+        ) {
             return wireDetection
         }
 
@@ -149,91 +139,6 @@ struct AgentMeaningDetector {
             supportLevel: .firstClass,
             evidence: [.init(source: .screenHeuristic, detail: "Kimi shell approval UI detected on screen", confidence: 0.95)],
             context: .waitingApproval(description: lastEvent, tool: nil)
-        )
-    }
-
-    private func detectFromKimiWireRecords(
-        identity: AgentIdentity,
-        wireRecords: [KimiWireRecord]
-    ) -> Detection? {
-        guard let record = wireRecords.lazy.reversed().compactMap({ record -> KimiWireRecord? in
-            record.asAgentInteractionContext != nil ? record : nil
-        }).first,
-        let context = record.asAgentInteractionContext else {
-            return nil
-        }
-
-        let enrichedContext = enrichKimiWireContext(context, from: wireRecords)
-        return detectionFromContext(
-            identity: identity,
-            context: enrichedContext,
-            detail: "Wire record: \(record.message.type)"
-        )
-    }
-
-    private func enrichKimiWireContext(
-        _ context: AgentInteractionContext,
-        from wireRecords: [KimiWireRecord]
-    ) -> AgentInteractionContext {
-        guard case .waitingText(let question) = context,
-              question?.isEmpty ?? true,
-              let wireQuestion = latestKimiTextQuestion(from: wireRecords) else {
-            return context
-        }
-
-        return .waitingText(question: wireQuestion)
-    }
-
-    private func latestKimiTextQuestion(from wireRecords: [KimiWireRecord]) -> String? {
-        for record in wireRecords.reversed() where record.message.type == "ContentPart" {
-            guard let text = record.message.payload.text ?? record.message.payload.content else {
-                continue
-            }
-
-            if let question = text
-                .split(separator: "\n")
-                .map({ String($0).trimmingCharacters(in: .whitespacesAndNewlines) })
-                .last(where: { !$0.isEmpty && $0.contains("?") }) {
-                return question
-            }
-        }
-
-        return nil
-    }
-
-    private func detectFromCodexWireRecords(
-        identity: AgentIdentity,
-        wireRecords: [CodexWireRecord]
-    ) -> Detection? {
-        guard let record = wireRecords.lazy.reversed().compactMap({ record -> CodexWireRecord? in
-            record.asAgentInteractionContext != nil ? record : nil
-        }).first,
-        let context = record.asAgentInteractionContext else {
-            return nil
-        }
-
-        return detectionFromContext(
-            identity: identity,
-            context: context,
-            detail: "Codex wire: \(record.payload.type ?? record.type)"
-        )
-    }
-
-    private func detectFromClaudeWireRecords(
-        identity: AgentIdentity,
-        wireRecords: [ClaudeSessionState]
-    ) -> Detection? {
-        guard let pair = wireRecords.lazy.reversed().compactMap({ state -> (ClaudeSessionState, AgentInteractionContext)? in
-            guard let context = state.asAgentInteractionContext else { return nil }
-            return (state, context)
-        }).first else {
-            return nil
-        }
-
-        return detectionFromContext(
-            identity: identity,
-            context: pair.1,
-            detail: "Claude status: \(pair.0.status ?? "unknown")"
         )
     }
 
