@@ -855,6 +855,58 @@ struct AgentStateMonitorTests {
     }
 
     @Test
+    func managedManualAndNewTabClaudeApprovalPromptsFireEquivalentAttentionEvents() {
+        let monitor = AgentStateMonitor()
+        var capturedEvents: [AgentNeedsAttentionEvent] = []
+        monitor.onEvent = { event in
+            capturedEvents.append(event)
+        }
+
+        let prompt = "Run the suggested command? [y/n]"
+        let details = [prompt]
+        let manual = TerminalUnderstanding.preview(
+            terminalID: "claude-approval-manual",
+            state: .waiting,
+            shortExplanation: "Claude Code is waiting for approval.",
+            lastMeaningfulEvent: prompt,
+            importantDetails: details,
+            suggestedNextActions: [],
+            agentIdentity: .claudeCode,
+            agentInteractionState: .waitingApproval,
+            agentInteractionContext: .waitingApproval(description: "Claude wants to run the suggested command.", tool: "Shell")
+        )
+        let newTab = TerminalUnderstanding.preview(
+            terminalID: "claude-approval-new-tab",
+            state: .waiting,
+            shortExplanation: "Claude Code is waiting for approval.",
+            lastMeaningfulEvent: prompt,
+            importantDetails: details,
+            suggestedNextActions: [],
+            agentIdentity: .claudeCode,
+            agentInteractionState: .waitingApproval,
+            agentInteractionContext: .waitingApproval(description: "Claude wants to run the suggested command.", tool: "Shell")
+        )
+        let managed = TerminalUnderstanding.preview(
+            terminalID: "claude-approval-managed",
+            state: .waiting,
+            shortExplanation: "Claude Code is waiting for approval.",
+            lastMeaningfulEvent: prompt,
+            importantDetails: details,
+            suggestedNextActions: [],
+            agentIdentity: .claudeCode,
+            agentInteractionState: .waitingApproval,
+            agentInteractionContext: .waitingApproval(description: "Claude wants to run the suggested command.", tool: "Shell")
+        )
+
+        monitor.observe(understandings: [manual, newTab, managed])
+
+        #expect(capturedEvents.count == 3)
+        #expect(capturedEvents.allSatisfy { $0.agentIdentity == .claudeCode })
+        #expect(capturedEvents.allSatisfy { $0.interactionState == .waitingApproval })
+        #expect(Set(capturedEvents.map(\.deltaText)) == [prompt])
+    }
+
+    @Test
     func managedManualAndNewTabClaudeTrustPromptsFireEquivalentAttentionEvents() {
         let monitor = AgentStateMonitor()
         var capturedEvents: [AgentNeedsAttentionEvent] = []

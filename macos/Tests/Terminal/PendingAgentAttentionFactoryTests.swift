@@ -61,6 +61,27 @@ struct PendingAgentAttentionFactoryTests {
     }
 
     @Test
+    func claudeApprovalAttentionKeepsManagedLaunchParity() throws {
+        let signatures = try claudeApprovalCases().map { entry in
+            let attention = try #require(
+                PendingAgentAttentionFactory.make(from: entry.event, understanding: entry.understanding)
+            )
+            return paritySignature(attention)
+        }
+        let firstSignature = try #require(signatures.first)
+
+        #expect(signatures.count == 3)
+        #expect(signatures.dropFirst().allSatisfy { $0 == firstSignature })
+        #expect(firstSignature.title == "Needs your approval")
+        #expect(firstSignature.description == "Claude wants to run the suggested command.")
+        #expect(firstSignature.detail == "Shell")
+        #expect(firstSignature.actions == [
+            PendingAgentAction(id: "approve", title: "Approve", payload: "y", style: .primary),
+            PendingAgentAction(id: "reject", title: "Reject", payload: "n", style: .destructive),
+        ])
+    }
+
+    @Test
     func claudeChoiceAttentionKeepsManagedLaunchParity() throws {
         let signatures = try claudeChoiceCases().map { entry in
             let attention = try #require(
@@ -107,6 +128,15 @@ struct PendingAgentAttentionFactoryTests {
         makeApprovalCases(
             agentIdentity: .codex,
             description: "Codex wants to run the suggested command.",
+            tool: "Shell",
+            deltaText: "Run the suggested command? [y/n]"
+        )
+    }
+
+    private func claudeApprovalCases() -> [AttentionCase] {
+        makeApprovalCases(
+            agentIdentity: .claudeCode,
+            description: "Claude wants to run the suggested command.",
             tool: "Shell",
             deltaText: "Run the suggested command? [y/n]"
         )
