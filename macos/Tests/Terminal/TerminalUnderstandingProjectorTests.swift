@@ -1,0 +1,212 @@
+import Foundation
+import Testing
+@testable import Ghostty
+
+struct TerminalUnderstandingProjectorTests {
+    private let projector = TerminalUnderstandingProjector()
+
+    private struct ProjectionParitySignature: Equatable {
+        let state: TerminalUnderstandingState
+        let agentIdentity: AgentIdentity
+        let interactionState: AgentInteractionState
+        let shortExplanation: String
+        let importantDetails: [String]
+        let suggestedNextActions: [TerminalSuggestedAction]
+        let agentInteractionContext: AgentInteractionContext
+    }
+
+    @Test
+    func approvalProjectionUsesApprovalExplanationAndSuggestions() {
+        let snapshot = TerminalSnapshot.makePreview(
+            terminalID: "kimi-term",
+            windowID: "win-1",
+            tabID: "tab-1",
+            title: "shell",
+            cwd: "/tmp/project",
+            isFocused: true,
+            visibleText: "Shell is requesting approval to run command",
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessName: "kimi",
+            cursorIsAtPrompt: false,
+            usingAlternateScreen: true
+        )
+        let classification = AgentMeaningDetector.Detection(
+            identity: .kimi,
+            interactionState: .waitingApproval,
+            runtimeState: .blocked,
+            supportLevel: .firstClass,
+            evidence: [.init(source: .screenHeuristic, detail: "approval UI", confidence: 1.0)],
+            context: .waitingApproval(description: "Kimi wants to edit auth.ts.", tool: "WriteFile")
+        )
+
+        let understanding = projector.project(
+            current: snapshot,
+            classification: classification,
+            lastOutcome: Optional<TerminalOutcomeReport>.none,
+            lastEvent: "Kimi wants to edit auth.ts."
+        )
+
+        #expect(understanding.state == TerminalUnderstandingState.waiting)
+        #expect(understanding.shortExplanation == "Kimi is waiting for approval to continue.")
+        #expect(understanding.suggestedNextActions.map { $0.title } == [
+            "Review the approval request",
+            "Let Foreman explain the requested action",
+        ])
+        #expect(understanding.agentInteractionContext == AgentInteractionContext.waitingApproval(description: "Kimi wants to edit auth.ts.", tool: "WriteFile"))
+    }
+
+    @Test
+    func codexWaitingTextProjectionKeepsManagedLaunchParity() {
+        let question = "• Hello. What do you want to work on in ghostty?"
+        let classification = AgentMeaningDetector.Detection(
+            identity: .codex,
+            interactionState: .waitingText,
+            runtimeState: .blocked,
+            supportLevel: .firstClass,
+            evidence: [.init(source: .screenHeuristic, detail: "codex prompt", confidence: 1.0)],
+            context: .waitingText(question: question)
+        )
+        let snapshots = [
+            TerminalSnapshot.makePreview(
+                terminalID: "codex-existing",
+                windowID: "win-1",
+                tabID: "tab-1",
+                title: "shell",
+                cwd: "/tmp/project",
+                isFocused: true,
+                visibleText: question,
+                recentScrollbackLines: [],
+                lastInputPreview: nil,
+                foregroundProcessName: "codex",
+                cursorIsAtPrompt: true,
+                usingAlternateScreen: true
+            ),
+            TerminalSnapshot.makePreview(
+                terminalID: "codex-new-tab",
+                windowID: "win-1",
+                tabID: "tab-2",
+                title: "nambouchara@host:~",
+                cwd: "/tmp/project",
+                isFocused: false,
+                visibleText: question,
+                recentScrollbackLines: [],
+                lastInputPreview: nil,
+                foregroundProcessName: "codex",
+                cursorIsAtPrompt: true,
+                usingAlternateScreen: true
+            ),
+            TerminalSnapshot.makePreview(
+                terminalID: "codex-managed",
+                windowID: "win-1",
+                tabID: "tab-3",
+                title: "OpenAI Codex",
+                cwd: "/tmp/project",
+                isFocused: false,
+                visibleText: question,
+                recentScrollbackLines: [],
+                lastInputPreview: nil,
+                foregroundProcessName: "codex",
+                cursorIsAtPrompt: true,
+                usingAlternateScreen: true
+            ),
+        ]
+
+        let signatures = snapshots.map {
+            projectionParitySignature(
+                projector.project(
+                    current: $0,
+                    classification: classification,
+                    lastOutcome: Optional<TerminalOutcomeReport>.none,
+                    lastEvent: question
+                )
+            )
+        }
+
+        #expect(signatures.dropFirst().allSatisfy { $0 == signatures.first })
+        #expect(signatures.first?.shortExplanation == "Codex is waiting for your response: • Hello. What do you want to work on in ghostty?")
+        #expect(signatures.first?.suggestedNextActions.map { $0.title } == ["Reply to the agent"])
+    }
+
+    @Test
+    func failedCommandNotFoundProjectionBuildsRankedSuggestions() {
+        let snapshot = TerminalSnapshot.makePreview(
+            terminalID: "term-1",
+            windowID: "win-1",
+            tabID: "tab-1",
+            title: "shell",
+            cwd: "/tmp/project",
+            isFocused: true,
+            visibleText: "hfind . -print\nzsh: command not found: hfind\nuser@host %",
+            recentScrollbackLines: ["hfind . -print", "zsh: command not found: hfind"],
+            lastInputPreview: "hfind . -print"
+        )
+
+        let understanding = projector.project(
+            current: snapshot,
+            classification: Optional<AgentMeaningDetector.Detection>.none,
+            lastOutcome: Optional<TerminalOutcomeReport>.none,
+            lastEvent: "zsh: command not found: hfind"
+        )
+
+        #expect(understanding.state == TerminalUnderstandingState.failed)
+        #expect(understanding.suggestedNextActions.map { $0.title } == [
+            "Run the likely intended find command",
+            "Try fd if a faster file search was intended",
+            "Confirm whether hfind was intentional",
+        ])
+        #expect(understanding.recommendedAction?.command == "find . -print")
+    }
+
+    @Test
+    func waitingProjectionFiltersInputChromeOutOfImportantDetails() {
+        let snapshot = TerminalSnapshot.makePreview(
+            terminalID: "kimi-term",
+            windowID: "win-1",
+            tabID: "tab-1",
+            title: "Kimi Code",
+            cwd: "/tmp/project",
+            isFocused: true,
+            visibleText: """
+            What would you like me to do here?
+            ---------- input ----------
+            agent (Kimi-k2.6) context: project
+            """,
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessName: "kimi",
+            cursorIsAtPrompt: true,
+            usingAlternateScreen: true
+        )
+        let classification = AgentMeaningDetector.Detection(
+            identity: .kimi,
+            interactionState: .waitingText,
+            runtimeState: .blocked,
+            supportLevel: .firstClass,
+            evidence: [.init(source: .screenHeuristic, detail: "kimi input", confidence: 1.0)],
+            context: .waitingText(question: "What would you like me to do here?")
+        )
+
+        let understanding = projector.project(
+            current: snapshot,
+            classification: classification,
+            lastOutcome: Optional<TerminalOutcomeReport>.none,
+            lastEvent: "What would you like me to do here?"
+        )
+
+        #expect(understanding.state == TerminalUnderstandingState.waiting)
+        #expect(understanding.importantDetails == ["What would you like me to do here?"])
+    }
+
+    private func projectionParitySignature(_ understanding: TerminalUnderstanding) -> ProjectionParitySignature {
+        ProjectionParitySignature(
+            state: understanding.state,
+            agentIdentity: understanding.agentIdentity,
+            interactionState: understanding.agentInteractionState,
+            shortExplanation: understanding.shortExplanation,
+            importantDetails: understanding.importantDetails,
+            suggestedNextActions: understanding.suggestedNextActions,
+            agentInteractionContext: understanding.agentInteractionContext
+        )
+    }
+}
