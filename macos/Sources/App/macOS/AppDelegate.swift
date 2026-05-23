@@ -191,7 +191,7 @@ class AppDelegate: NSObject,
     private var aiForemanRefreshTimer: Timer?
     private var aiForemanSummaryCache: [String: TerminalSummary] = [:]
     private var aiForemanSnapshotFingerprints: [String: Int] = [:]
-    private let aiForemanUnderstandingEngine = TerminalUnderstandingEngine()
+    private let aiForemanObservedContextBuilder = ForemanObservedContextBuilder()
     private var aiForemanCurrentSnapshots: [TerminalSnapshot] = []
     private var aiForemanCurrentUnderstandings: [TerminalUnderstanding] = []
     private var aiForemanPreviousSnapshots: [String: TerminalSnapshot] = [:]
@@ -1808,37 +1808,21 @@ extension AppDelegate {
         let claudeWireRecordsByTerminalID = Dictionary(
             uniqueKeysWithValues: allSnapshots.map { ($0.terminalID, claudeWireMonitors[$0.terminalID]?.records() ?? []) }
         )
-        let runtimePlan = AgentRuntimeRefreshPlan(
+        let observedContext = aiForemanObservedContextBuilder.build(
             snapshots: allSnapshots,
             previousSnapshotsByTerminalID: aiForemanPreviousSnapshots,
+            attachmentHintsByTerminalID: attachmentHintsByTerminalID,
             kimiWireRecordsByTerminalID: kimiWireRecordsByTerminalID,
             codexWireRecordsByTerminalID: codexWireRecordsByTerminalID,
-            claudeWireRecordsByTerminalID: claudeWireRecordsByTerminalID,
-            attachmentHintsByTerminalID: attachmentHintsByTerminalID
+            claudeWireRecordsByTerminalID: claudeWireRecordsByTerminalID
         )
+        let understandings = observedContext.context.understandings
+        let understandingsByTerminalID = observedContext.understandingsByTerminalID
 
-        let understandings = runtimePlan.entries.map { entry in
-            let snapshot = entry.snapshot
-            let wireRecords = kimiWireRecordsByTerminalID[snapshot.terminalID] ?? []
-            let codexWireRecords = codexWireRecordsByTerminalID[snapshot.terminalID] ?? []
-            let claudeWireRecords = claudeWireRecordsByTerminalID[snapshot.terminalID] ?? []
-            let understanding = aiForemanUnderstandingEngine.understand(
-                current: snapshot,
-                previous: aiForemanPreviousSnapshots[snapshot.terminalID],
-                lastOutcome: nil,
-                wireRecords: wireRecords,
-                codexWireRecords: codexWireRecords,
-                claudeWireRecords: claudeWireRecords,
-                runtimeDetection: entry.detection
-            )
-            if understanding.agentIdentity == .kimi {
-                DebugLogger.log("[AppDelegate] understand: terminal=\(snapshot.terminalID.prefix(8)) wireRecords=\(wireRecords.count) context=\(understanding.agentInteractionContext.typeString ?? "nil") state=\(understanding.state.rawValue)")
-            }
-            return understanding
+        for understanding in understandings where understanding.agentIdentity == .kimi {
+            let wireRecords = kimiWireRecordsByTerminalID[understanding.terminalID] ?? []
+            DebugLogger.log("[AppDelegate] understand: terminal=\(understanding.terminalID.prefix(8)) wireRecords=\(wireRecords.count) context=\(understanding.agentInteractionContext.typeString ?? "nil") state=\(understanding.state.rawValue)")
         }
-        let understandingsByTerminalID = Dictionary(
-            uniqueKeysWithValues: understandings.map { ($0.terminalID, $0) }
-        )
 
         aiForemanCurrentSnapshots = allSnapshots
         aiForemanCurrentUnderstandings = understandings
