@@ -9,7 +9,8 @@ struct TerminalUnderstandingEngine {
         lastOutcome: TerminalOutcomeReport?,
         wireRecords: [KimiWireRecord] = [],
         codexWireRecords: [CodexWireRecord] = [],
-        claudeWireRecords: [ClaudeSessionState] = []
+        claudeWireRecords: [ClaudeSessionState] = [],
+        runtimeDetection: AgentRuntimeDetector.Detection? = nil
     ) -> TerminalUnderstanding {
         let applicableOutcome = applicableOutcome(for: current, previous: previous, lastOutcome: lastOutcome)
         let lastEvent = extractLastMeaningfulEvent(from: current, previous: previous, lastOutcome: applicableOutcome)
@@ -20,7 +21,8 @@ struct TerminalUnderstandingEngine {
             lastEvent: lastEvent,
             wireRecords: wireRecords,
             codexWireRecords: codexWireRecords,
-            claudeWireRecords: claudeWireRecords
+            claudeWireRecords: claudeWireRecords,
+            runtimeDetection: runtimeDetection
         )
         let state = classifyState(current: current, lastOutcome: applicableOutcome, classification: classification)
         let suggestedActions = makeSuggestions(
@@ -96,15 +98,18 @@ struct TerminalUnderstandingEngine {
         lastEvent: String,
         wireRecords: [KimiWireRecord],
         codexWireRecords: [CodexWireRecord],
-        claudeWireRecords: [ClaudeSessionState]
+        claudeWireRecords: [ClaudeSessionState],
+        runtimeDetection: AgentRuntimeDetector.Detection?
     ) -> AgentClassification? {
-        guard let runtimeDetection = runtimeDetector.detect(
+        let resolvedRuntimeDetection = runtimeDetection ?? runtimeDetector.detect(
             current: current,
             previous: previous,
             kimiWireRecords: wireRecords,
             codexWireRecords: codexWireRecords,
             claudeWireRecords: claudeWireRecords
-        ) else {
+        )
+
+        guard let runtimeDetection = resolvedRuntimeDetection else {
             return nil
         }
 

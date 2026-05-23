@@ -1692,36 +1692,45 @@ extension AppDelegate {
     }
 
     @MainActor
-    private func snapshotIsKimi(_ snapshot: TerminalSnapshot) -> Bool {
-        AgentTerminalMatcher.matches(snapshot, identity: .kimi)
-    }
-
-    @MainActor
-    private func snapshotIsCodex(_ snapshot: TerminalSnapshot) -> Bool {
-        AgentTerminalMatcher.matches(snapshot, identity: .codex)
-    }
-
-    @MainActor
-    private func snapshotIsClaude(_ snapshot: TerminalSnapshot) -> Bool {
-        AgentTerminalMatcher.matches(snapshot, identity: .claudeCode)
-    }
-
-    @MainActor
     private func refreshAIForemanSidebar() {
         let snapshotsByController: [(controller: TerminalController, snapshots: [TerminalSnapshot])] =
             TerminalController.all.map { controller in
                 (controller, controller.captureTerminalSnapshots())
             }
         let allSnapshots = snapshotsByController.flatMap(\.snapshots)
+        let monitorPlan = AgentRuntimeRefreshPlan(snapshots: allSnapshots)
+
+        let kimiTargets: [String: String] = Dictionary(
+            uniqueKeysWithValues: monitorPlan.entries.compactMap { entry in
+                guard case let .kimi(workingDirectory) = entry.monitorTarget else {
+                    return nil
+                }
+                return (entry.snapshot.terminalID, workingDirectory)
+            }
+        )
+        let codexTargets: [String: String?] = Dictionary(
+            uniqueKeysWithValues: monitorPlan.entries.compactMap { entry in
+                guard case let .codex(workingDirectory) = entry.monitorTarget else {
+                    return nil
+                }
+                return (entry.snapshot.terminalID, workingDirectory)
+            }
+        )
+        let claudeTargets: [String: Int?] = Dictionary(
+            uniqueKeysWithValues: monitorPlan.entries.compactMap { entry in
+                guard case let .claude(pid) = entry.monitorTarget else {
+                    return nil
+                }
+                return (entry.snapshot.terminalID, pid)
+            }
+        )
 
         // Manage Kimi wire monitors per terminal
-        let activeKimiTerminalIDs = Set(allSnapshots
-            .filter { snapshotIsKimi($0) }
-            .map(\.terminalID))
+        for snapshot in allSnapshots {
+            guard let monitorCwd = kimiTargets[snapshot.terminalID] else {
+                continue
+            }
 
-        // Start monitors for new Kimi terminals, or recreate if cwd changed
-        for snapshot in allSnapshots where activeKimiTerminalIDs.contains(snapshot.terminalID) {
-            let monitorCwd = snapshot.cwd ?? "" // empty string triggers global session scan
             if let existing = kimiWireMonitors[snapshot.terminalID] {
                 if existing.workingDirectory != monitorCwd {
                     existing.stop()
@@ -1737,18 +1746,17 @@ extension AppDelegate {
         }
 
         // Stop monitors for terminals that no longer run Kimi
-        for terminalID in kimiWireMonitors.keys where !activeKimiTerminalIDs.contains(terminalID) {
+        for terminalID in kimiWireMonitors.keys where kimiTargets[terminalID] == nil {
             kimiWireMonitors[terminalID]?.stop()
             kimiWireMonitors.removeValue(forKey: terminalID)
         }
 
         // Manage Codex wire monitors per terminal
-        let activeCodexTerminalIDs = Set(allSnapshots
-            .filter { snapshotIsCodex($0) }
-            .map(\.terminalID))
+        for snapshot in allSnapshots {
+            guard let monitorCwd = codexTargets[snapshot.terminalID] else {
+                continue
+            }
 
-        for snapshot in allSnapshots where activeCodexTerminalIDs.contains(snapshot.terminalID) {
-            let monitorCwd = snapshot.cwd
             if let existing = codexWireMonitors[snapshot.terminalID] {
                 if existing.workingDirectory != monitorCwd {
                     existing.stop()
@@ -1764,18 +1772,17 @@ extension AppDelegate {
         }
 
         // Stop monitors for terminals that no longer run Codex
-        for terminalID in codexWireMonitors.keys where !activeCodexTerminalIDs.contains(terminalID) {
+        for terminalID in codexWireMonitors.keys where codexTargets[terminalID] == nil {
             codexWireMonitors[terminalID]?.stop()
             codexWireMonitors.removeValue(forKey: terminalID)
         }
 
         // Manage Claude wire monitors per terminal
-        let activeClaudeTerminalIDs = Set(allSnapshots
-            .filter { snapshotIsClaude($0) }
-            .map(\.terminalID))
+        for snapshot in allSnapshots {
+            guard let monitorPID = claudeTargets[snapshot.terminalID] else {
+                continue
+            }
 
-        for snapshot in allSnapshots where activeClaudeTerminalIDs.contains(snapshot.terminalID) {
-            let monitorPID = snapshot.runtime.foregroundProcessID
             if let existing = claudeWireMonitors[snapshot.terminalID] {
                 if existing.pid != monitorPID {
                     existing.stop()
@@ -1791,22 +1798,41 @@ extension AppDelegate {
         }
 
         // Stop monitors for terminals that no longer run Claude
-        for terminalID in claudeWireMonitors.keys where !activeClaudeTerminalIDs.contains(terminalID) {
+        for terminalID in claudeWireMonitors.keys where claudeTargets[terminalID] == nil {
             claudeWireMonitors[terminalID]?.stop()
             claudeWireMonitors.removeValue(forKey: terminalID)
         }
 
-        let understandings = allSnapshots.map { snapshot in
-            let wireRecords = kimiWireMonitors[snapshot.terminalID]?.records() ?? []
-            let codexWireRecords = codexWireMonitors[snapshot.terminalID]?.records() ?? []
-            let claudeWireRecords = claudeWireMonitors[snapshot.terminalID]?.records() ?? []
+        let kimiWireRecordsByTerminalID = Dictionary(
+            uniqueKeysWithValues: allSnapshots.map { ($0.terminalID, kimiWireMonitors[$0.terminalID]?.records() ?? []) }
+        )
+        let codexWireRecordsByTerminalID = Dictionary(
+            uniqueKeysWithValues: allSnapshots.map { ($0.terminalID, codexWireMonitors[$0.terminalID]?.records() ?? []) }
+        )
+        let claudeWireRecordsByTerminalID = Dictionary(
+            uniqueKeysWithValues: allSnapshots.map { ($0.terminalID, claudeWireMonitors[$0.terminalID]?.records() ?? []) }
+        )
+        let runtimePlan = AgentRuntimeRefreshPlan(
+            snapshots: allSnapshots,
+            previousSnapshotsByTerminalID: aiForemanPreviousSnapshots,
+            kimiWireRecordsByTerminalID: kimiWireRecordsByTerminalID,
+            codexWireRecordsByTerminalID: codexWireRecordsByTerminalID,
+            claudeWireRecordsByTerminalID: claudeWireRecordsByTerminalID
+        )
+
+        let understandings = runtimePlan.entries.map { entry in
+            let snapshot = entry.snapshot
+            let wireRecords = kimiWireRecordsByTerminalID[snapshot.terminalID] ?? []
+            let codexWireRecords = codexWireRecordsByTerminalID[snapshot.terminalID] ?? []
+            let claudeWireRecords = claudeWireRecordsByTerminalID[snapshot.terminalID] ?? []
             let understanding = aiForemanUnderstandingEngine.understand(
                 current: snapshot,
                 previous: aiForemanPreviousSnapshots[snapshot.terminalID],
                 lastOutcome: nil,
                 wireRecords: wireRecords,
                 codexWireRecords: codexWireRecords,
-                claudeWireRecords: claudeWireRecords
+                claudeWireRecords: claudeWireRecords,
+                runtimeDetection: entry.detection
             )
             if understanding.agentIdentity == .kimi {
                 DebugLogger.log("[AppDelegate] understand: terminal=\(snapshot.terminalID.prefix(8)) wireRecords=\(wireRecords.count) context=\(understanding.agentInteractionContext.typeString ?? "nil") state=\(understanding.state.rawValue)")
