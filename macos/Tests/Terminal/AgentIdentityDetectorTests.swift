@@ -29,6 +29,58 @@ struct AgentIdentityDetectorTests {
     }
 
     @Test
+    func similarlyNamedProcessesDoNotCreateIdentityWithoutSeparateScreenEvidence() {
+        let snapshots = [
+            TerminalSnapshot.makePreview(
+                terminalID: "term-claude-helper",
+                windowID: "win-1",
+                tabID: "tab-1",
+                title: "shell",
+                cwd: "/tmp/project",
+                isFocused: true,
+                visibleText: "helper output",
+                recentScrollbackLines: [],
+                lastInputPreview: nil,
+                foregroundProcessName: "claude-hooks",
+                cursorIsAtPrompt: false,
+                usingAlternateScreen: false
+            ),
+            TerminalSnapshot.makePreview(
+                terminalID: "term-codex-helper",
+                windowID: "win-1",
+                tabID: "tab-2",
+                title: "shell",
+                cwd: "/tmp/project",
+                isFocused: false,
+                visibleText: "helper output",
+                recentScrollbackLines: [],
+                lastInputPreview: nil,
+                foregroundProcessName: "codex-playground",
+                cursorIsAtPrompt: false,
+                usingAlternateScreen: false
+            ),
+            TerminalSnapshot.makePreview(
+                terminalID: "term-kimi-helper",
+                windowID: "win-1",
+                tabID: "tab-3",
+                title: "shell",
+                cwd: "/tmp/project",
+                isFocused: false,
+                visibleText: "helper output",
+                recentScrollbackLines: [],
+                lastInputPreview: nil,
+                foregroundProcessName: "kimi-tools",
+                cursorIsAtPrompt: false,
+                usingAlternateScreen: false
+            ),
+        ]
+
+        for snapshot in snapshots {
+            #expect(detector.identity(for: snapshot) == nil)
+        }
+    }
+
+    @Test
     func fallsBackToVisibleTextWhenForegroundProcessIsMissing() {
         let snapshot = TerminalSnapshot.makePreview(
             terminalID: "term-1",

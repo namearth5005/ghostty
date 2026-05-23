@@ -133,6 +133,61 @@ struct AgentRuntimeRefreshPlanTests {
     }
 
     @Test
+    func similarlyNamedProcessesDoNotCreateMonitorTargetsWithoutSeparateScreenEvidence() {
+        let snapshots = [
+            TerminalSnapshot.makePreview(
+                terminalID: "term-claude-helper",
+                windowID: "w1",
+                tabID: "t1",
+                title: "shell",
+                cwd: "/tmp/project",
+                isFocused: true,
+                visibleText: "helper output",
+                recentScrollbackLines: [],
+                lastInputPreview: nil,
+                foregroundProcessName: "claude-hooks",
+                cursorIsAtPrompt: false,
+                usingAlternateScreen: false
+            ),
+            TerminalSnapshot.makePreview(
+                terminalID: "term-codex-helper",
+                windowID: "w1",
+                tabID: "t2",
+                title: "shell",
+                cwd: "/tmp/project",
+                isFocused: false,
+                visibleText: "helper output",
+                recentScrollbackLines: [],
+                lastInputPreview: nil,
+                foregroundProcessName: "codex-playground",
+                cursorIsAtPrompt: false,
+                usingAlternateScreen: false
+            ),
+            TerminalSnapshot.makePreview(
+                terminalID: "term-kimi-helper",
+                windowID: "w1",
+                tabID: "t3",
+                title: "shell",
+                cwd: "/tmp/project",
+                isFocused: false,
+                visibleText: "helper output",
+                recentScrollbackLines: [],
+                lastInputPreview: nil,
+                foregroundProcessName: "kimi-tools",
+                cursorIsAtPrompt: false,
+                usingAlternateScreen: false
+            ),
+        ]
+
+        let plan = AgentRuntimeRefreshPlan(snapshots: snapshots)
+
+        for snapshot in snapshots {
+            #expect(plan.entry(for: snapshot.terminalID)?.detection == nil)
+            #expect(plan.entry(for: snapshot.terminalID)?.monitorTarget == nil)
+        }
+    }
+
+    @Test
     func planCarriesForwardCanonicalRuntimeDetectionWhenWireStateExists() {
         let snapshot = TerminalSnapshot.makePreview(
             terminalID: "term-codex",

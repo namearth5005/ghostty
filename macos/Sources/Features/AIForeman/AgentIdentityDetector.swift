@@ -43,13 +43,13 @@ struct AgentIdentityDetector {
         guard let candidate else { return nil }
         let lowered = candidate.lowercased()
 
-        if lowered.contains("kimi code") || lowered == "kimi" || lowered.contains("kimi") {
+        if matchesExplicitProcessName(lowered, aliases: ["kimi", "kimi code", "kimi-code"]) {
             return .kimi
         }
-        if lowered.contains("claude code") || lowered == "claude" || lowered.contains("claude") {
+        if matchesExplicitProcessName(lowered, aliases: ["claude", "claude code", "claude-code"]) {
             return .claudeCode
         }
-        if lowered.contains("openai codex") || lowered == "codex" || lowered.contains("codex") {
+        if matchesExplicitProcessName(lowered, aliases: ["codex", "openai codex"]) {
             return .codex
         }
 
@@ -109,6 +109,10 @@ struct AgentIdentityDetector {
         line == "openai codex" ||
             line.hasPrefix(">_ openai codex") ||
             line.hasPrefix("openai codex (v")
+    }
+
+    private func matchesExplicitProcessName(_ loweredProcessName: String, aliases: [String]) -> Bool {
+        aliases.contains(loweredProcessName)
     }
 
     private func normalized(_ candidate: String?) -> String? {
