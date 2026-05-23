@@ -55,6 +55,71 @@ struct AgentIdentityDetectorTests {
     }
 
     @Test
+    func claudeTrustPromptFallsBackToVisibleTextWhenForegroundProcessIsMissingAcrossLaunchPaths() {
+        let visibleText = """
+        Accessing workspace:
+
+        /Users/nambouchara
+
+        Quick safety check: Is this a project you created or one you trust?
+
+        Security guide
+
+         ❯ 1. Yes, I trust this folder
+           2. No, exit
+
+         Enter to confirm · Esc to cancel
+        """
+
+        let existingTab = TerminalSnapshot.makePreview(
+            terminalID: "claude-existing",
+            windowID: "win-1",
+            tabID: "tab-1",
+            title: "shell",
+            cwd: "/Users/nambouchara",
+            isFocused: true,
+            visibleText: visibleText,
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessName: nil,
+            cursorIsAtPrompt: true,
+            usingAlternateScreen: true
+        )
+        let newTab = TerminalSnapshot.makePreview(
+            terminalID: "claude-new-tab",
+            windowID: "win-1",
+            tabID: "tab-2",
+            title: "nambouchara@Nams-MacBook-Pro:~",
+            cwd: "/Users/nambouchara",
+            isFocused: false,
+            visibleText: visibleText,
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessName: nil,
+            cursorIsAtPrompt: true,
+            usingAlternateScreen: true
+        )
+        let managed = TerminalSnapshot.makePreview(
+            terminalID: "claude-managed",
+            windowID: "win-1",
+            tabID: "tab-3",
+            title: "Claude Code",
+            cwd: "/Users/nambouchara",
+            isFocused: false,
+            visibleText: visibleText,
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessName: nil,
+            cursorIsAtPrompt: true,
+            usingAlternateScreen: true
+        )
+
+        #expect(detector.identity(for: existingTab) == .claudeCode)
+        #expect(detector.identity(for: existingTab) == detector.identity(for: newTab))
+        #expect(detector.identity(for: existingTab) == detector.identity(for: managed))
+    }
+
+    @Test
     func fallsBackToTitleOnlyWhenProcessIdentityIsUnavailable() {
         let snapshot = TerminalSnapshot.makePreview(
             terminalID: "term-1",
@@ -189,6 +254,50 @@ struct AgentIdentityDetectorTests {
                 lastInputPreview: nil,
                 foregroundProcessName: nil,
                 cursorIsAtPrompt: true,
+                usingAlternateScreen: false
+            ),
+        ]
+
+        for snapshot in snapshots {
+            #expect(detector.identity(for: snapshot) == nil)
+        }
+    }
+
+    @Test
+    func proseMentionsOfAgentNamesDoNotCreateIdentityWithoutOtherEvidence() {
+        let snapshots = [
+            TerminalSnapshot.makePreview(
+                terminalID: "term-claude-prose",
+                windowID: "win-1",
+                tabID: "tab-1",
+                title: "shell",
+                cwd: "/tmp/project",
+                isFocused: true,
+                visibleText: """
+                I compared Claude Code, ChatGPT, and Cursor while planning this task.
+                The next step is to document the tradeoffs.
+                """,
+                recentScrollbackLines: [],
+                lastInputPreview: nil,
+                foregroundProcessName: nil,
+                cursorIsAtPrompt: false,
+                usingAlternateScreen: false
+            ),
+            TerminalSnapshot.makePreview(
+                terminalID: "term-codex-prose",
+                windowID: "win-1",
+                tabID: "tab-2",
+                title: "shell",
+                cwd: "/tmp/project",
+                isFocused: false,
+                visibleText: """
+                OpenAI Codex is one of several tools mentioned in this migration note.
+                Nothing is actively attached to the terminal.
+                """,
+                recentScrollbackLines: [],
+                lastInputPreview: nil,
+                foregroundProcessName: nil,
+                cursorIsAtPrompt: false,
                 usingAlternateScreen: false
             ),
         ]

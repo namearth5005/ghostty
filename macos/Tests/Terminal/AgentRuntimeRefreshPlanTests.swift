@@ -278,6 +278,73 @@ struct AgentRuntimeRefreshPlanTests {
     }
 
     @Test
+    func claudeTrustPromptWithoutProcessStillProducesMatchingMonitorTargetsAcrossLaunchPaths() {
+        let visibleText = """
+        Accessing workspace:
+
+        /Users/nambouchara
+
+        Quick safety check: Is this a project you created or one you trust?
+
+        Security guide
+
+         ❯ 1. Yes, I trust this folder
+           2. No, exit
+
+         Enter to confirm · Esc to cancel
+        """
+
+        let existingTab = TerminalSnapshot.makePreview(
+            terminalID: "claude-existing",
+            windowID: "w1",
+            tabID: "t1",
+            title: "shell",
+            cwd: "/Users/nambouchara",
+            isFocused: true,
+            visibleText: visibleText,
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessName: nil,
+            cursorIsAtPrompt: true,
+            usingAlternateScreen: true
+        )
+        let newTab = TerminalSnapshot.makePreview(
+            terminalID: "claude-new-tab",
+            windowID: "w1",
+            tabID: "t2",
+            title: "nambouchara@host:~",
+            cwd: "/Users/nambouchara",
+            isFocused: false,
+            visibleText: visibleText,
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessName: nil,
+            cursorIsAtPrompt: true,
+            usingAlternateScreen: true
+        )
+        let managed = TerminalSnapshot.makePreview(
+            terminalID: "claude-managed",
+            windowID: "w1",
+            tabID: "t3",
+            title: "Claude Code",
+            cwd: "/Users/nambouchara",
+            isFocused: false,
+            visibleText: visibleText,
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessName: nil,
+            cursorIsAtPrompt: true,
+            usingAlternateScreen: true
+        )
+
+        let plan = AgentRuntimeRefreshPlan(snapshots: [existingTab, newTab, managed])
+
+        #expect(plan.entry(for: existingTab.terminalID)?.monitorTarget == .claudeWorkingDirectory("/Users/nambouchara"))
+        #expect(plan.entry(for: existingTab.terminalID)?.monitorTarget == plan.entry(for: newTab.terminalID)?.monitorTarget)
+        #expect(plan.entry(for: existingTab.terminalID)?.monitorTarget == plan.entry(for: managed.terminalID)?.monitorTarget)
+    }
+
+    @Test
     func monitorTargetsRequireAttachableKeysInsteadOfUnsafeGlobalScans() {
         let codex = TerminalSnapshot.makePreview(
             terminalID: "codex-no-cwd",

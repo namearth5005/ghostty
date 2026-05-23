@@ -398,4 +398,110 @@ struct AgentRuntimeDetectorTests {
         #expect(detector.identity(for: snapshot) == nil)
         #expect(detector.detect(current: snapshot) == nil)
     }
+
+    @Test
+    func claudeTrustPromptWithoutProcessSharesBlockedRuntimeDetectionAcrossLaunchPaths() {
+        let visibleText = """
+        Accessing workspace:
+
+        /Users/nambouchara
+
+        Quick safety check: Is this a project you created or one you trust?
+
+        Security guide
+
+         ❯ 1. Yes, I trust this folder
+           2. No, exit
+
+         Enter to confirm · Esc to cancel
+        """
+
+        let snapshots = [
+            TerminalSnapshot.makePreview(
+                terminalID: "claude-existing",
+                windowID: "win-1",
+                tabID: "tab-1",
+                title: "shell",
+                cwd: "/Users/nambouchara",
+                isFocused: true,
+                visibleText: visibleText,
+                recentScrollbackLines: [],
+                lastInputPreview: nil,
+                foregroundProcessName: nil,
+                cursorIsAtPrompt: true,
+                usingAlternateScreen: true
+            ),
+            TerminalSnapshot.makePreview(
+                terminalID: "claude-new-tab",
+                windowID: "win-1",
+                tabID: "tab-2",
+                title: "nambouchara@Nams-MacBook-Pro:~",
+                cwd: "/Users/nambouchara",
+                isFocused: false,
+                visibleText: visibleText,
+                recentScrollbackLines: [],
+                lastInputPreview: nil,
+                foregroundProcessName: nil,
+                cursorIsAtPrompt: true,
+                usingAlternateScreen: true
+            ),
+            TerminalSnapshot.makePreview(
+                terminalID: "claude-managed",
+                windowID: "win-1",
+                tabID: "tab-3",
+                title: "Claude Code",
+                cwd: "/Users/nambouchara",
+                isFocused: false,
+                visibleText: visibleText,
+                recentScrollbackLines: [],
+                lastInputPreview: nil,
+                foregroundProcessName: nil,
+                cursorIsAtPrompt: true,
+                usingAlternateScreen: true
+            ),
+        ]
+
+        let detections = snapshots.map { detector.detect(current: $0) }
+        #expect(detections.allSatisfy { $0?.identity == .claudeCode })
+        #expect(detections.allSatisfy { $0?.state == .blocked })
+    }
+
+    @Test
+    func proseMentionsOfAgentNamesDoNotCreateRuntimeDetectionWithoutOtherEvidence() {
+        let snapshots = [
+            TerminalSnapshot.makePreview(
+                terminalID: "claude-prose",
+                windowID: "win-1",
+                tabID: "tab-1",
+                title: "shell",
+                cwd: "/tmp/project",
+                isFocused: true,
+                visibleText: "I compared Claude Code and ChatGPT while writing these notes.",
+                recentScrollbackLines: [],
+                lastInputPreview: nil,
+                foregroundProcessName: nil,
+                cursorIsAtPrompt: false,
+                usingAlternateScreen: false
+            ),
+            TerminalSnapshot.makePreview(
+                terminalID: "codex-prose",
+                windowID: "win-1",
+                tabID: "tab-2",
+                title: "shell",
+                cwd: "/tmp/project",
+                isFocused: false,
+                visibleText: "OpenAI Codex is documented in the migration plan below.",
+                recentScrollbackLines: [],
+                lastInputPreview: nil,
+                foregroundProcessName: nil,
+                cursorIsAtPrompt: false,
+                usingAlternateScreen: false
+            ),
+        ]
+
+        for snapshot in snapshots {
+            #expect(detector.identity(for: snapshot) == nil)
+            #expect(detector.detect(current: snapshot) == nil)
+        }
+    }
 }

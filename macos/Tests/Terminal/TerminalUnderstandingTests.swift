@@ -60,6 +60,54 @@ struct TerminalUnderstandingTests {
     }
 
     @Test
+    func shellOutputMentioningAgentNamesDoesNotCreateFirstClassUnderstandingWithoutOtherEvidence() {
+        let engine = TerminalUnderstandingEngine()
+        let snapshots = [
+            TerminalSnapshot.makePreview(
+                terminalID: "term-claude-prose",
+                windowID: "win-1",
+                tabID: "tab-1",
+                title: "shell",
+                cwd: "/tmp/project",
+                isFocused: true,
+                visibleText: """
+                I compared Claude Code, ChatGPT, and Cursor while planning this task.
+                The next step is to document the tradeoffs.
+                """,
+                recentScrollbackLines: [],
+                lastInputPreview: nil,
+                foregroundProcessName: nil,
+                cursorIsAtPrompt: false,
+                usingAlternateScreen: false
+            ),
+            TerminalSnapshot.makePreview(
+                terminalID: "term-codex-prose",
+                windowID: "win-1",
+                tabID: "tab-2",
+                title: "shell",
+                cwd: "/tmp/project",
+                isFocused: false,
+                visibleText: """
+                OpenAI Codex is one of several tools mentioned in this migration note.
+                Nothing is actively attached to the terminal.
+                """,
+                recentScrollbackLines: [],
+                lastInputPreview: nil,
+                foregroundProcessName: nil,
+                cursorIsAtPrompt: false,
+                usingAlternateScreen: false
+            ),
+        ]
+
+        for snapshot in snapshots {
+            let understanding = engine.understand(current: snapshot, previous: nil, lastOutcome: nil)
+            #expect(understanding.agentIdentity == .none)
+            #expect(understanding.agentInteractionState == .unknown)
+            #expect(understanding.supportLevel == .genericFallback)
+        }
+    }
+
+    @Test
     func managedAndManualCodexLaunchesShareUnderstandingAtQuietWelcomeScreen() {
         let engine = TerminalUnderstandingEngine()
         let visibleText = """
