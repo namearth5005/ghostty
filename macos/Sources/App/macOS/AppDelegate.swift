@@ -328,8 +328,12 @@ class AppDelegate: NSObject,
 
                 let store = targetController.foremanSidebarStore
                 let understanding = self.aiForemanPreviousUnderstandings[event.terminalID]
+                let initialDecision = ForemanReactiveEventRouter.initialDecision(
+                    for: event,
+                    understanding: understanding
+                )
 
-                if let attention = self.makePendingAttention(from: event, understanding: understanding) {
+                if case .showPendingAttention(let attention) = initialDecision {
                     store.upsertPendingAttention(attention)
                     return
                 }
@@ -370,16 +374,28 @@ class AppDelegate: NSObject,
                     return allSnapshots
                 }
 
-                if event.interactionState == .waitingText {
+                if case .draftWaitingText = initialDecision {
                     do {
                         DebugLogger.log("[AppDelegate] drafting waitingText attention terminal=\(event.terminalID.prefix(8)) fingerprint='\(event.fingerprint)'")
-                        if let attention = try await self.foremanAgent?.draftPendingAttention(
+                        let draftedAttention = try await self.foremanAgent?.draftPendingAttention(
                             for: event,
                             captureSnapshots: snapshotProvider
+                        )
+
+                        switch ForemanReactiveEventRouter.decisionAfterDraft(
+                            for: event.interactionState,
+                            draftedAttention: draftedAttention
                         ) {
+                        case .showPendingAttention(let attention):
                             DebugLogger.log("[AppDelegate] drafted waitingText attention terminal=\(event.terminalID.prefix(8)) actions=\(attention.actions.count)")
                             store.upsertPendingAttention(attention)
                             return
+                        case .ignore:
+                            DebugLogger.log("[AppDelegate] waitingText draft returned nil terminal=\(event.terminalID.prefix(8)); skipping chat fallback")
+                            Self.logger.info("AI Foreman draft returned no waitingText suggestion for terminal \(event.terminalID, privacy: .public); skipping chat fallback")
+                            return
+                        case .react:
+                            break
                         }
                     } catch {
                         store.errorMessage = error.localizedDescription
@@ -388,14 +404,6 @@ class AppDelegate: NSObject,
                         return
                     }
 
-                    guard Self.shouldFallBackToForemanChat(
-                        afterDraftFor: event.interactionState,
-                        draftedAttention: nil
-                    ) else {
-                        DebugLogger.log("[AppDelegate] waitingText draft returned nil terminal=\(event.terminalID.prefix(8)); skipping chat fallback")
-                        Self.logger.info("AI Foreman draft returned no waitingText suggestion for terminal \(event.terminalID, privacy: .public); skipping chat fallback")
-                        return
-                    }
                 }
 
                 await self.foremanAgent?.react(to: event, captureSnapshots: snapshotProvider)
@@ -1616,30 +1624,6 @@ extension AppDelegate {
             fingerprint: attention.fingerprint
         )
         refreshAIForemanSidebar()
-    }
-
-    @MainActor
-    private func makePendingAttention(
-        from event: AgentNeedsAttentionEvent,
-        understanding: TerminalUnderstanding?
-    ) -> PendingAgentAttention? {
-        PendingAgentAttentionFactory.make(from: event, understanding: understanding)
-    }
-
-    static func shouldFallBackToForemanChat(
-        afterDraftFor interactionState: AgentInteractionState,
-        draftedAttention: PendingAgentAttention?
-    ) -> Bool {
-        if draftedAttention != nil {
-            return false
-        }
-
-        switch interactionState {
-        case .waitingText:
-            return false
-        case .waitingApproval, .waitingChoice, .error, .unknown, .running, .completed:
-            return true
-        }
     }
 
     @MainActor
