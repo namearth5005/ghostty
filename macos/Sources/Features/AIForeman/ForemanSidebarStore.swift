@@ -285,6 +285,7 @@ final class ForemanSidebarStore: ObservableObject {
     }
 
     func showSidebar() {
+        refreshAgentReadiness()
         isSidebarVisible = true
     }
 

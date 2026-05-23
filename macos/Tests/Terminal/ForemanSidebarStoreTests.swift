@@ -4,6 +4,31 @@ import Testing
 struct ForemanSidebarStoreTests {
     @MainActor
     @Test
+    func showingSidebarRefreshesAgentReadiness() {
+        let key = "GHOSTTY_FOREMAN_TEST_FORCE_AGENT_READINESS"
+        let previous = getenv(key).map { String(cString: $0) }
+        setenv(key, "installed", 1)
+        defer {
+            if let previous {
+                setenv(key, previous, 1)
+            } else {
+                unsetenv(key)
+            }
+        }
+
+        let store = ForemanSidebarStore()
+
+        #expect(store.agentReadiness.isEmpty)
+
+        store.showSidebar()
+
+        #expect(store.isSidebarVisible == true)
+        #expect(store.agentReadiness.map(\.0) == [.claudeCode, .codex, .kimi])
+        #expect(store.agentReadiness.allSatisfy { $0.1 == .installed(loginStatus: .loggedIn) })
+    }
+
+    @MainActor
+    @Test
     func sidebarStartsHiddenUntilUserOpensIt() {
         let store = ForemanSidebarStore()
 

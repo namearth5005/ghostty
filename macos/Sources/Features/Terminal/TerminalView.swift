@@ -140,6 +140,7 @@ struct TerminalView<ViewModel: TerminalViewModel>: View {
                         .buttonStyle(.borderedProminent)
                         .controlSize(.small)
                         .padding(12)
+                        .accessibilityIdentifier("foreman.open")
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)

@@ -5,6 +5,17 @@ struct BaseTerminalControllerTests {
     @MainActor
     @Test
     func foremanSidebarStoreChangesCanBeRelayedToParentObservers() {
+        let key = "GHOSTTY_FOREMAN_TEST_FORCE_AGENT_READINESS"
+        let previous = getenv(key).map { String(cString: $0) }
+        setenv(key, "installed", 1)
+        defer {
+            if let previous {
+                setenv(key, previous, 1)
+            } else {
+                unsetenv(key)
+            }
+        }
+
         let store = ForemanSidebarStore()
         var changeCount = 0
         let relay = BaseTerminalController.makeForemanSidebarStoreChangeRelay(for: store) {
@@ -15,7 +26,7 @@ struct BaseTerminalControllerTests {
         store.hideSidebar()
 
         withExtendedLifetime(relay) {
-            #expect(changeCount == 2)
+            #expect(changeCount >= 2)
         }
     }
 

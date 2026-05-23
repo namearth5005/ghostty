@@ -3,6 +3,24 @@ import Testing
 
 struct ManagedAgentRegistryTests {
     @Test
+    func readinessCanBeForcedInstalledForUIHarness() {
+        let key = "GHOSTTY_FOREMAN_TEST_FORCE_AGENT_READINESS"
+        let previous = getenv(key).map { String(cString: $0) }
+        setenv(key, "installed", 1)
+        defer {
+            if let previous {
+                setenv(key, previous, 1)
+            } else {
+                unsetenv(key)
+            }
+        }
+
+        #expect(ManagedAgentRegistry.readiness(for: .codex) == .installed(loginStatus: .loggedIn))
+        #expect(ManagedAgentRegistry.readiness(for: .kimi) == .installed(loginStatus: .loggedIn))
+        #expect(ManagedAgentRegistry.readiness(for: .claudeCode) == .installed(loginStatus: .loggedIn))
+    }
+
+    @Test
     func claudeLaunchProfileRequiresOneTimeSetupAndEnablesStateEvents() {
         let definition = try! #require(ManagedAgentRegistry.definition(for: .claudeCode))
         let configuration = definition.makeSurfaceConfiguration(

@@ -251,6 +251,8 @@ struct ForemanChatView: View {
                 endPoint: .bottom
             )
         )
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("foreman.sidebar")
     }
 
     private func startAgent() {

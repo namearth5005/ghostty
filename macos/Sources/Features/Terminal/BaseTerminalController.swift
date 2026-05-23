@@ -202,6 +202,12 @@ class BaseTerminalController: NSWindowController,
 
         // Refresh agent readiness on init
         foremanSidebarStore.refreshAgentReadiness()
+#if DEBUG
+        if let value = ProcessInfo.processInfo.environment["GHOSTTY_FOREMAN_TEST_START_VISIBLE"],
+           value == "1" || value.lowercased() == "true" {
+            foremanSidebarStore.showSidebar()
+        }
+#endif
 
         // Setup our bell state for the window
         setupBellNotificationPublisher()

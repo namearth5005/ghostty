@@ -96,6 +96,25 @@ struct ManagedAgentDefinition: Equatable, Sendable {
 }
 
 enum ManagedAgentRegistry {
+    #if DEBUG
+    private static var forcedReadiness: AgentReadinessState? {
+        guard let value = ProcessInfo.processInfo.environment["GHOSTTY_FOREMAN_TEST_FORCE_AGENT_READINESS"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased() else {
+            return nil
+        }
+
+        switch value {
+        case "installed":
+            return .installed(loginStatus: .loggedIn)
+        case "not_installed":
+            return .notInstalled
+        default:
+            return nil
+        }
+    }
+    #endif
+
     static let supportedAgents: [ManagedAgentDefinition] = [
         .init(
             identity: .claudeCode,
@@ -128,6 +147,11 @@ enum ManagedAgentRegistry {
     }
 
     static func readiness(for identity: AgentIdentity) -> AgentReadinessState {
+#if DEBUG
+        if let forcedReadiness {
+            return forcedReadiness
+        }
+#endif
         guard let definition = definition(for: identity) else {
             return .unknown
         }

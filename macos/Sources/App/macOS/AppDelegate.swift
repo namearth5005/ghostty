@@ -1881,10 +1881,34 @@ extension AppDelegate {
         TerminalController.all.first(where: { $0.foremanSidebarStore === store })
     }
 
+    private var shouldCaptureManagedLaunchRequestsForTests: Bool {
+#if DEBUG
+        let value = ProcessInfo.processInfo.environment["GHOSTTY_FOREMAN_TEST_CAPTURE_MANAGED_LAUNCH"]
+        return value == "1" || value?.lowercased() == "true"
+#else
+        false
+#endif
+    }
+
+    private func captureManagedLaunchRequestForTests(_ request: ManagedAgentLaunchRequest) {
+#if DEBUG
+        UserDefaults.ghostty.set(request.identity.rawValue, forKey: "ForemanManagedLaunch.identity")
+        UserDefaults.ghostty.set(request.location.rawValue, forKey: "ForemanManagedLaunch.location")
+        UserDefaults.ghostty.set(request.workingDirectory, forKey: "ForemanManagedLaunch.workingDirectory")
+        UserDefaults.ghostty.set(request.sourceWindowNumber, forKey: "ForemanManagedLaunch.sourceWindowNumber")
+        UserDefaults.ghostty.synchronize()
+#endif
+    }
+
     @MainActor
     func launchManagedAgent(_ request: ManagedAgentLaunchRequest) -> String? {
         guard let definition = ManagedAgentRegistry.definition(for: request.identity) else {
             return nil
+        }
+
+        if shouldCaptureManagedLaunchRequestsForTests {
+            captureManagedLaunchRequestForTests(request)
+            return "captured-managed-launch-\(request.identity.rawValue)"
         }
 
         let config = definition.makeSurfaceConfiguration(

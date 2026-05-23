@@ -27,6 +27,8 @@ struct AgentReadinessPanel: View {
         }
         .padding(10)
         .background(RoundedRectangle(cornerRadius: 8).fill(Color.black.opacity(0.03)))
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("foreman.agent-readiness")
     }
 
     @ViewBuilder
@@ -48,12 +50,16 @@ struct AgentReadinessPanel: View {
                 .font(.system(size: 11))
                 .buttonStyle(.plain)
                 .foregroundColor(.accentColor)
+                .accessibilityLabel("Launch \(agent.identity.displayName ?? "Unknown")")
+                .accessibilityIdentifier("foreman.launch.\(agent.identity.rawValue)")
             } else {
                 Text(statusLabel(agent.state))
                     .font(.system(size: 10))
                     .foregroundStyle(.secondary)
             }
         }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("foreman.agent.\(agent.identity.rawValue)")
     }
 
     private func statusColor(_ state: AgentReadinessState) -> Color {
