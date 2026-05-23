@@ -315,7 +315,7 @@ struct AgentMeaningDetector {
 
         switch runtimeDetection.state {
         case .blocked:
-            if current.signals.likelyErrorState && !looksLikeQuestion(lastEvent) {
+            if current.signals.likelyErrorState && !TerminalScreenText.looksLikeQuestion(lastEvent) {
                 return detection(identity, .error, runtimeState: .blocked, .phraseHeuristic, "Detected active failure markers in agent output.", 0.73, .error(description: lastEvent))
             }
 
@@ -434,11 +434,6 @@ private func meaningExtractNumberedOptions(_ text: String) -> [String] {
     }
     return options
 }
-
-private func meaningLooksLikeQuestion(_ text: String) -> Bool {
-    text.trimmingCharacters(in: .whitespacesAndNewlines).contains("?")
-}
-
 private extension AgentMeaningDetector {
     func containsAny(_ text: String, markers: [String]) -> Bool {
         meaningContainsAny(text, markers: markers)
@@ -464,7 +459,4 @@ private extension AgentMeaningDetector {
         meaningExtractNumberedOptions(text)
     }
 
-    func looksLikeQuestion(_ text: String) -> Bool {
-        meaningLooksLikeQuestion(text)
-    }
 }

@@ -79,12 +79,11 @@ struct TerminalUnderstandingEngine {
         if let lastOutcome, lastOutcome.terminalID == current.terminalID, let summary = lastOutcome.summary {
             return summary
         }
-        let previousText = previous?.visibleText ?? ""
-        let currentLines = TerminalUnderstandingProjector.meaningfulTerminalLines(from: current.visibleText)
-        let previousLines = Set(previousText.split(separator: "\n").map(String.init))
-        return currentLines.last(where: { !previousLines.contains($0) && !$0.trimmingCharacters(in: .whitespaces).isEmpty })
-            ?? currentLines.last(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty })
-            ?? "No meaningful terminal event detected."
+        let event = TerminalScreenText.lastMeaningfulEvent(
+            currentVisibleText: current.visibleText,
+            previousVisibleText: previous?.visibleText ?? ""
+        )
+        return event.isEmpty ? "No meaningful terminal event detected." : event
     }
 
     private func applicableOutcome(

@@ -41,17 +41,6 @@ struct TerminalUnderstandingProjector {
         )
     }
 
-    static func meaningfulTerminalLines(from text: String) -> [String] {
-        text.split(separator: "\n")
-            .map(String.init)
-            .filter { line in
-                let trimmed = line.trimmingCharacters(in: .whitespaces)
-                return !trimmed.isEmpty &&
-                    !looksLikePrompt(trimmed) &&
-                    !looksLikeTerminalInputChrome(trimmed)
-            }
-    }
-
     private func classifyState(
         current: TerminalSnapshot,
         lastOutcome: TerminalOutcomeReport?,
@@ -124,7 +113,7 @@ struct TerminalUnderstandingProjector {
             case .waitingChoice:
                 return "\(name) is waiting for your selection."
             case .waitingText:
-                if Self.looksLikeQuestion(lastEvent) {
+                if TerminalScreenText.looksLikeQuestion(lastEvent) {
                     return "\(name) is waiting for your response: \(lastEvent)"
                 }
                 return "\(name) is waiting for your response."
@@ -159,7 +148,7 @@ struct TerminalUnderstandingProjector {
         let lines: [String]
         switch state {
         case .waiting:
-            lines = Self.meaningfulTerminalLines(from: visibleText)
+            lines = TerminalScreenText.meaningfulLines(from: visibleText)
         default:
             lines = visibleText.split(separator: "\n").map(String.init)
         }
@@ -247,51 +236,5 @@ struct TerminalUnderstandingProjector {
         }
 
         return []
-    }
-
-    private static func looksLikePrompt(_ line: String) -> Bool {
-        let trimmed = line.trimmingCharacters(in: .whitespaces)
-        guard !trimmed.isEmpty else { return false }
-        let promptMarkers = ["$", "%", "#", ">", "λ", "❯", "➜", "→", "⇒", "›"]
-        return promptMarkers.contains(where: {
-            trimmed == $0 || trimmed.hasPrefix($0 + " ") || trimmed.hasSuffix(" " + $0) || trimmed.hasSuffix($0)
-        })
-    }
-
-    private static func looksLikeQuestion(_ line: String) -> Bool {
-        line.trimmingCharacters(in: .whitespacesAndNewlines).contains("?")
-    }
-
-    private static func looksLikeTerminalInputChrome(_ line: String) -> Bool {
-        let trimmed = line.trimmingCharacters(in: .whitespaces)
-        let lowered = trimmed.lowercased()
-
-        if lowered == "input" {
-            return true
-        }
-
-        let withoutInput = lowered
-            .replacingOccurrences(of: "input", with: "")
-            .trimmingCharacters(in: .whitespaces)
-        let inputChromeRun = withoutInput.filter { !$0.isWhitespace }
-        if lowered.contains("input"),
-           !inputChromeRun.isEmpty,
-           inputChromeRun.allSatisfy({ $0 == "-" || $0 == "─" || $0 == "━" }) {
-            return true
-        }
-
-        if lowered.hasPrefix("agent ("),
-           lowered.contains("context:") ||
-            lowered.contains("ctrl-") ||
-            lowered.contains("shift-tab") ||
-            lowered.contains("@:") {
-            return true
-        }
-
-        if lowered.hasPrefix("context:") {
-            return true
-        }
-
-        return false
     }
 }
