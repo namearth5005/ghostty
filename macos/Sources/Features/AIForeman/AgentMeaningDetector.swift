@@ -12,6 +12,7 @@ struct AgentMeaningDetector {
 
     private let runtimeDetector = AgentRuntimeDetector()
     private let contextResolver = AgentInteractionContextResolver()
+    private let screenDetector = AgentScreenInteractionDetector()
 
     func detect(
         current: TerminalSnapshot,
@@ -36,9 +37,21 @@ struct AgentMeaningDetector {
         }
 
         let identity = runtimeDetection.identity
+        let screenDetection = screenDetector.detect(
+            identity: identity,
+            visibleText: current.visibleText,
+            lastEvent: lastEvent
+        )
 
+        // Preserve the existing Kimi behavior where the on-screen approval UI
+        // outranks any stale running wire state.
         if identity == .kimi,
-           let approvalDetection = detectKimiScreenApproval(current: current, lastEvent: lastEvent) {
+           let screenDetection,
+           screenDetection.reason == .approvalPrompt,
+           let approvalDetection = detectionFromScreen(
+               identity: identity,
+               screenDetection: screenDetection
+           ) {
             return approvalDetection
         }
 
@@ -55,91 +68,27 @@ struct AgentMeaningDetector {
             return wireDetection
         }
 
+        if let screenDetection,
+           let detection = detectionFromScreen(
+               identity: identity,
+               screenDetection: screenDetection
+           ) {
+            return detection
+        }
+
         switch identity {
-        case .kimi:
-            let lowered = current.visibleText.lowercased()
-            if lowered.contains("welcome to kimi code cli"),
-               lowered.contains("directory:"),
-               lowered.contains("model:") {
-                return detection(
-                    identity,
-                    .waitingText,
-                    runtimeState: .blocked,
-                    .screenHeuristic,
-                    "Kimi welcome screen detected — awaiting first input.",
-                    0.88,
-                    .waitingText(question: nil)
-                )
-            }
-
-            if lowered.contains("agent (kimi"),
-               lowered.contains("input") {
-                return detection(
-                    identity,
-                    .waitingText,
-                    runtimeState: .blocked,
-                    .screenHeuristic,
-                    "Kimi input region detected - awaiting next message.",
-                    0.82,
-                    .waitingText(question: nil)
-                )
-            }
-
+        case .kimi, .codex, .claudeCode:
             return detectFromRuntime(
                 identity: identity,
                 runtimeDetection: runtimeDetection,
                 current: current,
                 lastOutcome: lastOutcome,
-                lastEvent: lastEvent,
-                choiceMarkers: ["choose one", "select an option"],
-                approvalMarkers: ["approve once", "approve for this session", "reject"]
-            )
-
-        case .codex:
-            return detectFromRuntime(
-                identity: identity,
-                runtimeDetection: runtimeDetection,
-                current: current,
-                lastOutcome: lastOutcome,
-                lastEvent: lastEvent,
-                choiceMarkers: ["enter to confirm", "esc to cancel"],
-                approvalMarkers: []
-            )
-
-        case .claudeCode:
-            return detectFromRuntime(
-                identity: identity,
-                runtimeDetection: runtimeDetection,
-                current: current,
-                lastOutcome: lastOutcome,
-                lastEvent: lastEvent,
-                choiceMarkers: ["what do you want to do?", "enter to confirm", "esc to cancel"],
-                approvalMarkers: ["approve", "allow once", "allow always", "[y/n]", "yes / no", "allow this", "allow edit"]
+                lastEvent: lastEvent
             )
 
         case .none, .unknown:
             return nil
         }
-    }
-
-    private func detectKimiScreenApproval(current: TerminalSnapshot, lastEvent: String) -> Detection? {
-        let lowered = current.visibleText.lowercased()
-        let hasApprovalHeader = lowered.contains("shell is requesting approval to run command")
-        let hasApproveOption = lowered.contains("approve once") || lowered.contains("approve for this session")
-        let hasRejectOption = lowered.contains("reject, tell the model what to do instead")
-
-        guard hasApprovalHeader && (hasApproveOption || hasRejectOption) else {
-            return nil
-        }
-
-        return Detection(
-            identity: .kimi,
-            interactionState: .waitingApproval,
-            runtimeState: .blocked,
-            supportLevel: .firstClass,
-            evidence: [.init(source: .screenHeuristic, detail: "Kimi shell approval UI detected on screen", confidence: 0.95)],
-            context: .waitingApproval(description: lastEvent, tool: nil)
-        )
     }
 
     private func detectionFromContext(
@@ -185,11 +134,8 @@ struct AgentMeaningDetector {
         runtimeDetection: AgentRuntimeDetector.Detection,
         current: TerminalSnapshot,
         lastOutcome: TerminalOutcomeReport?,
-        lastEvent: String,
-        choiceMarkers: [String],
-        approvalMarkers: [String]
+        lastEvent: String
     ) -> Detection {
-        let lowered = current.visibleText.lowercased()
         let promptReady = current.signals.likelyWaitingForInput
 
         if let lastOutcome {
@@ -203,19 +149,6 @@ struct AgentMeaningDetector {
             case .stillRunning, .unknown:
                 break
             }
-        }
-
-        if containsAny(lowered, markers: choiceMarkers) || looksLikeNumberedChoiceMenu(current.visibleText) {
-            let options = extractNumberedOptions(current.visibleText)
-            guard !options.isEmpty else {
-                return detection(identity, .waitingText, runtimeState: .blocked, .screenHeuristic, "Detected an interactive prompt without parsed choice options.", 0.78, .waitingText(question: lastEvent))
-            }
-
-            return detection(identity, .waitingChoice, runtimeState: .blocked, .screenHeuristic, "Detected an interactive choice menu.", 0.86, .waitingChoice(question: lastEvent, options: options))
-        }
-
-        if looksLikeApprovalPrompt(identity: identity, loweredVisibleText: lowered, approvalMarkers: approvalMarkers) {
-            return detection(identity, .waitingApproval, runtimeState: .blocked, .phraseHeuristic, "Detected approval-oriented prompt text.", 0.82, .waitingApproval(description: lastEvent, tool: nil))
         }
 
         switch runtimeDetection.state {
@@ -268,100 +201,80 @@ struct AgentMeaningDetector {
             context: context
         )
     }
-}
 
-private func meaningContainsAny(_ text: String, markers: [String]) -> Bool {
-    markers.contains(where: text.contains)
-}
-
-private func meaningLooksLikeApprovalPrompt(
-    identity: AgentIdentity,
-    loweredVisibleText: String,
-    approvalMarkers: [String]
-) -> Bool {
-    switch identity {
-    case .codex:
-        return meaningLooksLikeCodexApprovalPrompt(loweredVisibleText)
-    case .none, .unknown:
-        return false
-    case .kimi, .claudeCode:
-        return meaningContainsAny(loweredVisibleText, markers: approvalMarkers)
-    }
-}
-
-private func meaningLooksLikeCodexApprovalPrompt(_ text: String) -> Bool {
-    if text.contains("permission required") ||
-        text.contains("requesting permission") ||
-        text.contains("needs your approval") {
-        return true
-    }
-
-    if text.contains("[y/n]") &&
-        (text.contains("approve") || text.contains("permission") || text.contains("allow")) {
-        return true
-    }
-
-    return false
-}
-
-private func meaningLooksLikeNumberedChoiceMenu(_ text: String) -> Bool {
-    let lines = text
-        .split(separator: "\n")
-        .map { $0.trimmingCharacters(in: .whitespaces) }
-        .filter { !$0.isEmpty }
-
-    let numberedCount = lines.filter { line in
-        let scalars = Array(line.unicodeScalars)
-        guard let first = scalars.first,
-              CharacterSet.decimalDigits.contains(first) || line.hasPrefix("❯ 1.") else {
-            return false
+    private func detectionFromScreen(
+        identity: AgentIdentity,
+        screenDetection: AgentScreenInteractionDetector.Detection
+    ) -> Detection? {
+        let interactionState: AgentInteractionState? = switch screenDetection.context {
+        case .waitingApproval:
+            AgentInteractionState.waitingApproval
+        case .waitingChoice:
+            AgentInteractionState.waitingChoice
+        case .waitingText:
+            AgentInteractionState.waitingText
+        case .running, .completed, .error, .none:
+            nil
         }
-        return line.contains(". ")
-    }.count
 
-    return numberedCount >= 2
-}
+        guard let interactionState else {
+            return nil
+        }
 
-private func meaningExtractNumberedOptions(_ text: String) -> [String] {
-    let lines = text.split(separator: "\n").map(String.init)
-    var options: [String] = []
-    for line in lines {
-        let trimmed = line.trimmingCharacters(in: .whitespaces)
-        guard let firstScalar = trimmed.unicodeScalars.first else { continue }
-        if CharacterSet.decimalDigits.contains(firstScalar) || trimmed.hasPrefix("❯ ") {
-            if let dotRange = trimmed.range(of: ". ") {
-                let option = String(trimmed[dotRange.upperBound...]).trimmingCharacters(in: .whitespaces)
-                if !option.isEmpty {
-                    options.append(option)
-                }
+        let evidence: UnderstandingEvidence
+        switch screenDetection.reason {
+        case .kimiWelcome:
+            evidence = .init(
+                source: .screenHeuristic,
+                detail: "Kimi welcome screen detected — awaiting first input.",
+                confidence: 0.88
+            )
+        case .kimiInputRegion:
+            evidence = .init(
+                source: .screenHeuristic,
+                detail: "Kimi input region detected - awaiting next message.",
+                confidence: 0.82
+            )
+        case .approvalPrompt:
+            if identity == .kimi {
+                evidence = .init(
+                    source: .screenHeuristic,
+                    detail: "Kimi shell approval UI detected on screen",
+                    confidence: 0.95
+                )
+            } else {
+                evidence = .init(
+                    source: .phraseHeuristic,
+                    detail: "Detected approval-oriented prompt text.",
+                    confidence: 0.82
+                )
+            }
+        case .choiceMenu:
+            switch screenDetection.context {
+            case .waitingChoice:
+                evidence = .init(
+                    source: .screenHeuristic,
+                    detail: "Detected an interactive choice menu.",
+                    confidence: 0.86
+                )
+            case .waitingText:
+                evidence = .init(
+                    source: .screenHeuristic,
+                    detail: "Detected an interactive prompt without parsed choice options.",
+                    confidence: 0.78
+                )
+            case .waitingApproval, .running, .completed, .error, .none:
+                return nil
             }
         }
-    }
-    return options
-}
-private extension AgentMeaningDetector {
-    func containsAny(_ text: String, markers: [String]) -> Bool {
-        meaningContainsAny(text, markers: markers)
-    }
 
-    func looksLikeApprovalPrompt(
-        identity: AgentIdentity,
-        loweredVisibleText: String,
-        approvalMarkers: [String]
-    ) -> Bool {
-        meaningLooksLikeApprovalPrompt(
+        return Detection(
             identity: identity,
-            loweredVisibleText: loweredVisibleText,
-            approvalMarkers: approvalMarkers
+            interactionState: interactionState,
+            runtimeState: .blocked,
+            supportLevel: .firstClass,
+            evidence: [evidence],
+            context: screenDetection.context
         )
     }
-
-    func looksLikeNumberedChoiceMenu(_ text: String) -> Bool {
-        meaningLooksLikeNumberedChoiceMenu(text)
-    }
-
-    func extractNumberedOptions(_ text: String) -> [String] {
-        meaningExtractNumberedOptions(text)
-    }
-
 }

@@ -104,6 +104,33 @@ struct AgentRawRuntimeDetectorTests {
     }
 
     @Test
+    func kimiInputRegionMapsToBlocked() {
+        let snapshot = TerminalSnapshot.makePreview(
+            terminalID: "term-kimi",
+            windowID: "win-1",
+            tabID: "tab-1",
+            title: "Kimi Code",
+            cwd: "/tmp/project",
+            isFocused: true,
+            visibleText: """
+            ─ input ─────────────────────────────────────────────────────────
+
+            agent (Kimi-k2.6 ●)  ~/speed2  ctrl-x: toggle mode | shift-tab: plan mode
+            context: 5.4% (14.3k/262.1k)
+            """,
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessName: "kimi",
+            cursorIsAtPrompt: true,
+            usingAlternateScreen: true
+        )
+
+        let detection = detector.detect(identity: .kimi, current: snapshot)
+
+        #expect(detection.state == .blocked)
+    }
+
+    @Test
     func managedManualAndNewTabLaunchesShareBlockedRawStateAcrossAgents() {
         let codexVisibleText = """
         • Hey. What do you need help with?

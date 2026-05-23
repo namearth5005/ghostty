@@ -21,6 +21,8 @@ enum AgentRuntimeState: String, Codable, Equatable, Sendable {
 }
 
 struct AgentRawRuntimeDetector {
+    private let screenDetector = AgentScreenInteractionDetector()
+
     struct Detection: Equatable, Sendable {
         let state: AgentRuntimeState
         let evidence: [UnderstandingEvidence]
@@ -31,41 +33,21 @@ struct AgentRawRuntimeDetector {
         current: TerminalSnapshot,
         previous: TerminalSnapshot? = nil
     ) -> Detection {
-        let lowered = current.visibleText.lowercased()
         let lastEvent = TerminalScreenText.lastMeaningfulEvent(
             currentVisibleText: current.visibleText,
             previousVisibleText: previous?.visibleText ?? ""
         )
         let promptReady = current.runtime.cursorIsAtPrompt || current.signals.likelyWaitingForInput
 
-        if identity == .kimi && isKimiWelcomeScreen(lowered) {
-            return detection(
-                state: .blocked,
-                detail: "Kimi welcome screen is awaiting first input.",
-                source: .screenHeuristic,
-                confidence: 0.9
-            )
+        if let screenDetection = screenDetector.detect(
+            identity: identity,
+            visibleText: current.visibleText,
+            lastEvent: lastEvent
+        ) {
+            return detection(for: screenDetection)
         }
 
-        if hasChoiceMenu(in: current.visibleText, identity: identity) {
-            return detection(
-                state: .blocked,
-                detail: "Interactive choice menu detected.",
-                source: .screenHeuristic,
-                confidence: 0.86
-            )
-        }
-
-        if hasApprovalPrompt(in: lowered, identity: identity) {
-            return detection(
-                state: .blocked,
-                detail: "Approval prompt detected.",
-                source: .phraseHeuristic,
-                confidence: 0.86
-            )
-        }
-
-        if promptReady && promptRequiresReply(identity: identity, lastEvent: lastEvent, visibleText: lowered) {
+        if promptReady && promptRequiresReply(lastEvent: lastEvent) {
             return detection(
                 state: .blocked,
                 detail: "Agent has returned control while still asking for input.",
@@ -155,45 +137,8 @@ struct AgentRawRuntimeDetector {
         return !promptReady && snapshot.runtime.usingAlternateScreen
     }
 
-    private func hasApprovalPrompt(in loweredVisibleText: String, identity: AgentIdentity) -> Bool {
-        switch identity {
-        case .kimi:
-            return loweredVisibleText.contains("shell is requesting approval to run command")
-                || loweredVisibleText.contains("approve once")
-                || loweredVisibleText.contains("approve for this session")
-                || loweredVisibleText.contains("reject, tell the model what to do instead")
-        case .codex:
-            return looksLikeCodexApprovalPrompt(loweredVisibleText)
-        case .claudeCode:
-            return containsAny(loweredVisibleText, markers: ["approve", "allow once", "allow always", "[y/n]", "yes / no", "allow this", "allow edit"])
-        case .none, .unknown:
-            return false
-        }
-    }
-
-    private func hasChoiceMenu(in visibleText: String, identity: AgentIdentity) -> Bool {
-        let lowered = visibleText.lowercased()
-        let choiceMarkers: [String]
-        switch identity {
-        case .kimi:
-            choiceMarkers = ["choose one", "select an option"]
-        case .codex:
-            choiceMarkers = ["enter to confirm", "esc to cancel"]
-        case .claudeCode:
-            choiceMarkers = ["what do you want to do?", "enter to confirm", "esc to cancel"]
-        case .none, .unknown:
-            choiceMarkers = []
-        }
-
-        return containsAny(lowered, markers: choiceMarkers) && looksLikeNumberedChoiceMenu(visibleText)
-    }
-
-    private func promptRequiresReply(identity: AgentIdentity, lastEvent: String, visibleText: String) -> Bool {
+    private func promptRequiresReply(lastEvent: String) -> Bool {
         if TerminalScreenText.looksLikeQuestion(lastEvent) || containsReplyCue(in: lastEvent.lowercased()) {
-            return true
-        }
-
-        if identity == .kimi && isKimiWelcomeScreen(visibleText) {
             return true
         }
 
@@ -214,12 +159,6 @@ struct AgentRawRuntimeDetector {
         ])
     }
 
-    private func isKimiWelcomeScreen(_ loweredVisibleText: String) -> Bool {
-        loweredVisibleText.contains("welcome to kimi code cli")
-            && loweredVisibleText.contains("directory:")
-            && loweredVisibleText.contains("model:")
-    }
-
     private func detection(
         state: AgentRuntimeState,
         detail: String,
@@ -232,40 +171,40 @@ struct AgentRawRuntimeDetector {
         )
     }
 
-    private func looksLikeNumberedChoiceMenu(_ text: String) -> Bool {
-        let lines = text
-            .split(separator: "\n")
-            .map { $0.trimmingCharacters(in: .whitespaces) }
-            .filter { !$0.isEmpty }
-
-        let numberedCount = lines.filter { line in
-            let scalars = Array(line.unicodeScalars)
-            guard let first = scalars.first,
-                  CharacterSet.decimalDigits.contains(first) || line.hasPrefix("❯ 1.") else {
-                return false
-            }
-            return line.contains(". ")
-        }.count
-
-        return numberedCount >= 2
+    private func detection(for screenDetection: AgentScreenInteractionDetector.Detection) -> Detection {
+        switch screenDetection.reason {
+        case .kimiWelcome:
+            return detection(
+                state: .blocked,
+                detail: "Kimi welcome screen is awaiting first input.",
+                source: .screenHeuristic,
+                confidence: 0.9
+            )
+        case .kimiInputRegion:
+            return detection(
+                state: .blocked,
+                detail: "Kimi input region is awaiting the next message.",
+                source: .screenHeuristic,
+                confidence: 0.82
+            )
+        case .approvalPrompt:
+            return detection(
+                state: .blocked,
+                detail: "Approval prompt detected.",
+                source: .phraseHeuristic,
+                confidence: 0.86
+            )
+        case .choiceMenu:
+            return detection(
+                state: .blocked,
+                detail: "Interactive choice menu detected.",
+                source: .screenHeuristic,
+                confidence: 0.86
+            )
+        }
     }
 
     private func containsAny(_ text: String, markers: [String]) -> Bool {
         markers.contains(where: text.contains)
-    }
-
-    private func looksLikeCodexApprovalPrompt(_ text: String) -> Bool {
-        if text.contains("permission required") ||
-            text.contains("requesting permission") ||
-            text.contains("needs your approval") {
-            return true
-        }
-
-        if text.contains("[y/n]") &&
-            (text.contains("approve") || text.contains("permission") || text.contains("allow")) {
-            return true
-        }
-
-        return false
     }
 }
