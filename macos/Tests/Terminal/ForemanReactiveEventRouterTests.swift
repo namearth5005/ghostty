@@ -43,6 +43,27 @@ struct ForemanReactiveEventRouterTests {
     }
 
     @Test
+    func codexApprovalInitialDecisionKeepsManagedLaunchParity() {
+        let signatures = codexApprovalCases().map { entry in
+            signature(
+                ForemanReactiveEventRouter.initialDecision(
+                    for: entry.event,
+                    understanding: entry.understanding
+                )
+            )
+        }
+        let firstSignature = signatures.first
+
+        #expect(signatures.count == 3)
+        #expect(signatures.dropFirst().allSatisfy { $0 == firstSignature })
+        #expect(firstSignature?.kind == InitialDecisionSignature.Kind.showPendingAttention)
+        #expect(firstSignature?.title == "Needs your approval")
+        #expect(firstSignature?.description == "Codex wants to run the suggested command.")
+        #expect(firstSignature?.detail == "Shell")
+        #expect(firstSignature?.actions.map { $0.title } == ["Approve", "Reject"])
+    }
+
+    @Test
     func claudeApprovalInitialDecisionKeepsManagedLaunchParity() {
         let signatures = claudeApprovalCases().map { entry in
             signature(
@@ -179,6 +200,15 @@ struct ForemanReactiveEventRouterTests {
             description: "Kimi wants to edit auth.ts.",
             tool: "WriteFile",
             deltaText: "Allow edit to auth.ts? [1/2/3]"
+        )
+    }
+
+    private func codexApprovalCases() -> [AttentionCase] {
+        makeApprovalCases(
+            agentIdentity: .codex,
+            description: "Codex wants to run the suggested command.",
+            tool: "Shell",
+            deltaText: "Run the suggested command? [y/n]"
         )
     }
 
