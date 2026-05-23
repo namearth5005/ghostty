@@ -453,6 +453,55 @@ struct TerminalUnderstandingTests {
     }
 
     @Test
+    func enginePreservesLastActionableClaudeWireStateWhenTrailingStatusIsUnknown() {
+        let engine = TerminalUnderstandingEngine()
+        let snapshot = TerminalSnapshot.makePreview(
+            terminalID: "term-7c",
+            windowID: "win-1",
+            tabID: "tab-7c",
+            title: "Claude Code",
+            cwd: "/tmp/project",
+            isFocused: true,
+            visibleText: "Welcome to Claude Code",
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessName: "claude"
+        )
+        let actionable = ClaudeSessionState(
+            pid: 12345,
+            sessionId: "session-1",
+            cwd: "/tmp/project",
+            status: "needs_approval",
+            updatedAt: 1714828801000,
+            startedAt: 1714828800000,
+            version: "2.1.128",
+            kind: "interactive"
+        )
+        let trailingUnknown = ClaudeSessionState(
+            pid: 12345,
+            sessionId: "session-1",
+            cwd: "/tmp/project",
+            status: "syncing",
+            updatedAt: 1714828802000,
+            startedAt: 1714828800000,
+            version: "2.1.128",
+            kind: "interactive"
+        )
+
+        let understanding = engine.understand(
+            current: snapshot,
+            previous: nil,
+            lastOutcome: nil,
+            claudeWireRecords: [actionable, trailingUnknown]
+        )
+
+        #expect(understanding.agentIdentity == .claudeCode)
+        #expect(understanding.agentInteractionState == .waitingApproval)
+        #expect(understanding.state == .waiting)
+        #expect(understanding.evidence.contains(where: { $0.source == .wireSignal }))
+    }
+
+    @Test
     func engineKeepsKimiQuestionAboveInputChromeAsWaitingTextPrompt() {
         let engine = TerminalUnderstandingEngine()
         let snapshot = TerminalSnapshot.makePreview(

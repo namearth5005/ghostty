@@ -258,32 +258,10 @@ struct TerminalUnderstandingEngine {
             return nil
         }
         let enrichedContext = enrichKimiWireContext(context, from: wireRecords)
-
-        let interactionState: AgentInteractionState
-        switch enrichedContext {
-        case .running:
-            interactionState = .running
-        case .waitingApproval:
-            interactionState = .waitingApproval
-        case .waitingChoice:
-            interactionState = .waitingChoice
-        case .waitingText:
-            interactionState = .waitingText
-        case .completed:
-            interactionState = .completed
-        case .error:
-            interactionState = .error
-        case .none:
-            return nil
-        }
-
-        return AgentClassification(
+        return classificationFromContext(
             identity: identity,
-            interactionState: interactionState,
-            runtimeState: runtimeState(for: enrichedContext),
-            supportLevel: .firstClass,
-            evidence: [.init(source: .wireSignal, detail: "Wire record: \(record.message.type)", confidence: 0.98)],
-            context: enrichedContext
+            context: enrichedContext,
+            detail: "Wire record: \(record.message.type)"
         )
     }
 
@@ -332,31 +310,10 @@ struct TerminalUnderstandingEngine {
             return nil
         }
 
-        let interactionState: AgentInteractionState
-        switch context {
-        case .running:
-            interactionState = .running
-        case .waitingApproval:
-            interactionState = .waitingApproval
-        case .waitingChoice:
-            interactionState = .waitingChoice
-        case .waitingText:
-            interactionState = .waitingText
-        case .completed:
-            interactionState = .completed
-        case .error:
-            interactionState = .error
-        case .none:
-            return nil
-        }
-
-        return AgentClassification(
+        return classificationFromContext(
             identity: identity,
-            interactionState: interactionState,
-            runtimeState: runtimeState(for: context),
-            supportLevel: .firstClass,
-            evidence: [.init(source: .wireSignal, detail: "Codex wire: \(record.payload.type ?? record.type)", confidence: 0.98)],
-            context: context
+            context: context,
+            detail: "Codex wire: \(record.payload.type ?? record.type)"
         )
     }
 
@@ -365,26 +322,28 @@ struct TerminalUnderstandingEngine {
         wireRecords: [ClaudeSessionState],
         lastEvent: String
     ) -> AgentClassification? {
-        guard let state = wireRecords.last,
-              let context = state.asAgentInteractionContext else {
+        guard let pair = wireRecords.lazy.reversed().compactMap({ state -> (ClaudeSessionState, AgentInteractionContext)? in
+            guard let context = state.asAgentInteractionContext else { return nil }
+            return (state, context)
+        }).first else {
             return nil
         }
+        let state = pair.0
+        let context = pair.1
 
-        let interactionState: AgentInteractionState
-        switch context {
-        case .running:
-            interactionState = .running
-        case .waitingApproval:
-            interactionState = .waitingApproval
-        case .waitingChoice:
-            interactionState = .waitingChoice
-        case .waitingText:
-            interactionState = .waitingText
-        case .completed:
-            interactionState = .completed
-        case .error:
-            interactionState = .error
-        case .none:
+        return classificationFromContext(
+            identity: identity,
+            context: context,
+            detail: "Claude status: \(state.status ?? "unknown")"
+        )
+    }
+
+    private func classificationFromContext(
+        identity: AgentIdentity,
+        context: AgentInteractionContext,
+        detail: String
+    ) -> AgentClassification? {
+        guard let interactionState = interactionState(for: context) else {
             return nil
         }
 
@@ -393,9 +352,28 @@ struct TerminalUnderstandingEngine {
             interactionState: interactionState,
             runtimeState: runtimeState(for: context),
             supportLevel: .firstClass,
-            evidence: [.init(source: .wireSignal, detail: "Claude status: \(state.status ?? "unknown")", confidence: 0.98)],
+            evidence: [.init(source: .wireSignal, detail: detail, confidence: 0.98)],
             context: context
         )
+    }
+
+    private func interactionState(for context: AgentInteractionContext) -> AgentInteractionState? {
+        switch context {
+        case .running:
+            return .running
+        case .waitingApproval:
+            return .waitingApproval
+        case .waitingChoice:
+            return .waitingChoice
+        case .waitingText:
+            return .waitingText
+        case .completed:
+            return .completed
+        case .error:
+            return .error
+        case .none:
+            return nil
+        }
     }
 
     private func runtimeState(for context: AgentInteractionContext) -> AgentRuntimeDetector.State {
