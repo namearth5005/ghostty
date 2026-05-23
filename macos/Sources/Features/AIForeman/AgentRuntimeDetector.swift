@@ -28,7 +28,12 @@ struct AgentRuntimeDetector {
         codexWireRecords: [CodexWireRecord] = [],
         claudeWireRecords: [ClaudeSessionState] = []
     ) -> Detection? {
-        guard let identity = identityDetector.identity(for: current) else {
+        guard let identity = identityDetector.identity(for: current) ??
+            inferredIdentityFromAttachedContext(
+                kimiWireRecords: kimiWireRecords,
+                codexWireRecords: codexWireRecords,
+                claudeWireRecords: claudeWireRecords
+            ) else {
             return nil
         }
 
@@ -52,6 +57,30 @@ struct AgentRuntimeDetector {
             state: rawDetection.state,
             evidence: rawDetection.evidence
         )
+    }
+
+    private func inferredIdentityFromAttachedContext(
+        kimiWireRecords: [KimiWireRecord],
+        codexWireRecords: [CodexWireRecord],
+        claudeWireRecords: [ClaudeSessionState]
+    ) -> AgentIdentity? {
+        var candidates: [AgentIdentity] = []
+
+        if contextResolver.resolveKimi(from: kimiWireRecords) != nil {
+            candidates.append(.kimi)
+        }
+        if contextResolver.resolveCodex(from: codexWireRecords) != nil {
+            candidates.append(.codex)
+        }
+        if contextResolver.resolveClaude(from: claudeWireRecords) != nil {
+            candidates.append(.claudeCode)
+        }
+
+        guard candidates.count == 1 else {
+            return nil
+        }
+
+        return candidates[0]
     }
 
     private func detectFromWire(

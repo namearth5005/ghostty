@@ -116,6 +116,93 @@ struct AgentRuntimeDetectorTests {
     }
 
     @Test
+    func codexWireRecordsPreserveIdentityWhenSnapshotSurfaceIsGeneric() {
+        let snapshot = TerminalSnapshot.makePreview(
+            terminalID: "codex-wire",
+            windowID: "win-1",
+            tabID: "tab-1",
+            title: "Codex",
+            cwd: "/tmp/project",
+            isFocused: true,
+            visibleText: "codex",
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessName: nil,
+            cursorIsAtPrompt: true,
+            usingAlternateScreen: true
+        )
+        let wireRecord = CodexWireRecord(
+            timestamp: "2026-05-04T12:00:10Z",
+            type: "event_msg",
+            payload: CodexWirePayload(
+                id: nil,
+                cwd: "/tmp/project",
+                originator: nil,
+                cliVersion: nil,
+                type: "task_complete",
+                turnId: "turn-1",
+                startedAt: nil,
+                completedAt: 1714828810,
+                durationMs: 9000,
+                reason: nil,
+                lastAgentMessage: nil,
+                callId: nil,
+                processId: nil,
+                command: nil,
+                status: nil,
+                message: nil,
+                phase: nil
+            )
+        )
+
+        let detection = detector.detect(
+            current: snapshot,
+            codexWireRecords: [wireRecord]
+        )
+
+        #expect(detection?.identity == .codex)
+        #expect(detection?.state == .blocked)
+        #expect(detection?.evidence.first?.source == .wireSignal)
+    }
+
+    @Test
+    func claudeWireRecordsPreserveIdentityWhenSnapshotSurfaceIsGeneric() {
+        let snapshot = TerminalSnapshot.makePreview(
+            terminalID: "claude-wire",
+            windowID: "win-1",
+            tabID: "tab-1",
+            title: "Claude",
+            cwd: "/tmp/project",
+            isFocused: true,
+            visibleText: "claude",
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessName: nil,
+            cursorIsAtPrompt: true,
+            usingAlternateScreen: true
+        )
+        let sessionState = ClaudeSessionState(
+            pid: 12345,
+            sessionId: "session-1",
+            cwd: "/tmp/project",
+            status: "idle",
+            updatedAt: 1714828801000,
+            startedAt: 1714828800000,
+            version: "2.1.128",
+            kind: "interactive"
+        )
+
+        let detection = detector.detect(
+            current: snapshot,
+            claudeWireRecords: [sessionState]
+        )
+
+        #expect(detection?.identity == .claudeCode)
+        #expect(detection?.state == .blocked)
+        #expect(detection?.evidence.first?.source == .wireSignal)
+    }
+
+    @Test
     func codexQuestionPromptMapsToBlocked() {
         let snapshot = TerminalSnapshot.makePreview(
             terminalID: "term-1",
