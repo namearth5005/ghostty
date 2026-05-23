@@ -257,6 +257,114 @@ struct ForemanAgentTests {
     }
 
     @Test
+    func loopUsesSuppliedObservedContextDuringStart() async throws {
+        let conversation = await MainActor.run { ForemanConversation() }
+        let client = ScriptedForemanClient(
+            responses: [
+                try makeStepResponse(
+                    thought: "The structured waiting question is already clear.",
+                    action: .respond(message: "Use the structured waiting question.")
+                ),
+            ]
+        )
+        let commandRecorder = CommandRecorder()
+        let agent = makeAgent(
+            conversation: conversation,
+            client: client,
+            commandRecorder: commandRecorder
+        )
+        let snapshots = kimiInputChromeSnapshots(
+            terminalID: "term-1",
+            title: "Kimi Code",
+            isFocused: true
+        )
+        let observedContext = kimiObservedWaitingTextContext(
+            terminalID: "term-1",
+            snapshots: snapshots
+        )
+
+        await agent.start(
+            goal: "help kimi",
+            mode: .interactive,
+            captureSnapshots: { snapshots },
+            captureObservedContext: { observedContext }
+        )
+
+        try await waitFor {
+            await MainActor.run { conversation.messages.contains { $0.content == "Use the structured waiting question." } }
+        }
+
+        let payloads = await client.recordedUnderstandings()
+        let forwarded = try #require(payloads.first?.first)
+        #expect(forwarded.agentInteractionContext == .waitingText(question: "What should I do here?"))
+        #expect(forwarded.lastMeaningfulEvent == "What should I do here?")
+        let lastUnderstandings = await MainActor.run { conversation.lastUnderstandings }
+        #expect(lastUnderstandings.first?.agentInteractionContext == .waitingText(question: "What should I do here?"))
+    }
+
+    @Test
+    func approvalResumeUsesSuppliedObservedContextProvider() async throws {
+        let conversation = await MainActor.run { ForemanConversation() }
+        let client = ScriptedForemanClient(
+            responses: [
+                try makeStepResponse(
+                    thought: "Need to send the scoped reply.",
+                    action: .sendCommand(
+                        terminalID: "term-1",
+                        command: "echo structured",
+                        reason: "Reply based on the structured waiting question."
+                    )
+                ),
+                try makeStepResponse(
+                    thought: "The context stayed structured after approval.",
+                    action: .respond(message: "Structured context persisted after approval.")
+                ),
+            ]
+        )
+        let commandRecorder = CommandRecorder()
+        let agent = makeAgent(
+            conversation: conversation,
+            client: client,
+            commandRecorder: commandRecorder
+        )
+        let snapshots = kimiInputChromeSnapshots(
+            terminalID: "term-1",
+            title: "Kimi Code",
+            isFocused: true
+        )
+        let observedContext = kimiObservedWaitingTextContext(
+            terminalID: "term-1",
+            snapshots: snapshots
+        )
+
+        await agent.start(
+            goal: "reply to kimi",
+            mode: .interactive,
+            captureSnapshots: { snapshots },
+            captureObservedContext: { observedContext }
+        )
+
+        try await waitForStatus(.waitingForUser, in: conversation)
+
+        await agent.approvePendingAction(
+            captureSnapshots: { snapshots },
+            captureObservedContext: { observedContext }
+        )
+
+        try await waitFor {
+            await MainActor.run { conversation.messages.contains { $0.content == "Structured context persisted after approval." } }
+        }
+
+        let payloads = await client.recordedUnderstandings()
+        #expect(payloads.count == 2)
+        for payload in payloads {
+            let forwarded = try #require(payload.first)
+            #expect(forwarded.agentInteractionContext == .waitingText(question: "What should I do here?"))
+            #expect(forwarded.lastMeaningfulEvent == "What should I do here?")
+        }
+    }
+
+    @Test
     func startingAndStoppingConversationClearsStructuredTerminalContext() async {
         let conversation = await MainActor.run { ForemanConversation() }
         let overview = TerminalOverview(

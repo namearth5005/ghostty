@@ -1542,6 +1542,10 @@ extension AppDelegate {
                         allSnapshots.append(contentsOf: controller.captureTerminalSnapshots())
                     }
                     return allSnapshots
+                },
+                captureObservedContext: { [weak self] in
+                    guard let self else { return nil }
+                    return self.captureAIForemanObservedContext().context
                 }
             )
         }
@@ -1575,6 +1579,10 @@ extension AppDelegate {
                         allSnapshots.append(contentsOf: controller.captureTerminalSnapshots())
                     }
                     return allSnapshots
+                },
+                captureObservedContext: { [weak self] in
+                    guard let self else { return nil }
+                    return self.captureAIForemanObservedContext().context
                 }
             )
         }
@@ -1638,11 +1646,16 @@ extension AppDelegate {
     }
 
     @MainActor
-    private func refreshAIForemanSidebar() {
-        let snapshotsByController: [(controller: TerminalController, snapshots: [TerminalSnapshot])] =
-            TerminalController.all.map { controller in
-                (controller, controller.captureTerminalSnapshots())
-            }
+    private func captureAIForemanObservedContext(
+        snapshotsByController providedSnapshotsByController: [(controller: TerminalController, snapshots: [TerminalSnapshot])]? = nil
+    ) -> (
+        snapshotsByController: [(controller: TerminalController, snapshots: [TerminalSnapshot])],
+        context: ForemanObservedTerminalContext,
+        understandingsByTerminalID: [String: TerminalUnderstanding]
+    ) {
+        let snapshotsByController = providedSnapshotsByController ?? TerminalController.all.map { controller in
+            (controller, controller.captureTerminalSnapshots())
+        }
         let allSnapshots = snapshotsByController.flatMap(\.snapshots)
         let activeTerminalIDs = Set(allSnapshots.map(\.terminalID))
         let now = Date()
@@ -1834,14 +1847,28 @@ extension AppDelegate {
             uniqueKeysWithValues: allSnapshots.map { ($0.terminalID, $0) }
         )
 
-        // Feed AI agent understandings to the reactive trigger monitor
-        agentStateMonitor.observe(understandings: understandings)
+        return (
+            snapshotsByController: snapshotsByController,
+            context: ForemanObservedTerminalContext(
+                terminals: allSnapshots,
+                understandings: understandings
+            ),
+            understandingsByTerminalID: understandingsByTerminalID
+        )
+    }
 
-        for (controller, snapshots) in snapshotsByController {
+    @MainActor
+    private func refreshAIForemanSidebar() {
+        let observation = captureAIForemanObservedContext()
+
+        // Feed AI agent understandings to the reactive trigger monitor
+        agentStateMonitor.observe(understandings: observation.context.understandings)
+
+        for (controller, snapshots) in observation.snapshotsByController {
             controller.foremanSidebarStore.applySnapshots(
                 snapshots,
                 summariesByTerminalID: currentAISummaries(for: snapshots),
-                understandingsByTerminalID: understandingsByTerminalID
+                understandingsByTerminalID: observation.understandingsByTerminalID
             )
         }
     }

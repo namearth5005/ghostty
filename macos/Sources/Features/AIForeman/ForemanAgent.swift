@@ -17,6 +17,7 @@ actor ForemanAgent {
     private var lastOutcome: TerminalOutcomeReport?
     private var pauseState: PauseState = .none
     private var captureSnapshots: (@MainActor () -> [TerminalSnapshot])?
+    private var captureObservedContext: (@MainActor () -> ForemanObservedTerminalContext?)?
     private let understandingEngine = TerminalUnderstandingEngine()
     private var previousSnapshotsByTerminalID: [String: TerminalSnapshot] = [:]
     private var previousUnderstandings: [TerminalUnderstanding] = []
@@ -38,9 +39,11 @@ actor ForemanAgent {
     func start(
         goal: String,
         mode: AgentMode,
-        captureSnapshots: @escaping @MainActor () -> [TerminalSnapshot]
+        captureSnapshots: @escaping @MainActor () -> [TerminalSnapshot],
+        captureObservedContext: (@MainActor () -> ForemanObservedTerminalContext?)? = nil
     ) {
         self.captureSnapshots = captureSnapshots
+        self.captureObservedContext = captureObservedContext
         lastOutcome = nil
         pauseState = .none
         previousSnapshotsByTerminalID = [:]
@@ -83,8 +86,10 @@ actor ForemanAgent {
     }
 
     func approvePendingAction(
-        captureSnapshots: @escaping @MainActor () -> [TerminalSnapshot]
+        captureSnapshots: @escaping @MainActor () -> [TerminalSnapshot],
+        captureObservedContext: (@MainActor () -> ForemanObservedTerminalContext?)? = nil
     ) async {
+        self.captureObservedContext = captureObservedContext ?? self.captureObservedContext
         self.captureSnapshots = captureSnapshots
         guard case .awaitingApproval(let action) = pauseState else { return }
         pauseState = .none
@@ -676,6 +681,10 @@ actor ForemanAgent {
         observedContext: ForemanObservedTerminalContext? = nil
     ) async -> ForemanObservedTerminalContext {
         if let observedContext {
+            return observedContext
+        }
+
+        if let captureObservedContext, let observedContext = await captureObservedContext() {
             return observedContext
         }
 
