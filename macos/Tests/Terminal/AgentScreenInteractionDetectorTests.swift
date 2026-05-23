@@ -94,4 +94,28 @@ struct AgentScreenInteractionDetectorTests {
         #expect(detection.reason == .approvalPrompt)
         #expect(detection.context == expected)
     }
+
+    @Test
+    func staleChoiceMenuHistoryDoesNotDetectWaitingChoiceSurface() {
+        let detection = detector.detect(
+            identity: .claudeCode,
+            visibleText: """
+            Accessing workspace:
+
+            /Users/nambouchara
+
+            Quick safety check: Is this a project you created or one you trust?
+
+             ❯ 1. Yes, I trust this folder
+               2. No, exit
+
+             Enter to confirm · Esc to cancel
+
+            Reading repository files...
+            """,
+            lastEvent: "Reading repository files..."
+        )
+
+        #expect(detection == nil)
+    }
 }

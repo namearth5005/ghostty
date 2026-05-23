@@ -1,6 +1,11 @@
 import Foundation
 
 enum TerminalScreenText {
+    struct ChoiceMenuContext: Equatable {
+        let question: String?
+        let options: [String]
+    }
+
     static func meaningfulLines(from text: String) -> [String] {
         text.split(separator: "\n")
             .map(String.init)
@@ -19,7 +24,7 @@ enum TerminalScreenText {
         let previousLines = Set(previousVisibleText.split(separator: "\n").map(String.init))
         let currentLines = meaningfulLines(from: currentVisibleText)
 
-        if let choiceQuestion = activeChoiceMenuQuestion(from: currentVisibleText) {
+        if let choiceQuestion = activeChoiceMenuContext(from: currentVisibleText)?.question {
             return choiceQuestion
         }
 
@@ -74,20 +79,36 @@ enum TerminalScreenText {
         return false
     }
 
-    private static func activeChoiceMenuQuestion(from visibleText: String) -> String? {
+    static func activeChoiceMenuContext(from visibleText: String) -> ChoiceMenuContext? {
         let trimmedLines = visibleText
             .split(separator: "\n")
             .map { String($0).trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty }
-        let optionLines = trimmedLines.filter(isNumberedChoiceOption)
+        let optionIndices = trimmedLines.indices.filter { isNumberedChoiceOption(trimmedLines[$0]) }
 
-        guard optionLines.count >= 2,
-              let firstOptionIndex = trimmedLines.firstIndex(where: isNumberedChoiceOption) else {
+        guard optionIndices.count >= 2,
+              let firstOptionIndex = optionIndices.first,
+              let lastOptionIndex = optionIndices.last else {
+            return nil
+        }
+
+        let trailingLines: [String]
+        if lastOptionIndex + 1 < trimmedLines.endIndex {
+            trailingLines = Array(trimmedLines[(lastOptionIndex + 1)...])
+        } else {
+            trailingLines = []
+        }
+        guard trailingLines.allSatisfy(isChoiceMenuFooter) else {
             return nil
         }
 
         let linesBeforeOptions = Array(trimmedLines[..<firstOptionIndex])
-        return linesBeforeOptions.last(where: looksLikeQuestion)
+        let options = optionIndices.compactMap { extractChoiceOption(from: trimmedLines[$0]) }
+
+        return ChoiceMenuContext(
+            question: linesBeforeOptions.last(where: looksLikeQuestion),
+            options: options
+        )
     }
 
     private static func isNumberedChoiceOption(_ line: String) -> Bool {
@@ -110,5 +131,31 @@ enum TerminalScreenText {
         }
 
         return dotRange.lowerBound != line.startIndex
+    }
+
+    private static func extractChoiceOption(from line: String) -> String? {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        let normalized: String
+
+        if trimmed.hasPrefix("❯ ") {
+            normalized = String(trimmed.dropFirst(2)).trimmingCharacters(in: .whitespaces)
+        } else {
+            normalized = trimmed
+        }
+
+        guard let dotRange = normalized.range(of: ". ") else {
+            return nil
+        }
+
+        let option = String(normalized[dotRange.upperBound...]).trimmingCharacters(in: .whitespaces)
+        return option.isEmpty ? nil : option
+    }
+
+    private static func isChoiceMenuFooter(_ line: String) -> Bool {
+        let lowered = line.trimmingCharacters(in: .whitespaces).lowercased()
+        guard !lowered.isEmpty else { return false }
+
+        return lowered.contains("enter to confirm") ||
+            lowered.contains("esc to cancel")
     }
 }

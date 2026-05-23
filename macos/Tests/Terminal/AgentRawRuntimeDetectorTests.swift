@@ -306,4 +306,64 @@ struct AgentRawRuntimeDetectorTests {
             #expect(states == [.blocked, .blocked, .blocked])
         }
     }
+
+    @Test
+    func staleChoiceMenuHistoryDoesNotBlockClaudeWorkingState() {
+        let previous = TerminalSnapshot.makePreview(
+            terminalID: "claude-stale-choice",
+            windowID: "win-1",
+            tabID: "tab-1",
+            title: "Claude Code",
+            cwd: "/Users/nambouchara",
+            isFocused: true,
+            visibleText: """
+            Accessing workspace:
+
+            /Users/nambouchara
+
+            Quick safety check: Is this a project you created or one you trust?
+
+             ❯ 1. Yes, I trust this folder
+               2. No, exit
+
+             Enter to confirm · Esc to cancel
+            """,
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessName: "claude",
+            cursorIsAtPrompt: true,
+            usingAlternateScreen: true
+        )
+        let current = TerminalSnapshot.makePreview(
+            terminalID: "claude-stale-choice",
+            windowID: "win-1",
+            tabID: "tab-1",
+            title: "Claude Code",
+            cwd: "/Users/nambouchara",
+            isFocused: true,
+            visibleText: """
+            Accessing workspace:
+
+            /Users/nambouchara
+
+            Quick safety check: Is this a project you created or one you trust?
+
+             ❯ 1. Yes, I trust this folder
+               2. No, exit
+
+             Enter to confirm · Esc to cancel
+
+            Thinking...
+            """,
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessName: "claude",
+            cursorIsAtPrompt: false,
+            usingAlternateScreen: true
+        )
+
+        let detection = detector.detect(identity: .claudeCode, current: current, previous: previous)
+
+        #expect(detection.state == .working)
+    }
 }

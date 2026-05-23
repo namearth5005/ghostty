@@ -19,6 +19,7 @@ struct AgentScreenInteractionDetector {
         lastEvent: String
     ) -> Detection? {
         let lowered = visibleText.lowercased()
+        let normalizedLastEvent = lastEvent.trimmingCharacters(in: .whitespacesAndNewlines)
 
         if identity == .kimi && isKimiWelcomeScreen(lowered) {
             return Detection(
@@ -34,17 +35,24 @@ struct AgentScreenInteractionDetector {
             )
         }
 
-        if containsChoiceMarkers(in: visibleText, identity: identity) || looksLikeNumberedChoiceMenu(visibleText) {
-            let question = lastEvent.isEmpty ? nil : lastEvent
-            let options = extractNumberedOptions(visibleText)
+        if let menu = TerminalScreenText.activeChoiceMenuContext(from: visibleText) {
+            let question = menu.question ?? (normalizedLastEvent.isEmpty ? nil : normalizedLastEvent)
 
-            if !options.isEmpty, let question {
+            if !menu.options.isEmpty, let question {
                 return Detection(
-                    context: .waitingChoice(question: question, options: options),
+                    context: .waitingChoice(question: question, options: menu.options),
                     reason: .choiceMenu
                 )
             }
 
+            return Detection(
+                context: .waitingText(question: question),
+                reason: .choiceMenu
+            )
+        }
+
+        if containsChoiceMarkers(in: visibleText, identity: identity),
+           let question = activeChoicePromptQuestion(identity: identity, lastEvent: normalizedLastEvent) {
             return Detection(
                 context: .waitingText(question: question),
                 reason: .choiceMenu
@@ -94,24 +102,6 @@ struct AgentScreenInteractionDetector {
         return containsAny(lowered, markers: choiceMarkers)
     }
 
-    private func extractNumberedOptions(_ text: String) -> [String] {
-        let lines = text.split(separator: "\n").map(String.init)
-        var options: [String] = []
-        for line in lines {
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            guard let firstScalar = trimmed.unicodeScalars.first else { continue }
-            if CharacterSet.decimalDigits.contains(firstScalar) || trimmed.hasPrefix("❯ ") {
-                if let dotRange = trimmed.range(of: ". ") {
-                    let option = String(trimmed[dotRange.upperBound...]).trimmingCharacters(in: .whitespaces)
-                    if !option.isEmpty {
-                        options.append(option)
-                    }
-                }
-            }
-        }
-        return options
-    }
-
     private func isKimiWelcomeScreen(_ loweredVisibleText: String) -> Bool {
         loweredVisibleText.contains("welcome to kimi code cli")
             && loweredVisibleText.contains("directory:")
@@ -123,22 +113,16 @@ struct AgentScreenInteractionDetector {
             && loweredVisibleText.contains("input")
     }
 
-    private func looksLikeNumberedChoiceMenu(_ text: String) -> Bool {
-        let lines = text
-            .split(separator: "\n")
-            .map { $0.trimmingCharacters(in: .whitespaces) }
-            .filter { !$0.isEmpty }
+    private func activeChoicePromptQuestion(identity: AgentIdentity, lastEvent: String) -> String? {
+        guard !lastEvent.isEmpty else {
+            return nil
+        }
 
-        let numberedCount = lines.filter { line in
-            let scalars = Array(line.unicodeScalars)
-            guard let first = scalars.first,
-                  CharacterSet.decimalDigits.contains(first) || line.hasPrefix("❯ 1.") else {
-                return false
-            }
-            return line.contains(". ")
-        }.count
+        if TerminalScreenText.looksLikeQuestion(lastEvent) {
+            return lastEvent
+        }
 
-        return numberedCount >= 2
+        return containsChoiceMarkers(in: lastEvent, identity: identity) ? lastEvent : nil
     }
 
     private func containsAny(_ text: String, markers: [String]) -> Bool {
