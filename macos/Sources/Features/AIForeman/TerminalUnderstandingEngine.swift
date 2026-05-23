@@ -1,11 +1,7 @@
 import Foundation
 
 struct TerminalUnderstandingEngine {
-    private let adapters: [any TerminalAgentAdapter] = [
-        KimiTerminalAdapter(),
-        CodexTerminalAdapter(),
-        ClaudeCodeTerminalAdapter(),
-    ]
+    private let runtimeDetector = AgentRuntimeDetector()
 
     func understand(
         current: TerminalSnapshot,
@@ -102,53 +98,116 @@ struct TerminalUnderstandingEngine {
         codexWireRecords: [CodexWireRecord],
         claudeWireRecords: [ClaudeSessionState]
     ) -> AgentClassification? {
-        for adapter in adapters {
-            guard let identity = adapter.detect(current: current, previous: previous) else { continue }
-
-            // CRITICAL: Check for explicit approval UI on screen BEFORE trusting wire records.
-            // Kimi's wire protocol does not emit ApprovalRequest for shell command approvals,
-            // so the wire records may say .running while the screen shows a blocking approval prompt.
-            if identity == .kimi,
-               let approvalClassification = detectKimiScreenApproval(current: current, lastEvent: lastEvent) {
-                return approvalClassification
-            }
-
-            // If wire records are available and this is Kimi, prefer wire signals over heuristics
-            if identity == .kimi, !wireRecords.isEmpty,
-               let wireClassification = classifyFromWireRecords(
-                   identity: identity,
-                   wireRecords: wireRecords,
-                   lastEvent: lastEvent
-               ) {
-                return wireClassification
-            }
-            // If Codex wire records are available, prefer them over heuristics
-            if identity == .codex, !codexWireRecords.isEmpty,
-               let wireClassification = classifyFromCodexWireRecords(
-                   identity: identity,
-                   wireRecords: codexWireRecords,
-                   lastEvent: lastEvent
-               ) {
-                return wireClassification
-            }
-            // If Claude session state is available, prefer it over heuristics
-            if identity == .claudeCode, !claudeWireRecords.isEmpty,
-               let wireClassification = classifyFromClaudeWireRecords(
-                   identity: identity,
-                   wireRecords: claudeWireRecords,
-                   lastEvent: lastEvent
-               ) {
-                return wireClassification
-            }
-            return adapter.classify(
-                identity: identity,
-                current: current,
-                previous: previous,
-                lastOutcome: lastOutcome,
-                lastEvent: lastEvent
-            )
+        guard let runtimeDetection = runtimeDetector.detect(
+            current: current,
+            previous: previous,
+            kimiWireRecords: wireRecords,
+            codexWireRecords: codexWireRecords,
+            claudeWireRecords: claudeWireRecords
+        ) else {
+            return nil
         }
-        return nil
+
+        let identity = runtimeDetection.identity
+
+        // CRITICAL: Check for explicit approval UI on screen BEFORE trusting wire records.
+        // Kimi's wire protocol does not emit ApprovalRequest for shell command approvals,
+        // so the wire records may say .running while the screen shows a blocking approval prompt.
+        if identity == .kimi,
+           let approvalClassification = detectKimiScreenApproval(current: current, lastEvent: lastEvent) {
+            return approvalClassification
+        }
+
+        if identity == .kimi, !wireRecords.isEmpty,
+           let wireClassification = classifyFromWireRecords(
+               identity: identity,
+               wireRecords: wireRecords,
+               lastEvent: lastEvent
+           ) {
+            return wireClassification
+        }
+        if identity == .codex, !codexWireRecords.isEmpty,
+           let wireClassification = classifyFromCodexWireRecords(
+               identity: identity,
+               wireRecords: codexWireRecords,
+               lastEvent: lastEvent
+           ) {
+            return wireClassification
+        }
+        if identity == .claudeCode, !claudeWireRecords.isEmpty,
+           let wireClassification = classifyFromClaudeWireRecords(
+               identity: identity,
+               wireRecords: claudeWireRecords,
+               lastEvent: lastEvent
+           ) {
+            return wireClassification
+        }
+
+        switch identity {
+        case .kimi:
+            let lowered = current.visibleText.lowercased()
+            if lowered.contains("welcome to kimi code cli"),
+               lowered.contains("directory:"),
+               lowered.contains("model:") {
+                return classification(
+                    identity,
+                    .waitingText,
+                    runtimeState: .blocked,
+                    .screenHeuristic,
+                    "Kimi welcome screen detected — awaiting first input.",
+                    0.88,
+                    .waitingText(question: nil)
+                )
+            }
+
+            if lowered.contains("agent (kimi"),
+               lowered.contains("input") {
+                return classification(
+                    identity,
+                    .waitingText,
+                    runtimeState: .blocked,
+                    .screenHeuristic,
+                    "Kimi input region detected - awaiting next message.",
+                    0.82,
+                    .waitingText(question: nil)
+                )
+            }
+
+            return classifyFromRuntimeDetection(
+                identity: identity,
+                runtimeDetection: runtimeDetection,
+                current: current,
+                lastOutcome: lastOutcome,
+                lastEvent: lastEvent,
+                choiceMarkers: ["choose one", "select an option"],
+                approvalMarkers: ["approve once", "approve for this session", "reject"]
+            )
+
+        case .codex:
+            return classifyFromRuntimeDetection(
+                identity: identity,
+                runtimeDetection: runtimeDetection,
+                current: current,
+                lastOutcome: lastOutcome,
+                lastEvent: lastEvent,
+                choiceMarkers: ["enter to confirm", "esc to cancel"],
+                approvalMarkers: ["approve", "permission", "[y/n]"]
+            )
+
+        case .claudeCode:
+            return classifyFromRuntimeDetection(
+                identity: identity,
+                runtimeDetection: runtimeDetection,
+                current: current,
+                lastOutcome: lastOutcome,
+                lastEvent: lastEvent,
+                choiceMarkers: ["what do you want to do?", "enter to confirm", "esc to cancel"],
+                approvalMarkers: ["approve", "allow once", "allow always", "[y/n]", "yes / no", "allow this", "allow edit"]
+            )
+
+        case .none, .unknown:
+            return nil
+        }
     }
 
     /// Detects Kimi's shell-command approval UI when the wire protocol fails to emit ApprovalRequest.
@@ -171,6 +230,7 @@ struct TerminalUnderstandingEngine {
         return AgentClassification(
             identity: .kimi,
             interactionState: .waitingApproval,
+            runtimeState: .blocked,
             supportLevel: .firstClass,
             evidence: [.init(source: .screenHeuristic, detail: "Kimi shell approval UI detected on screen", confidence: 0.95)],
             context: .waitingApproval(description: lastEvent, tool: nil)
@@ -215,6 +275,7 @@ struct TerminalUnderstandingEngine {
         return AgentClassification(
             identity: identity,
             interactionState: interactionState,
+            runtimeState: runtimeState(for: enrichedContext),
             supportLevel: .firstClass,
             evidence: [.init(source: .wireSignal, detail: "Wire record: \(record.message.type)", confidence: 0.98)],
             context: enrichedContext
@@ -287,6 +348,7 @@ struct TerminalUnderstandingEngine {
         return AgentClassification(
             identity: identity,
             interactionState: interactionState,
+            runtimeState: runtimeState(for: context),
             supportLevel: .firstClass,
             evidence: [.init(source: .wireSignal, detail: "Codex wire: \(record.payload.type ?? record.type)", confidence: 0.98)],
             context: context
@@ -324,10 +386,26 @@ struct TerminalUnderstandingEngine {
         return AgentClassification(
             identity: identity,
             interactionState: interactionState,
+            runtimeState: runtimeState(for: context),
             supportLevel: .firstClass,
             evidence: [.init(source: .wireSignal, detail: "Claude status: \(state.status ?? "unknown")", confidence: 0.98)],
             context: context
         )
+    }
+
+    private func runtimeState(for context: AgentInteractionContext) -> AgentRuntimeDetector.State {
+        switch context {
+        case .none:
+            return .unknown
+        case .running:
+            return .working
+        case .waitingApproval, .waitingChoice, .waitingText:
+            return .blocked
+        case .completed:
+            return .idle
+        case .error:
+            return .blocked
+        }
     }
 
     private func classifyState(
@@ -346,7 +424,16 @@ struct TerminalUnderstandingEngine {
             case .error:
                 return .failed
             case .unknown:
-                break
+                switch classification.runtimeState {
+                case .blocked:
+                    return .waiting
+                case .working:
+                    return .running
+                case .idle:
+                    return .idle
+                case .unknown:
+                    break
+                }
             }
         }
 
@@ -635,128 +722,18 @@ struct TerminalUnderstandingEngine {
     }
 }
 
-private protocol TerminalAgentAdapter {
-    func detect(current: TerminalSnapshot, previous: TerminalSnapshot?) -> AgentIdentity?
-    func classify(
-        identity: AgentIdentity,
-        current: TerminalSnapshot,
-        previous: TerminalSnapshot?,
-        lastOutcome: TerminalOutcomeReport?,
-        lastEvent: String
-    ) -> AgentClassification
-}
-
 private struct AgentClassification {
     let identity: AgentIdentity
     let interactionState: AgentInteractionState
+    let runtimeState: AgentRuntimeDetector.State
     let supportLevel: AgentSupportLevel
     let evidence: [UnderstandingEvidence]
     let context: AgentInteractionContext
 }
 
-private struct ClaudeCodeTerminalAdapter: TerminalAgentAdapter {
-    func detect(current: TerminalSnapshot, previous: TerminalSnapshot?) -> AgentIdentity? {
-        guard AgentTerminalMatcher.matches(current, identity: .claudeCode) else { return nil }
-        return .claudeCode
-    }
-
-    func classify(
-        identity: AgentIdentity,
-        current: TerminalSnapshot,
-        previous: TerminalSnapshot?,
-        lastOutcome: TerminalOutcomeReport?,
-        lastEvent: String
-    ) -> AgentClassification {
-        classifyCommonAgent(
-            identity: identity,
-            current: current,
-            lastOutcome: lastOutcome,
-            lastEvent: lastEvent,
-            choiceMarkers: ["what do you want to do?", "enter to confirm", "esc to cancel"],
-            approvalMarkers: ["approve", "allow once", "allow always", "[y/n]", "yes / no", "allow this", "allow edit"]
-        )
-    }
-}
-
-private struct CodexTerminalAdapter: TerminalAgentAdapter {
-    func detect(current: TerminalSnapshot, previous: TerminalSnapshot?) -> AgentIdentity? {
-        guard AgentTerminalMatcher.matches(current, identity: .codex) else { return nil }
-        return .codex
-    }
-
-    func classify(
-        identity: AgentIdentity,
-        current: TerminalSnapshot,
-        previous: TerminalSnapshot?,
-        lastOutcome: TerminalOutcomeReport?,
-        lastEvent: String
-    ) -> AgentClassification {
-        classifyCommonAgent(
-            identity: identity,
-            current: current,
-            lastOutcome: lastOutcome,
-            lastEvent: lastEvent,
-            choiceMarkers: ["enter to confirm", "esc to cancel"],
-            approvalMarkers: ["approve", "permission", "[y/n]"]
-        )
-    }
-}
-
-private struct KimiTerminalAdapter: TerminalAgentAdapter {
-    func detect(current: TerminalSnapshot, previous: TerminalSnapshot?) -> AgentIdentity? {
-        guard AgentTerminalMatcher.matches(current, identity: .kimi) else { return nil }
-        return .kimi
-    }
-
-    func classify(
-        identity: AgentIdentity,
-        current: TerminalSnapshot,
-        previous: TerminalSnapshot?,
-        lastOutcome: TerminalOutcomeReport?,
-        lastEvent: String
-    ) -> AgentClassification {
-        let lowered = current.visibleText.lowercased()
-        // Kimi's initial welcome screen has no wire file yet; the generic
-        // heuristic sees no shell prompt and classifies as .running.
-        // Detect the welcome state and treat it as awaiting first input.
-        if lowered.contains("welcome to kimi code cli"),
-           lowered.contains("directory:"),
-           lowered.contains("model:") {
-            return classification(
-                identity,
-                .waitingText,
-                .screenHeuristic,
-                "Kimi welcome screen detected — awaiting first input.",
-                0.88,
-                .waitingText(question: nil)
-            )
-        }
-
-        if lowered.contains("agent (kimi"),
-           lowered.contains("input") {
-            return classification(
-                identity,
-                .waitingText,
-                .screenHeuristic,
-                "Kimi input region detected - awaiting next message.",
-                0.82,
-                .waitingText(question: nil)
-            )
-        }
-
-        return classifyCommonAgent(
-            identity: identity,
-            current: current,
-            lastOutcome: lastOutcome,
-            lastEvent: lastEvent,
-            choiceMarkers: ["choose one", "select an option"],
-            approvalMarkers: ["approve once", "approve for this session", "reject"]
-        )
-    }
-}
-
-private func classifyCommonAgent(
+private func classifyFromRuntimeDetection(
     identity: AgentIdentity,
+    runtimeDetection: AgentRuntimeDetector.Detection,
     current: TerminalSnapshot,
     lastOutcome: TerminalOutcomeReport?,
     lastEvent: String,
@@ -769,11 +746,11 @@ private func classifyCommonAgent(
     if let lastOutcome {
         switch lastOutcome.outcome {
         case .failure, .hung:
-            return classification(identity, .error, .outcome, "Terminal outcome reported failure.", 1.0, .error(description: lastOutcome.summary ?? "Unknown failure"))
+            return classification(identity, .error, runtimeState: .blocked, .outcome, "Terminal outcome reported failure.", 1.0, .error(description: lastOutcome.summary ?? "Unknown failure"))
         case .success:
-            return classification(identity, .completed, .outcome, "Terminal outcome reported success.", 1.0, .completed(summary: lastOutcome.summary))
+            return classification(identity, .completed, runtimeState: .idle, .outcome, "Terminal outcome reported success.", 1.0, .completed(summary: lastOutcome.summary))
         case .needsInput:
-            return classification(identity, .waitingText, .outcome, "Terminal outcome requested additional input.", 1.0, .waitingText(question: lastOutcome.summary))
+            return classification(identity, .waitingText, runtimeState: .blocked, .outcome, "Terminal outcome requested additional input.", 1.0, .waitingText(question: lastOutcome.summary))
         case .stillRunning, .unknown:
             break
         }
@@ -782,25 +759,46 @@ private func classifyCommonAgent(
     if containsAny(lowered, markers: choiceMarkers) || looksLikeNumberedChoiceMenu(current.visibleText) {
         let options = extractNumberedOptions(current.visibleText)
         guard !options.isEmpty else {
-            return classification(identity, .waitingText, .screenHeuristic, "Detected an interactive prompt without parsed choice options.", 0.78, .waitingText(question: lastEvent))
+            return classification(identity, .waitingText, runtimeState: .blocked, .screenHeuristic, "Detected an interactive prompt without parsed choice options.", 0.78, .waitingText(question: lastEvent))
         }
 
-        return classification(identity, .waitingChoice, .screenHeuristic, "Detected an interactive choice menu.", 0.86, .waitingChoice(question: lastEvent, options: options))
+        return classification(identity, .waitingChoice, runtimeState: .blocked, .screenHeuristic, "Detected an interactive choice menu.", 0.86, .waitingChoice(question: lastEvent, options: options))
     }
 
     if containsAny(lowered, markers: approvalMarkers) {
-        return classification(identity, .waitingApproval, .phraseHeuristic, "Detected approval-oriented prompt text.", 0.82, .waitingApproval(description: lastEvent, tool: nil))
+        return classification(identity, .waitingApproval, runtimeState: .blocked, .phraseHeuristic, "Detected approval-oriented prompt text.", 0.82, .waitingApproval(description: lastEvent, tool: nil))
     }
 
-    if promptReady {
-        return classification(identity, .waitingText, .runtime, "Terminal returned control to the input region.", 0.92, .waitingText(question: lastEvent))
-    }
+    switch runtimeDetection.state {
+    case .blocked:
+        if current.signals.likelyErrorState && !looksLikeQuestion(lastEvent) {
+            return classification(identity, .error, runtimeState: .blocked, .phraseHeuristic, "Detected active failure markers in agent output.", 0.73, .error(description: lastEvent))
+        }
 
-    if current.signals.likelyErrorState && !looksLikeQuestion(lastEvent) {
-        return classification(identity, .error, .phraseHeuristic, "Detected active failure markers in agent output.", 0.73, .error(description: lastEvent))
-    }
+        let question = lastEvent.isEmpty ? nil : lastEvent
+        return classification(identity, .waitingText, runtimeState: .blocked, .runtime, "Terminal returned control while the agent still needs attention.", 0.92, .waitingText(question: question))
 
-    return classification(identity, .running, .runtime, "Agent process is active without a prompt handoff.", 0.75, .running(stepDescription: lastEvent))
+    case .working:
+        let stepDescription = lastEvent.isEmpty ? nil : lastEvent
+        return classification(identity, .running, runtimeState: .working, .runtime, "Agent process is active without a prompt handoff.", 0.75, .running(stepDescription: stepDescription))
+
+    case .idle:
+        return classification(
+            identity,
+            .unknown,
+            runtimeState: .idle,
+            runtimeDetection.evidence.first?.source ?? .runtime,
+            runtimeDetection.evidence.first?.detail ?? "Agent is idle.",
+            runtimeDetection.evidence.first?.confidence ?? 0.75
+        )
+
+    case .unknown:
+        if promptReady {
+            return classification(identity, .waitingText, runtimeState: .blocked, .runtime, "Terminal returned control to the input region.", 0.92, .waitingText(question: lastEvent))
+        }
+
+        return classification(identity, .unknown, runtimeState: .unknown, .runtime, "Unable to determine raw runtime state.", 0.4)
+    }
 }
 
 private func extractNumberedOptions(_ text: String) -> [String] {
@@ -824,6 +822,7 @@ private func extractNumberedOptions(_ text: String) -> [String] {
 private func classification(
     _ identity: AgentIdentity,
     _ interactionState: AgentInteractionState,
+    runtimeState: AgentRuntimeDetector.State,
     _ source: UnderstandingEvidenceSource,
     _ detail: String,
     _ confidence: Double,
@@ -832,6 +831,7 @@ private func classification(
     AgentClassification(
         identity: identity,
         interactionState: interactionState,
+        runtimeState: runtimeState,
         supportLevel: .firstClass,
         evidence: [.init(source: source, detail: detail, confidence: confidence)],
         context: context
