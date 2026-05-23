@@ -339,6 +339,74 @@ struct TerminalUnderstandingTests {
     }
 
     @Test
+    func managedAndManualKimiLaunchesShareUnderstandingAtInputRegion() {
+        let engine = TerminalUnderstandingEngine()
+        let visibleText = """
+        ─ input ─────────────────────────────────────────────────────────
+
+        agent (Kimi-k2.6 ●)  ~/speed2  ctrl-x: toggle mode | shift-tab: plan mode
+        context: 5.4% (14.3k/262.1k)
+        """
+
+        let existingTab = TerminalSnapshot.makePreview(
+            terminalID: "kimi-input-existing",
+            windowID: "win-1",
+            tabID: "tab-1",
+            title: "shell",
+            cwd: "/tmp/project",
+            isFocused: true,
+            visibleText: visibleText,
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessID: 414,
+            foregroundProcessName: "kimi",
+            cursorIsAtPrompt: true,
+            usingAlternateScreen: true
+        )
+        let newTab = TerminalSnapshot.makePreview(
+            terminalID: "kimi-input-new-tab",
+            windowID: "win-1",
+            tabID: "tab-2",
+            title: "nambouchara@Nams-MacBook-Pro:~",
+            cwd: "/tmp/project",
+            isFocused: false,
+            visibleText: visibleText,
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessID: 515,
+            foregroundProcessName: "kimi",
+            cursorIsAtPrompt: true,
+            usingAlternateScreen: true
+        )
+        let managed = TerminalSnapshot.makePreview(
+            terminalID: "kimi-input-managed",
+            windowID: "win-1",
+            tabID: "tab-3",
+            title: "Kimi Code",
+            cwd: "/tmp/project",
+            isFocused: false,
+            visibleText: visibleText,
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessID: 616,
+            foregroundProcessName: "kimi",
+            cursorIsAtPrompt: true,
+            usingAlternateScreen: true
+        )
+
+        let existingUnderstanding = engine.understand(current: existingTab, previous: nil, lastOutcome: nil)
+        let newTabUnderstanding = engine.understand(current: newTab, previous: nil, lastOutcome: nil)
+        let managedUnderstanding = engine.understand(current: managed, previous: nil, lastOutcome: nil)
+
+        #expect(paritySignature(existingUnderstanding) == paritySignature(newTabUnderstanding))
+        #expect(paritySignature(existingUnderstanding) == paritySignature(managedUnderstanding))
+        #expect(existingUnderstanding.agentIdentity == .kimi)
+        #expect(existingUnderstanding.state == .waiting)
+        #expect(existingUnderstanding.agentInteractionState == .waitingText)
+        #expect(existingUnderstanding.lastMeaningfulEvent == "No meaningful terminal event detected.")
+    }
+
+    @Test
     func managedAndManualClaudeLaunchesShareUnderstandingAtTrustPrompt() {
         let engine = TerminalUnderstandingEngine()
         let visibleText = """

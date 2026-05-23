@@ -659,6 +659,37 @@ struct ForemanAgentTests {
     }
 
     @Test
+    func draftPendingAttentionForKimiInputChromeReturnsNilAcrossLaunchPaths() async throws {
+        let cases: [(terminalID: String, snapshots: [TerminalSnapshot])] = [
+            ("kimi-input-existing", kimiInputChromeSnapshots(terminalID: "kimi-input-existing", title: "shell", isFocused: true)),
+            ("kimi-input-new-tab", kimiInputChromeSnapshots(terminalID: "kimi-input-new-tab", title: "nambouchara@Nams-MacBook-Pro:~")),
+            ("kimi-input-managed", kimiInputChromeSnapshots(terminalID: "kimi-input-managed", title: "Kimi Code")),
+        ]
+
+        for entry in cases {
+            let result = try await draftPendingAttentionCase(
+                snapshots: entry.snapshots,
+                event: AgentNeedsAttentionEvent(
+                    terminalID: entry.terminalID,
+                    agentIdentity: .kimi,
+                    interactionState: .waitingText,
+                    deltaText: "── input ──",
+                    timestamp: Date(timeIntervalSince1970: 1),
+                    fingerprint: "\(entry.terminalID)|kimi|waitingText|chrome"
+                ),
+                replyDraft: try makeReplyDraftResponse(
+                    thought: "The waiting text is not actionable.",
+                    suggestion: .noAction(reason: "Only welcome screen chrome is visible.", confidence: 1.0)
+                )
+            )
+
+            #expect(result.signature == nil)
+            #expect(result.understanding?.interactionState == .waitingText)
+            #expect(result.understanding?.interactionContext == .waitingText(question: nil))
+        }
+    }
+
+    @Test
     func draftPendingAttentionForKimiRepliesSharesParityAcrossLaunchPaths() async throws {
         let cases: [(terminalID: String, snapshots: [TerminalSnapshot])] = [
             ("kimi-existing", kimiReplySnapshots(terminalID: "kimi-existing", title: "shell", isFocused: true)),
@@ -1201,6 +1232,34 @@ private func kimiReplySnapshots(
 
             ─ input ─────────────────────────────────────────────────────────
 
+
+            agent (Kimi-k2.6 ●)  ~/speed2  ctrl-x: toggle mode | shift-tab: plan mode
+            context: 5.4% (14.3k/262.1k)
+            """,
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessName: "kimi",
+            cursorIsAtPrompt: true,
+            usingAlternateScreen: true
+        ),
+    ]
+}
+
+private func kimiInputChromeSnapshots(
+    terminalID: String,
+    title: String,
+    isFocused: Bool = false
+) -> [TerminalSnapshot] {
+    [
+        TerminalSnapshot.makePreview(
+            terminalID: terminalID,
+            windowID: "win-1",
+            tabID: "tab-1",
+            title: title,
+            cwd: "/Users/nambouchara/speed2",
+            isFocused: isFocused,
+            visibleText: """
+            ─ input ─────────────────────────────────────────────────────────
 
             agent (Kimi-k2.6 ●)  ~/speed2  ctrl-x: toggle mode | shift-tab: plan mode
             context: 5.4% (14.3k/262.1k)

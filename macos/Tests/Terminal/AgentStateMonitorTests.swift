@@ -601,6 +601,51 @@ struct AgentStateMonitorTests {
     }
 
     @Test
+    func managedManualAndNewTabKimiInputRegionsDoNotFireAttentionEvents() {
+        let monitor = AgentStateMonitor()
+        var capturedEvents: [AgentNeedsAttentionEvent] = []
+        monitor.onEvent = { event in
+            capturedEvents.append(event)
+        }
+
+        let details: [String] = []
+        let manual = TerminalUnderstanding.preview(
+            terminalID: "kimi-input-manual",
+            state: .waiting,
+            shortExplanation: "Kimi is waiting for your response.",
+            lastMeaningfulEvent: "No meaningful terminal event detected.",
+            importantDetails: details,
+            suggestedNextActions: [],
+            agentIdentity: .kimi,
+            agentInteractionState: .waitingText
+        )
+        let newTab = TerminalUnderstanding.preview(
+            terminalID: "kimi-input-new-tab",
+            state: .waiting,
+            shortExplanation: "Kimi is waiting for your response.",
+            lastMeaningfulEvent: "No meaningful terminal event detected.",
+            importantDetails: details,
+            suggestedNextActions: [],
+            agentIdentity: .kimi,
+            agentInteractionState: .waitingText
+        )
+        let managed = TerminalUnderstanding.preview(
+            terminalID: "kimi-input-managed",
+            state: .waiting,
+            shortExplanation: "Kimi is waiting for your response.",
+            lastMeaningfulEvent: "No meaningful terminal event detected.",
+            importantDetails: details,
+            suggestedNextActions: [],
+            agentIdentity: .kimi,
+            agentInteractionState: .waitingText
+        )
+
+        monitor.observe(understandings: [manual, newTab, managed])
+
+        #expect(capturedEvents.isEmpty)
+    }
+
+    @Test
     func managedManualAndNewTabCodexQuestionPromptsFireEquivalentAttentionEvents() {
         let monitor = AgentStateMonitor()
         var capturedEvents: [AgentNeedsAttentionEvent] = []
