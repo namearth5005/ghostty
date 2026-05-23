@@ -659,6 +659,45 @@ struct ForemanAgentTests {
     }
 
     @Test
+    func draftPendingAttentionUsesSuppliedObservedContext() async throws {
+        let snapshots = kimiInputChromeSnapshots(
+            terminalID: "kimi-observed",
+            title: "Kimi Code",
+            isFocused: true
+        )
+        let observedContext = kimiObservedWaitingTextContext(
+            terminalID: "kimi-observed",
+            snapshots: snapshots
+        )
+        let result = try await draftPendingAttentionCase(
+            snapshots: snapshots,
+            observedContext: observedContext,
+            event: AgentNeedsAttentionEvent(
+                terminalID: "kimi-observed",
+                agentIdentity: .kimi,
+                interactionState: .waitingText,
+                deltaText: "── input ──",
+                timestamp: Date(timeIntervalSince1970: 1),
+                fingerprint: "kimi-observed|kimi|waitingText|wire"
+            ),
+            replyDraft: try makeReplyDraftResponse(
+                thought: "Kimi is waiting for a scoped next step.",
+                suggestion: .replyToAgent(
+                    terminalID: "kimi-observed",
+                    message: "Summarize the repository first.",
+                    reason: "The current wire-aware question is specific enough to answer directly.",
+                    confidence: 1.0
+                )
+            )
+        )
+
+        #expect(result.signature?.title == "Suggested reply")
+        #expect(result.understanding?.interactionContext == .waitingText(question: "What should I do here?"))
+        #expect(result.understanding?.lastMeaningfulEvent == "What should I do here?")
+        #expect(result.understanding?.shortExplanation == "Kimi is waiting for your response: What should I do here?")
+    }
+
+    @Test
     func draftPendingAttentionForKimiInputChromeReturnsNilAcrossLaunchPaths() async throws {
         let cases: [(terminalID: String, snapshots: [TerminalSnapshot])] = [
             ("kimi-input-existing", kimiInputChromeSnapshots(terminalID: "kimi-input-existing", title: "shell", isFocused: true)),
@@ -824,6 +863,57 @@ struct ForemanAgentTests {
         #expect(signatures.first?.actions.first?.title == "Inspect the current files and summarize the next useful change.")
         #expect(forwardedUnderstandings.first?.interactionState == .waitingText)
         #expect(forwardedUnderstandings.first?.interactionContext == .waitingText(question: "• Hello. What do you want to work on in ghostty?"))
+    }
+
+    @Test
+    func reactiveIterationUsesSuppliedObservedContext() async throws {
+        let conversation = await MainActor.run { ForemanConversation() }
+        let client = ScriptedForemanClient(responses: [
+            try makeStepResponse(
+                thought: "The question is already clear from the structured context.",
+                action: .respond(message: "Use the structured waiting question.")
+            ),
+        ])
+        let commandRecorder = CommandRecorder()
+        let agent = makeAgent(
+            conversation: conversation,
+            client: client,
+            commandRecorder: commandRecorder
+        )
+        let snapshots = kimiInputChromeSnapshots(
+            terminalID: "kimi-reactive",
+            title: "Kimi Code",
+            isFocused: true
+        )
+        let observedContext = kimiObservedWaitingTextContext(
+            terminalID: "kimi-reactive",
+            snapshots: snapshots
+        )
+        let event = AgentNeedsAttentionEvent(
+            terminalID: "kimi-reactive",
+            agentIdentity: .kimi,
+            interactionState: .waitingText,
+            deltaText: "── input ──",
+            timestamp: Date(timeIntervalSince1970: 1),
+            fingerprint: "kimi-reactive|kimi|waitingText|wire"
+        )
+
+        await agent.react(
+            to: event,
+            observedContext: observedContext,
+            captureSnapshots: { snapshots }
+        )
+
+        try await waitFor {
+            await MainActor.run { conversation.messages.contains { $0.content == "Use the structured waiting question." } }
+        }
+
+        let payloads = await client.recordedUnderstandings()
+        let forwarded = try #require(payloads.first?.first)
+        #expect(forwarded.agentInteractionContext == .waitingText(question: "What should I do here?"))
+        #expect(forwarded.lastMeaningfulEvent == "What should I do here?")
+        let lastUnderstandings = await MainActor.run { conversation.lastUnderstandings }
+        #expect(lastUnderstandings.first?.agentInteractionContext == .waitingText(question: "What should I do here?"))
     }
 
     @Test
@@ -1092,6 +1182,7 @@ private func understandingSignature(_ understanding: TerminalUnderstanding?) -> 
 
 private func draftPendingAttentionCase(
     snapshots: [TerminalSnapshot],
+    observedContext: ForemanObservedTerminalContext? = nil,
     event: AgentNeedsAttentionEvent,
     replyDraft: AgentReplyDraftResponse
 ) async throws -> (
@@ -1109,6 +1200,7 @@ private func draftPendingAttentionCase(
 
     let attention = try await agent.draftPendingAttention(
         for: event,
+        observedContext: observedContext,
         captureSnapshots: { snapshots }
     )
 
@@ -1271,6 +1363,37 @@ private func kimiInputChromeSnapshots(
             usingAlternateScreen: true
         ),
     ]
+}
+
+private func kimiObservedWaitingTextContext(
+    terminalID: String,
+    snapshots: [TerminalSnapshot]
+) -> ForemanObservedTerminalContext {
+    ForemanObservedTerminalContext(
+        terminals: snapshots,
+        understandings: [
+            .preview(
+                terminalID: terminalID,
+                state: .waiting,
+                shortExplanation: "Kimi is waiting for your response: What should I do here?",
+                lastMeaningfulEvent: "What should I do here?",
+                importantDetails: ["What should I do here?"],
+                suggestedNextActions: [
+                    .init(
+                        title: "Reply to the agent",
+                        command: nil,
+                        reason: "What should I do here?",
+                        isRecommended: true
+                    ),
+                ],
+                agentIdentity: .kimi,
+                agentInteractionState: .waitingText,
+                supportLevel: .firstClass,
+                evidence: [.init(source: .wireSignal, detail: "Wire record: QuestionRequest", confidence: 0.98)],
+                agentInteractionContext: .waitingText(question: "What should I do here?")
+            ),
+        ]
+    )
 }
 
 private func codexReplySnapshots(

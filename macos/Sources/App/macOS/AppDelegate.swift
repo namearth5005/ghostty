@@ -192,6 +192,8 @@ class AppDelegate: NSObject,
     private var aiForemanSummaryCache: [String: TerminalSummary] = [:]
     private var aiForemanSnapshotFingerprints: [String: Int] = [:]
     private let aiForemanUnderstandingEngine = TerminalUnderstandingEngine()
+    private var aiForemanCurrentSnapshots: [TerminalSnapshot] = []
+    private var aiForemanCurrentUnderstandings: [TerminalUnderstanding] = []
     private var aiForemanPreviousSnapshots: [String: TerminalSnapshot] = [:]
     private var aiForemanPreviousUnderstandings: [String: TerminalUnderstanding] = [:]
     private let agentStateMonitor = AgentStateMonitor()
@@ -328,6 +330,10 @@ class AppDelegate: NSObject,
 
                 let store = targetController.foremanSidebarStore
                 let understanding = self.aiForemanPreviousUnderstandings[event.terminalID]
+                let observedContext = self.aiForemanCurrentSnapshots.isEmpty ? nil : ForemanObservedTerminalContext(
+                    terminals: self.aiForemanCurrentSnapshots,
+                    understandings: self.aiForemanCurrentUnderstandings
+                )
                 let initialDecision = ForemanReactiveEventRouter.initialDecision(
                     for: event,
                     understanding: understanding
@@ -379,6 +385,7 @@ class AppDelegate: NSObject,
                         DebugLogger.log("[AppDelegate] drafting waitingText attention terminal=\(event.terminalID.prefix(8)) fingerprint='\(event.fingerprint)'")
                         let draftedAttention = try await self.foremanAgent?.draftPendingAttention(
                             for: event,
+                            observedContext: observedContext,
                             captureSnapshots: snapshotProvider
                         )
 
@@ -406,7 +413,11 @@ class AppDelegate: NSObject,
 
                 }
 
-                await self.foremanAgent?.react(to: event, captureSnapshots: snapshotProvider)
+                await self.foremanAgent?.react(
+                    to: event,
+                    observedContext: observedContext,
+                    captureSnapshots: snapshotProvider
+                )
             }
         }
 
@@ -1816,14 +1827,15 @@ extension AppDelegate {
             uniqueKeysWithValues: understandings.map { ($0.terminalID, $0) }
         )
 
+        aiForemanCurrentSnapshots = allSnapshots
+        aiForemanCurrentUnderstandings = understandings
         aiForemanPreviousUnderstandings = understandingsByTerminalID
-
-        // Feed AI agent understandings to the reactive trigger monitor
-        agentStateMonitor.observe(understandings: understandings)
-
         aiForemanPreviousSnapshots = Dictionary(
             uniqueKeysWithValues: allSnapshots.map { ($0.terminalID, $0) }
         )
+
+        // Feed AI agent understandings to the reactive trigger monitor
+        agentStateMonitor.observe(understandings: understandings)
 
         for (controller, snapshots) in snapshotsByController {
             controller.foremanSidebarStore.applySnapshots(

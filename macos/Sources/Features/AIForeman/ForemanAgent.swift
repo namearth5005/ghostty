@@ -133,6 +133,7 @@ actor ForemanAgent {
 
     func react(
         to event: AgentNeedsAttentionEvent,
+        observedContext: ForemanObservedTerminalContext? = nil,
         captureSnapshots: (@MainActor () -> [TerminalSnapshot])? = nil
     ) async {
         let snapshotProvider = captureSnapshots ?? self.captureSnapshots
@@ -150,6 +151,7 @@ actor ForemanAgent {
                 try Task.checkCancellation()
                 try await runSingleIteration(
                     event: event,
+                    observedContext: observedContext,
                     captureSnapshots: snapshotProvider
                 )
             } catch is CancellationError {
@@ -170,6 +172,7 @@ actor ForemanAgent {
 
     func draftPendingAttention(
         for event: AgentNeedsAttentionEvent,
+        observedContext: ForemanObservedTerminalContext? = nil,
         captureSnapshots: @escaping @MainActor () -> [TerminalSnapshot]
     ) async throws -> PendingAgentAttention? {
         let contextMessage = makeContextMessage(for: event)
@@ -178,24 +181,19 @@ actor ForemanAgent {
             conversation.addHiddenContext(contextMessage)
         }
 
-        let terminals = await captureSnapshots()
-        let understandings = terminals.map { snapshot in
-            understandingEngine.understand(
-                current: snapshot,
-                previous: previousSnapshotsByTerminalID[snapshot.terminalID],
-                lastOutcome: lastOutcome
-            )
-        }
+        let observedTerminals = await observeTerminals(
+            captureSnapshots: captureSnapshots,
+            observedContext: observedContext
+        )
+        let terminals = observedTerminals.terminals
+        let understandings = observedTerminals.understandings
         let overview = understandingEngine.makeOverview(
             current: understandings,
             previous: previousUnderstandings
         )
         let deltaTerminals = makeDeltaTerminals(from: terminals)
 
-        previousSnapshotsByTerminalID = Dictionary(
-            uniqueKeysWithValues: terminals.map { ($0.terminalID, $0) }
-        )
-        previousUnderstandings = understandings
+        storeObservedTerminals(observedTerminals)
 
         await MainActor.run {
             conversation.updateTerminalContext(
@@ -347,14 +345,9 @@ actor ForemanAgent {
         while await !shouldStop() {
             // 1. Observe
             await setStatus(.observing)
-            let terminals = await captureSnapshots()
-            let understandings = terminals.map { snapshot in
-                understandingEngine.understand(
-                    current: snapshot,
-                    previous: previousSnapshotsByTerminalID[snapshot.terminalID],
-                    lastOutcome: lastOutcome
-                )
-            }
+            let observedTerminals = await observeTerminals(captureSnapshots: captureSnapshots)
+            let terminals = observedTerminals.terminals
+            let understandings = observedTerminals.understandings
             let overview = understandingEngine.makeOverview(
                 current: understandings,
                 previous: previousUnderstandings
@@ -363,10 +356,7 @@ actor ForemanAgent {
             // Compute delta terminals BEFORE updating previous snapshots
             let deltaTerminals = makeDeltaTerminals(from: terminals)
 
-            previousSnapshotsByTerminalID = Dictionary(
-                uniqueKeysWithValues: terminals.map { ($0.terminalID, $0) }
-            )
-            previousUnderstandings = understandings
+            storeObservedTerminals(observedTerminals)
 
             await MainActor.run {
                 conversation.updateTerminalContext(
@@ -596,17 +586,16 @@ actor ForemanAgent {
 
     private func runSingleIteration(
         event: AgentNeedsAttentionEvent,
+        observedContext: ForemanObservedTerminalContext? = nil,
         captureSnapshots: @escaping @MainActor () -> [TerminalSnapshot]
     ) async throws {
         await setStatus(.observing)
-        let terminals = await captureSnapshots()
-        let understandings = terminals.map { snapshot in
-            understandingEngine.understand(
-                current: snapshot,
-                previous: previousSnapshotsByTerminalID[snapshot.terminalID],
-                lastOutcome: lastOutcome
-            )
-        }
+        let observedTerminals = await observeTerminals(
+            captureSnapshots: captureSnapshots,
+            observedContext: observedContext
+        )
+        let terminals = observedTerminals.terminals
+        let understandings = observedTerminals.understandings
         let overview = understandingEngine.makeOverview(
             current: understandings,
             previous: previousUnderstandings
@@ -615,10 +604,7 @@ actor ForemanAgent {
         // Delta truncation for LLM context efficiency
         let deltaTerminals = makeDeltaTerminals(from: terminals)
 
-        previousSnapshotsByTerminalID = Dictionary(
-            uniqueKeysWithValues: terminals.map { ($0.terminalID, $0) }
-        )
-        previousUnderstandings = understandings
+        storeObservedTerminals(observedTerminals)
 
         await MainActor.run {
             conversation.updateTerminalContext(
@@ -683,6 +669,35 @@ actor ForemanAgent {
                 signals: terminal.signals
             )
         }
+    }
+
+    private func observeTerminals(
+        captureSnapshots: @escaping @MainActor () -> [TerminalSnapshot],
+        observedContext: ForemanObservedTerminalContext? = nil
+    ) async -> ForemanObservedTerminalContext {
+        if let observedContext {
+            return observedContext
+        }
+
+        let terminals = await captureSnapshots()
+        let understandings = terminals.map { snapshot in
+            understandingEngine.understand(
+                current: snapshot,
+                previous: previousSnapshotsByTerminalID[snapshot.terminalID],
+                lastOutcome: lastOutcome
+            )
+        }
+        return ForemanObservedTerminalContext(
+            terminals: terminals,
+            understandings: understandings
+        )
+    }
+
+    private func storeObservedTerminals(_ observedTerminals: ForemanObservedTerminalContext) {
+        previousSnapshotsByTerminalID = Dictionary(
+            uniqueKeysWithValues: observedTerminals.terminals.map { ($0.terminalID, $0) }
+        )
+        previousUnderstandings = observedTerminals.understandings
     }
 
     private func runningAgentWithoutAttention(in understandings: [TerminalUnderstanding]) -> TerminalUnderstanding? {
