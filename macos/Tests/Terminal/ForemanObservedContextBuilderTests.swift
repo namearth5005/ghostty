@@ -165,6 +165,89 @@ struct ForemanObservedContextBuilderTests {
         #expect(signatures.first?.interactionContext == .waitingText(question: "• Hello. What do you want to work on in ghostty?"))
     }
 
+    @Test
+    func managedManualAndNewTabClaudeApprovalStatusesShareObservedContext() {
+        let snapshots = [
+            TerminalSnapshot.makePreview(
+                terminalID: "claude-existing",
+                windowID: "win-1",
+                tabID: "tab-1",
+                title: "shell",
+                cwd: "/tmp/project",
+                isFocused: true,
+                visibleText: "Claude is attached to the workspace.",
+                recentScrollbackLines: [],
+                lastInputPreview: nil,
+                foregroundProcessID: 101,
+                foregroundProcessName: "claude",
+                cursorIsAtPrompt: false,
+                usingAlternateScreen: true
+            ),
+            TerminalSnapshot.makePreview(
+                terminalID: "claude-new-tab",
+                windowID: "win-1",
+                tabID: "tab-2",
+                title: "nambouchara@Nams-MacBook-Pro:~",
+                cwd: "/tmp/project",
+                isFocused: false,
+                visibleText: "Claude is attached to the workspace.",
+                recentScrollbackLines: [],
+                lastInputPreview: nil,
+                foregroundProcessID: 202,
+                foregroundProcessName: "claude",
+                cursorIsAtPrompt: false,
+                usingAlternateScreen: true
+            ),
+            TerminalSnapshot.makePreview(
+                terminalID: "claude-managed",
+                windowID: "win-1",
+                tabID: "tab-3",
+                title: "Claude Code",
+                cwd: "/tmp/project",
+                isFocused: false,
+                visibleText: "Claude is attached to the workspace.",
+                recentScrollbackLines: [],
+                lastInputPreview: nil,
+                foregroundProcessID: 303,
+                foregroundProcessName: "claude",
+                cursorIsAtPrompt: false,
+                usingAlternateScreen: true
+            ),
+        ]
+        let sessionStatesByTerminalID = Dictionary(
+            uniqueKeysWithValues: snapshots.enumerated().map { index, snapshot in
+                (
+                    snapshot.terminalID,
+                    [
+                        ClaudeSessionState(
+                            pid: snapshot.runtime.foregroundProcessID ?? 0,
+                            sessionId: "session-\(index)",
+                            cwd: "/tmp/project",
+                            status: "waiting_for_approval",
+                            updatedAt: 1,
+                            startedAt: 1,
+                            version: "1",
+                            kind: "session"
+                        ),
+                    ]
+                )
+            }
+        )
+
+        let result = builder.build(
+            snapshots: snapshots,
+            claudeWireRecordsByTerminalID: sessionStatesByTerminalID
+        )
+        let signatures = result.context.understandings.map(signature)
+
+        #expect(signatures.count == 3)
+        #expect(signatures.dropFirst().allSatisfy { $0 == signatures.first })
+        #expect(signatures.first?.agentIdentity == .claudeCode)
+        #expect(signatures.first?.interactionState == .waitingApproval)
+        let expected: AgentInteractionContext = .waitingApproval(description: "", tool: nil)
+        #expect(signatures.first?.interactionContext == expected)
+    }
+
     private func signature(_ understanding: TerminalUnderstanding) -> ParitySignature {
         ParitySignature(
             state: understanding.state,
