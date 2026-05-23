@@ -58,6 +58,52 @@ struct ForemanObservedContextBuilderTests {
     }
 
     @Test
+    func managedManualAndNewTabKimiTurnEndQuestionsShareObservedContext() {
+        let question = "What should I do here?"
+        let snapshots = [
+            kimiInputSnapshot(
+                terminalID: "kimi-turn-end-existing",
+                title: "shell",
+                isFocused: true
+            ),
+            kimiInputSnapshot(
+                terminalID: "kimi-turn-end-new-tab",
+                title: "nambouchara@Nams-MacBook-Pro:~"
+            ),
+            kimiInputSnapshot(
+                terminalID: "kimi-turn-end-managed",
+                title: "Kimi Code"
+            ),
+        ]
+        let wireRecords = [
+            kimiContentPartRecord(text: "I looked through the repository.\n\(question)"),
+            KimiWireRecord(
+                timestamp: 2,
+                message: KimiWireMessage(
+                    type: "TurnEnd",
+                    payload: KimiWirePayload()
+                )
+            ),
+        ]
+        let wireRecordsByTerminalID = Dictionary(
+            uniqueKeysWithValues: snapshots.map { ($0.terminalID, wireRecords) }
+        )
+
+        let result = builder.build(
+            snapshots: snapshots,
+            kimiWireRecordsByTerminalID: wireRecordsByTerminalID
+        )
+        let signatures = result.context.understandings.map(signature)
+
+        #expect(signatures.count == 3)
+        #expect(signatures.dropFirst().allSatisfy { $0 == signatures.first })
+        #expect(signatures.first?.agentIdentity == .kimi)
+        #expect(signatures.first?.interactionState == .waitingText)
+        #expect(signatures.first?.lastMeaningfulEvent == question)
+        #expect(signatures.first?.interactionContext == .waitingText(question: question))
+    }
+
+    @Test
     func codexPromptParitySurvivesObservedContextBuild() {
         let visibleText = """
         • Hello. What do you want to work on in ghostty?
@@ -173,6 +219,18 @@ struct ForemanObservedContextBuilderTests {
                             multi_select: nil
                         ),
                     ]
+                )
+            )
+        )
+    }
+
+    private func kimiContentPartRecord(text: String) -> KimiWireRecord {
+        KimiWireRecord(
+            timestamp: 1,
+            message: KimiWireMessage(
+                type: "ContentPart",
+                payload: KimiWirePayload(
+                    text: text
                 )
             )
         )
