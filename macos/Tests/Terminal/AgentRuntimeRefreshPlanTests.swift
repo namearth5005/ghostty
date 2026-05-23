@@ -172,4 +172,53 @@ struct AgentRuntimeRefreshPlanTests {
         #expect(detection.identity == .codex)
         #expect(detection.state == .blocked)
     }
+
+    @Test
+    func managedTitleWithoutAgentProcessOrOutputDoesNotCreateMonitorTarget() {
+        let codex = TerminalSnapshot.makePreview(
+            terminalID: "codex-shell",
+            windowID: "w1",
+            tabID: "t1",
+            title: "OpenAI Codex",
+            cwd: "/tmp/codex",
+            isFocused: true,
+            visibleText: "nambouchara@host codex % ",
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessName: "zsh",
+            cursorIsAtPrompt: true
+        )
+        let kimi = TerminalSnapshot.makePreview(
+            terminalID: "kimi-shell",
+            windowID: "w1",
+            tabID: "t2",
+            title: "Kimi Code",
+            cwd: "/tmp/kimi",
+            isFocused: false,
+            visibleText: "nambouchara@host kimi % ",
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessName: "zsh",
+            cursorIsAtPrompt: true
+        )
+        let claude = TerminalSnapshot.makePreview(
+            terminalID: "claude-shell",
+            windowID: "w1",
+            tabID: "t3",
+            title: "Claude Code",
+            cwd: "/tmp/claude",
+            isFocused: false,
+            visibleText: "nambouchara@host claude % ",
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessName: "zsh",
+            cursorIsAtPrompt: true
+        )
+
+        let plan = AgentRuntimeRefreshPlan(snapshots: [codex, kimi, claude])
+
+        #expect(plan.entry(for: codex.terminalID)?.monitorTarget == nil)
+        #expect(plan.entry(for: kimi.terminalID)?.monitorTarget == nil)
+        #expect(plan.entry(for: claude.terminalID)?.monitorTarget == nil)
+    }
 }

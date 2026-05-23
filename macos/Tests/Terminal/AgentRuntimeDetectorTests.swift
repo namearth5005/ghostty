@@ -354,4 +354,27 @@ struct AgentRuntimeDetectorTests {
         #expect(detector.matches(managedClaude, identity: .claudeCode))
         #expect(detector.identity(for: manualClaude) == detector.identity(for: managedClaude))
     }
+
+    @Test
+    func managedAgentTitleDoesNotOverrideKnownShellForeground() {
+        let snapshot = TerminalSnapshot.makePreview(
+            terminalID: "term-managed-shell",
+            windowID: "win-1",
+            tabID: "tab-1",
+            title: "OpenAI Codex",
+            cwd: "/tmp/project",
+            isFocused: true,
+            visibleText: """
+            nambouchara@Nams-MacBook-Pro ghostty %
+            """,
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessName: "zsh",
+            cursorIsAtPrompt: true,
+            usingAlternateScreen: false
+        )
+
+        #expect(detector.identity(for: snapshot) == nil)
+        #expect(detector.detect(current: snapshot) == nil)
+    }
 }

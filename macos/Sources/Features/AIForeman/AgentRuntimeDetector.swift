@@ -46,15 +46,25 @@ struct AgentRuntimeDetector {
     }
 
     private func detectIdentity(_ snapshot: TerminalSnapshot) -> AgentIdentity? {
-        if let processMatch = detectIdentity(in: snapshot.runtime.foregroundProcessName, source: "foreground process") {
-            return processMatch
+        if let foregroundProcessName = snapshot.runtime.foregroundProcessName?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !foregroundProcessName.isEmpty {
+            if let processMatch = detectIdentity(in: foregroundProcessName) {
+                return processMatch
+            }
+
+            return detectIdentity(inVisibleText: snapshot.visibleText)
         }
 
-        if let titleMatch = detectIdentity(in: snapshot.title, source: "title") {
-            return titleMatch
+        if let visibleMatch = detectIdentity(inVisibleText: snapshot.visibleText) {
+            return visibleMatch
         }
 
-        let visible = snapshot.visibleText.lowercased()
+        return detectIdentity(in: snapshot.title)
+    }
+
+    private func detectIdentity(inVisibleText visibleText: String) -> AgentIdentity? {
+        let visible = visibleText.lowercased()
         if visible.contains("welcome to kimi code cli") || visible.contains("agent (kimi") {
             return .kimi
         }
@@ -68,7 +78,7 @@ struct AgentRuntimeDetector {
         return nil
     }
 
-    private func detectIdentity(in candidate: String?, source: String) -> AgentIdentity? {
+    private func detectIdentity(in candidate: String?) -> AgentIdentity? {
         guard let candidate else { return nil }
         let lowered = candidate.lowercased()
 

@@ -793,4 +793,33 @@ struct TerminalUnderstandingTests {
         #expect(understanding.shortExplanation.contains("What would you like me to do here?"))
         #expect(understanding.importantDetails.contains("What would you like me to do here?"))
     }
+
+    @Test
+    func managedAgentTitleAloneDoesNotCreateFirstClassUnderstanding() {
+        let engine = TerminalUnderstandingEngine()
+        let snapshot = TerminalSnapshot.makePreview(
+            terminalID: "codex-shell",
+            windowID: "win-1",
+            tabID: "tab-1",
+            title: "OpenAI Codex",
+            cwd: "/tmp/project",
+            isFocused: true,
+            visibleText: "nambouchara@Nams-MacBook-Pro ghostty % ",
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessName: "zsh",
+            cursorIsAtPrompt: true,
+            usingAlternateScreen: false
+        )
+
+        let understanding = engine.understand(
+            current: snapshot,
+            previous: nil,
+            lastOutcome: nil
+        )
+
+        #expect(understanding.agentIdentity == .none)
+        #expect(understanding.supportLevel == .genericFallback)
+        #expect(understanding.state == .waiting)
+    }
 }
