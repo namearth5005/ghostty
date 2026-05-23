@@ -19,6 +19,10 @@ enum TerminalScreenText {
         let previousLines = Set(previousVisibleText.split(separator: "\n").map(String.init))
         let currentLines = meaningfulLines(from: currentVisibleText)
 
+        if let choiceQuestion = activeChoiceMenuQuestion(from: currentVisibleText) {
+            return choiceQuestion
+        }
+
         return currentLines.last(where: { !previousLines.contains($0) && !$0.trimmingCharacters(in: .whitespaces).isEmpty })
             ?? currentLines.last(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty })
             ?? ""
@@ -68,5 +72,43 @@ enum TerminalScreenText {
         }
 
         return false
+    }
+
+    private static func activeChoiceMenuQuestion(from visibleText: String) -> String? {
+        let trimmedLines = visibleText
+            .split(separator: "\n")
+            .map { String($0).trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        let optionLines = trimmedLines.filter(isNumberedChoiceOption)
+
+        guard optionLines.count >= 2,
+              let firstOptionIndex = trimmedLines.firstIndex(where: isNumberedChoiceOption) else {
+            return nil
+        }
+
+        let linesBeforeOptions = Array(trimmedLines[..<firstOptionIndex])
+        return linesBeforeOptions.last(where: looksLikeQuestion)
+    }
+
+    private static func isNumberedChoiceOption(_ line: String) -> Bool {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return false }
+
+        if trimmed.hasPrefix("❯ ") {
+            let remainder = trimmed.dropFirst(2).trimmingCharacters(in: .whitespaces)
+            return isPlainNumberedChoiceOption(String(remainder))
+        }
+
+        return isPlainNumberedChoiceOption(trimmed)
+    }
+
+    private static func isPlainNumberedChoiceOption(_ line: String) -> Bool {
+        guard let firstScalar = line.unicodeScalars.first,
+              CharacterSet.decimalDigits.contains(firstScalar),
+              let dotRange = line.range(of: ". ") else {
+            return false
+        }
+
+        return dotRange.lowerBound != line.startIndex
     }
 }

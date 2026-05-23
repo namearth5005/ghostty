@@ -479,6 +479,12 @@ struct TerminalUnderstandingTests {
         #expect(existingUnderstanding.agentIdentity == AgentIdentity.claudeCode)
         #expect(existingUnderstanding.state == TerminalUnderstandingState.waiting)
         #expect(existingUnderstanding.agentInteractionState == AgentInteractionState.waitingChoice)
+        #expect(existingUnderstanding.lastMeaningfulEvent == "Quick safety check: Is this a project you created or one you trust?")
+        let expectedContext: AgentInteractionContext = .waitingChoice(
+            question: "Quick safety check: Is this a project you created or one you trust?",
+            options: ["Yes, I trust this folder", "No, exit"]
+        )
+        #expect(existingUnderstanding.agentInteractionContext == expectedContext)
     }
 
     @Test

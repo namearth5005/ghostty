@@ -55,4 +55,27 @@ struct TerminalScreenTextTests {
         #expect(TerminalScreenText.looksLikeQuestion("What should I do next?") == true)
         #expect(TerminalScreenText.looksLikeQuestion("Working on the next step") == false)
     }
+
+    @Test
+    func lastMeaningfulEventPrefersChoiceMenuQuestionOverFooterAndOptions() {
+        let event = TerminalScreenText.lastMeaningfulEvent(
+            currentVisibleText: """
+            Accessing workspace:
+
+            /Users/nambouchara
+
+            Quick safety check: Is this a project you created or one you trust?
+
+            Security guide
+
+             ❯ 1. Yes, I trust this folder
+               2. No, exit
+
+             Enter to confirm · Esc to cancel
+            """,
+            previousVisibleText: ""
+        )
+
+        #expect(event == "Quick safety check: Is this a project you created or one you trust?")
+    }
 }
