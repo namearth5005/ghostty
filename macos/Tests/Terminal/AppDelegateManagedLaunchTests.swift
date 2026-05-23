@@ -5,7 +5,7 @@ import Testing
 struct AppDelegateManagedLaunchTests {
     @MainActor
     @Test
-    func managedLaunchCaptureWritesRequestDetailsToConfiguredGhosttySuite() {
+    func managedLaunchCaptureWritesRequestDetailsForSupportedAgents() {
         let suite = "GHOSTTY_TEST_MANAGED_LAUNCH_\(UUID().uuidString)"
         let defaults = try! #require(UserDefaults(suiteName: suite))
         defaults.removePersistentDomain(forName: suite)
@@ -34,19 +34,47 @@ struct AppDelegateManagedLaunchTests {
         }
 
         let appDelegate = try! #require(NSApp.delegate as? AppDelegate)
-        let request = ManagedAgentLaunchRequest(
-            identity: .codex,
-            workingDirectory: "/tmp/project",
-            sourceWindowNumber: 42
-        )
-
-        let result = appDelegate.launchManagedAgent(request)
         let capturedDefaults = try! #require(UserDefaults(suiteName: suite))
+        let cases: [(request: ManagedAgentLaunchRequest, expectedResult: String)] = [
+            (
+                ManagedAgentLaunchRequest(
+                    identity: .codex,
+                    workingDirectory: "/tmp/codex-project",
+                    sourceWindowNumber: 42,
+                    location: .tab
+                ),
+                "captured-managed-launch-codex"
+            ),
+            (
+                ManagedAgentLaunchRequest(
+                    identity: .kimi,
+                    workingDirectory: "/tmp/kimi-project",
+                    sourceWindowNumber: 43,
+                    location: .tab
+                ),
+                "captured-managed-launch-kimi"
+            ),
+            (
+                ManagedAgentLaunchRequest(
+                    identity: .claudeCode,
+                    workingDirectory: "/tmp/claude-project",
+                    sourceWindowNumber: 44,
+                    location: .window
+                ),
+                "captured-managed-launch-claude_code"
+            ),
+        ]
 
-        #expect(result == "captured-managed-launch-codex")
-        #expect(capturedDefaults.string(forKey: "ForemanManagedLaunch.identity") == "codex")
-        #expect(capturedDefaults.string(forKey: "ForemanManagedLaunch.location") == "tab")
-        #expect(capturedDefaults.string(forKey: "ForemanManagedLaunch.workingDirectory") == "/tmp/project")
-        #expect(capturedDefaults.object(forKey: "ForemanManagedLaunch.sourceWindowNumber") as? Int == 42)
+        for entry in cases {
+            defaults.removePersistentDomain(forName: suite)
+
+            let result = appDelegate.launchManagedAgent(entry.request)
+
+            #expect(result == entry.expectedResult)
+            #expect(capturedDefaults.string(forKey: "ForemanManagedLaunch.identity") == entry.request.identity.rawValue)
+            #expect(capturedDefaults.string(forKey: "ForemanManagedLaunch.location") == entry.request.location.rawValue)
+            #expect(capturedDefaults.string(forKey: "ForemanManagedLaunch.workingDirectory") == entry.request.workingDirectory)
+            #expect(capturedDefaults.object(forKey: "ForemanManagedLaunch.sourceWindowNumber") as? Int == entry.request.sourceWindowNumber)
+        }
     }
 }
