@@ -1708,7 +1708,7 @@ extension AppDelegate {
                 return (entry.snapshot.terminalID, workingDirectory)
             }
         )
-        let codexTargets: [String: String?] = Dictionary(
+        let codexTargets: [String: String] = Dictionary(
             uniqueKeysWithValues: monitorPlan.entries.compactMap { entry in
                 guard case let .codex(workingDirectory) = entry.monitorTarget else {
                     return nil
@@ -1718,10 +1718,14 @@ extension AppDelegate {
         )
         let claudeTargets: [String: (pid: Int?, workingDirectory: String?)] = Dictionary(
             uniqueKeysWithValues: monitorPlan.entries.compactMap { entry in
-                guard case let .claude(pid, workingDirectory) = entry.monitorTarget else {
+                switch entry.monitorTarget {
+                case let .claude(pid, workingDirectory):
+                    return (entry.snapshot.terminalID, (pid, workingDirectory))
+                case let .claudeWorkingDirectory(workingDirectory):
+                    return (entry.snapshot.terminalID, (nil, workingDirectory))
+                default:
                     return nil
                 }
-                return (entry.snapshot.terminalID, (pid, workingDirectory))
             }
         )
 

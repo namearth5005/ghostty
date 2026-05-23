@@ -221,4 +221,88 @@ struct AgentRuntimeRefreshPlanTests {
         #expect(plan.entry(for: kimi.terminalID)?.monitorTarget == nil)
         #expect(plan.entry(for: claude.terminalID)?.monitorTarget == nil)
     }
+
+    @Test
+    func monitorTargetsRequireAttachableKeysInsteadOfUnsafeGlobalScans() {
+        let codex = TerminalSnapshot.makePreview(
+            terminalID: "codex-no-cwd",
+            windowID: "w1",
+            tabID: "t1",
+            title: "OpenAI Codex",
+            cwd: nil,
+            isFocused: true,
+            visibleText: "OpenAI Codex\nWhat should I work on next?",
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessID: 101,
+            foregroundProcessName: "codex"
+        )
+        let kimi = TerminalSnapshot.makePreview(
+            terminalID: "kimi-no-cwd",
+            windowID: "w1",
+            tabID: "t2",
+            title: "Kimi Code",
+            cwd: nil,
+            isFocused: false,
+            visibleText: "Welcome to Kimi Code CLI\nWhat do you need help with?",
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessID: 202,
+            foregroundProcessName: "kimi"
+        )
+        let claude = TerminalSnapshot.makePreview(
+            terminalID: "claude-no-keys",
+            windowID: "w1",
+            tabID: "t3",
+            title: "Claude Code",
+            cwd: nil,
+            isFocused: false,
+            visibleText: "Welcome to Claude Code\nWhat would you like to do?",
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessID: nil,
+            foregroundProcessName: "claude"
+        )
+
+        let plan = AgentRuntimeRefreshPlan(snapshots: [codex, kimi, claude])
+
+        #expect(plan.entry(for: codex.terminalID)?.monitorTarget == nil)
+        #expect(plan.entry(for: kimi.terminalID)?.monitorTarget == nil)
+        #expect(plan.entry(for: claude.terminalID)?.monitorTarget == nil)
+    }
+
+    @Test
+    func claudeCanStillAttachByPidOrWorkingDirectoryAlone() {
+        let pidOnly = TerminalSnapshot.makePreview(
+            terminalID: "claude-pid-only",
+            windowID: "w1",
+            tabID: "t1",
+            title: "Claude Code",
+            cwd: nil,
+            isFocused: true,
+            visibleText: "Welcome to Claude Code\nWhat would you like to do?",
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessID: 12345,
+            foregroundProcessName: "claude"
+        )
+        let cwdOnly = TerminalSnapshot.makePreview(
+            terminalID: "claude-cwd-only",
+            windowID: "w1",
+            tabID: "t2",
+            title: "shell",
+            cwd: "/tmp/project",
+            isFocused: false,
+            visibleText: "Welcome to Claude Code\nWhat would you like to do?",
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessID: nil,
+            foregroundProcessName: nil
+        )
+
+        let plan = AgentRuntimeRefreshPlan(snapshots: [pidOnly, cwdOnly])
+
+        #expect(plan.entry(for: pidOnly.terminalID)?.monitorTarget == .claude(pid: 12345, workingDirectory: nil))
+        #expect(plan.entry(for: cwdOnly.terminalID)?.monitorTarget == .claudeWorkingDirectory("/tmp/project"))
+    }
 }
