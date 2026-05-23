@@ -751,6 +751,110 @@ struct AgentStateMonitorTests {
     }
 
     @Test
+    func managedManualAndNewTabKimiApprovalPromptsFireEquivalentAttentionEvents() {
+        let monitor = AgentStateMonitor()
+        var capturedEvents: [AgentNeedsAttentionEvent] = []
+        monitor.onEvent = { event in
+            capturedEvents.append(event)
+        }
+
+        let prompt = "Allow edit to auth.ts? [y/n]"
+        let details = [prompt]
+        let manual = TerminalUnderstanding.preview(
+            terminalID: "kimi-approval-manual",
+            state: .waiting,
+            shortExplanation: "Kimi is waiting for approval.",
+            lastMeaningfulEvent: prompt,
+            importantDetails: details,
+            suggestedNextActions: [],
+            agentIdentity: .kimi,
+            agentInteractionState: .waitingApproval,
+            agentInteractionContext: .waitingApproval(description: "Kimi wants to edit auth.ts.", tool: "WriteFile")
+        )
+        let newTab = TerminalUnderstanding.preview(
+            terminalID: "kimi-approval-new-tab",
+            state: .waiting,
+            shortExplanation: "Kimi is waiting for approval.",
+            lastMeaningfulEvent: prompt,
+            importantDetails: details,
+            suggestedNextActions: [],
+            agentIdentity: .kimi,
+            agentInteractionState: .waitingApproval,
+            agentInteractionContext: .waitingApproval(description: "Kimi wants to edit auth.ts.", tool: "WriteFile")
+        )
+        let managed = TerminalUnderstanding.preview(
+            terminalID: "kimi-approval-managed",
+            state: .waiting,
+            shortExplanation: "Kimi is waiting for approval.",
+            lastMeaningfulEvent: prompt,
+            importantDetails: details,
+            suggestedNextActions: [],
+            agentIdentity: .kimi,
+            agentInteractionState: .waitingApproval,
+            agentInteractionContext: .waitingApproval(description: "Kimi wants to edit auth.ts.", tool: "WriteFile")
+        )
+
+        monitor.observe(understandings: [manual, newTab, managed])
+
+        #expect(capturedEvents.count == 3)
+        #expect(capturedEvents.allSatisfy { $0.agentIdentity == .kimi })
+        #expect(capturedEvents.allSatisfy { $0.interactionState == .waitingApproval })
+        #expect(Set(capturedEvents.map(\.deltaText)) == [prompt])
+    }
+
+    @Test
+    func managedManualAndNewTabCodexApprovalPromptsFireEquivalentAttentionEvents() {
+        let monitor = AgentStateMonitor()
+        var capturedEvents: [AgentNeedsAttentionEvent] = []
+        monitor.onEvent = { event in
+            capturedEvents.append(event)
+        }
+
+        let prompt = "Run the suggested command? [y/n]"
+        let details = [prompt]
+        let manual = TerminalUnderstanding.preview(
+            terminalID: "codex-approval-manual",
+            state: .waiting,
+            shortExplanation: "Codex is waiting for approval.",
+            lastMeaningfulEvent: prompt,
+            importantDetails: details,
+            suggestedNextActions: [],
+            agentIdentity: .codex,
+            agentInteractionState: .waitingApproval,
+            agentInteractionContext: .waitingApproval(description: "Codex wants to run the suggested command.", tool: "Shell")
+        )
+        let newTab = TerminalUnderstanding.preview(
+            terminalID: "codex-approval-new-tab",
+            state: .waiting,
+            shortExplanation: "Codex is waiting for approval.",
+            lastMeaningfulEvent: prompt,
+            importantDetails: details,
+            suggestedNextActions: [],
+            agentIdentity: .codex,
+            agentInteractionState: .waitingApproval,
+            agentInteractionContext: .waitingApproval(description: "Codex wants to run the suggested command.", tool: "Shell")
+        )
+        let managed = TerminalUnderstanding.preview(
+            terminalID: "codex-approval-managed",
+            state: .waiting,
+            shortExplanation: "Codex is waiting for approval.",
+            lastMeaningfulEvent: prompt,
+            importantDetails: details,
+            suggestedNextActions: [],
+            agentIdentity: .codex,
+            agentInteractionState: .waitingApproval,
+            agentInteractionContext: .waitingApproval(description: "Codex wants to run the suggested command.", tool: "Shell")
+        )
+
+        monitor.observe(understandings: [manual, newTab, managed])
+
+        #expect(capturedEvents.count == 3)
+        #expect(capturedEvents.allSatisfy { $0.agentIdentity == .codex })
+        #expect(capturedEvents.allSatisfy { $0.interactionState == .waitingApproval })
+        #expect(Set(capturedEvents.map(\.deltaText)) == [prompt])
+    }
+
+    @Test
     func managedManualAndNewTabClaudeTrustPromptsFireEquivalentAttentionEvents() {
         let monitor = AgentStateMonitor()
         var capturedEvents: [AgentNeedsAttentionEvent] = []
