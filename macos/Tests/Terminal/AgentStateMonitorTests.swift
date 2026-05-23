@@ -546,6 +546,133 @@ struct AgentStateMonitorTests {
         #expect(capturedEvents.count == 2)
         #expect(capturedEvents[1].fingerprint == fingerprint)
     }
+
+    @Test
+    func managedAndManualKimiWelcomeScreensDoNotFireAttentionEvents() {
+        let monitor = AgentStateMonitor()
+        var capturedEvents: [AgentNeedsAttentionEvent] = []
+        monitor.onEvent = { event in
+            capturedEvents.append(event)
+        }
+
+        let manual = TerminalUnderstanding.preview(
+            terminalID: "kimi-manual",
+            state: .waiting,
+            shortExplanation: "Kimi is waiting for your response.",
+            lastMeaningfulEvent: "Welcome to Kimi Code CLI!",
+            importantDetails: [
+                "Welcome to Kimi Code CLI!",
+                "Directory: /tmp/kimi",
+            ],
+            suggestedNextActions: [],
+            agentIdentity: .kimi,
+            agentInteractionState: .waitingText
+        )
+        let managed = TerminalUnderstanding.preview(
+            terminalID: "kimi-managed",
+            state: .waiting,
+            shortExplanation: "Kimi is waiting for your response.",
+            lastMeaningfulEvent: "Welcome to Kimi Code CLI!",
+            importantDetails: [
+                "Welcome to Kimi Code CLI!",
+                "Directory: /tmp/kimi",
+            ],
+            suggestedNextActions: [],
+            agentIdentity: .kimi,
+            agentInteractionState: .waitingText
+        )
+
+        monitor.observe(understandings: [manual, managed])
+
+        #expect(capturedEvents.isEmpty)
+    }
+
+    @Test
+    func managedAndManualCodexQuestionPromptsFireEquivalentAttentionEvents() {
+        let monitor = AgentStateMonitor()
+        var capturedEvents: [AgentNeedsAttentionEvent] = []
+        monitor.onEvent = { event in
+            capturedEvents.append(event)
+        }
+
+        let manual = TerminalUnderstanding.preview(
+            terminalID: "codex-manual",
+            state: .waiting,
+            shortExplanation: "Codex is waiting for your response.",
+            lastMeaningfulEvent: "What should I work on next?",
+            importantDetails: ["What should I work on next?"],
+            suggestedNextActions: [],
+            agentIdentity: .codex,
+            agentInteractionState: .waitingText,
+            agentInteractionContext: .waitingText(question: "What should I work on next?")
+        )
+        let managed = TerminalUnderstanding.preview(
+            terminalID: "codex-managed",
+            state: .waiting,
+            shortExplanation: "Codex is waiting for your response.",
+            lastMeaningfulEvent: "What should I work on next?",
+            importantDetails: ["What should I work on next?"],
+            suggestedNextActions: [],
+            agentIdentity: .codex,
+            agentInteractionState: .waitingText,
+            agentInteractionContext: .waitingText(question: "What should I work on next?")
+        )
+
+        monitor.observe(understandings: [manual, managed])
+
+        #expect(capturedEvents.count == 2)
+        #expect(capturedEvents.allSatisfy { $0.agentIdentity == .codex })
+        #expect(capturedEvents.allSatisfy { $0.interactionState == .waitingText })
+        #expect(Set(capturedEvents.map(\.deltaText)) == ["What should I work on next?"])
+    }
+
+    @Test
+    func managedManualAndNewTabClaudeTrustPromptsFireEquivalentAttentionEvents() {
+        let monitor = AgentStateMonitor()
+        var capturedEvents: [AgentNeedsAttentionEvent] = []
+        monitor.onEvent = { event in
+            capturedEvents.append(event)
+        }
+
+        let trustPrompt = "Do you trust the files in this folder?"
+        let existingTab = TerminalUnderstanding.preview(
+            terminalID: "claude-existing",
+            state: .waiting,
+            shortExplanation: "Claude Code is waiting for your selection.",
+            lastMeaningfulEvent: trustPrompt,
+            importantDetails: [trustPrompt],
+            suggestedNextActions: [],
+            agentIdentity: .claudeCode,
+            agentInteractionState: .waitingChoice
+        )
+        let newTab = TerminalUnderstanding.preview(
+            terminalID: "claude-new-tab",
+            state: .waiting,
+            shortExplanation: "Claude Code is waiting for your selection.",
+            lastMeaningfulEvent: trustPrompt,
+            importantDetails: [trustPrompt],
+            suggestedNextActions: [],
+            agentIdentity: .claudeCode,
+            agentInteractionState: .waitingChoice
+        )
+        let managed = TerminalUnderstanding.preview(
+            terminalID: "claude-managed",
+            state: .waiting,
+            shortExplanation: "Claude Code is waiting for your selection.",
+            lastMeaningfulEvent: trustPrompt,
+            importantDetails: [trustPrompt],
+            suggestedNextActions: [],
+            agentIdentity: .claudeCode,
+            agentInteractionState: .waitingChoice
+        )
+
+        monitor.observe(understandings: [existingTab, newTab, managed])
+
+        #expect(capturedEvents.count == 3)
+        #expect(capturedEvents.allSatisfy { $0.agentIdentity == .claudeCode })
+        #expect(capturedEvents.allSatisfy { $0.interactionState == .waitingChoice })
+        #expect(Set(capturedEvents.map(\.deltaText)) == [trustPrompt])
+    }
 }
 
 private func makeUnderstanding(
