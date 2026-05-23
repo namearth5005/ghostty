@@ -224,7 +224,7 @@ struct AgentRuntimeDetector {
                 || loweredVisibleText.contains("approve for this session")
                 || loweredVisibleText.contains("reject, tell the model what to do instead")
         case .codex:
-            return containsAny(loweredVisibleText, markers: ["approve", "permission", "[y/n]"])
+            return looksLikeCodexApprovalPrompt(loweredVisibleText)
         case .claudeCode:
             return containsAny(loweredVisibleText, markers: ["approve", "allow once", "allow always", "[y/n]", "yes / no", "allow this", "allow edit"])
         case .none, .unknown:
@@ -381,5 +381,20 @@ struct AgentRuntimeDetector {
 
     private func containsAny(_ text: String, markers: [String]) -> Bool {
         markers.contains(where: text.contains)
+    }
+
+    private func looksLikeCodexApprovalPrompt(_ text: String) -> Bool {
+        if text.contains("permission required") ||
+            text.contains("requesting permission") ||
+            text.contains("needs your approval") {
+            return true
+        }
+
+        if text.contains("[y/n]") &&
+            (text.contains("approve") || text.contains("permission") || text.contains("allow")) {
+            return true
+        }
+
+        return false
     }
 }

@@ -90,6 +90,40 @@ struct AgentRuntimeDetectorTests {
     }
 
     @Test
+    func codexWelcomeScreenPermissionsLineDoesNotTriggerApprovalState() {
+        let snapshot = TerminalSnapshot.makePreview(
+            terminalID: "term-1",
+            windowID: "win-1",
+            tabID: "tab-1",
+            title: "OpenAI Codex",
+            cwd: "/tmp/project",
+            isFocused: true,
+            visibleText: """
+            >_ OpenAI Codex (v0.131.0)
+
+            model: gpt-5.4 xhigh
+            directory: ~/speed2/ghostty
+            permissions: YOLO mode
+
+            • Hello. What do you want to work on in ghostty?
+
+            ›
+            """,
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessName: "codex",
+            cursorIsAtPrompt: true,
+            usingAlternateScreen: true
+        )
+
+        let detection = detector.detect(current: snapshot)
+
+        #expect(detection?.identity == .codex)
+        #expect(detection?.state == .blocked)
+        #expect(detection?.evidence.first?.detail != "Detected approval request on screen.")
+    }
+
+    @Test
     func codexWorkingHeaderMapsToWorking() {
         let snapshot = TerminalSnapshot.makePreview(
             terminalID: "term-1",

@@ -196,7 +196,7 @@ struct TerminalUnderstandingEngine {
                 lastOutcome: lastOutcome,
                 lastEvent: lastEvent,
                 choiceMarkers: ["enter to confirm", "esc to cancel"],
-                approvalMarkers: ["approve", "permission", "[y/n]"]
+                approvalMarkers: []
             )
 
         case .claudeCode:
@@ -770,7 +770,7 @@ private func classifyFromRuntimeDetection(
         return classification(identity, .waitingChoice, runtimeState: .blocked, .screenHeuristic, "Detected an interactive choice menu.", 0.86, .waitingChoice(question: lastEvent, options: options))
     }
 
-    if containsAny(lowered, markers: approvalMarkers) {
+    if looksLikeApprovalPrompt(identity: identity, loweredVisibleText: lowered, approvalMarkers: approvalMarkers) {
         return classification(identity, .waitingApproval, runtimeState: .blocked, .phraseHeuristic, "Detected approval-oriented prompt text.", 0.82, .waitingApproval(description: lastEvent, tool: nil))
     }
 
@@ -845,6 +845,36 @@ private func classification(
 
 private func containsAny(_ text: String, markers: [String]) -> Bool {
     markers.contains(where: text.contains)
+}
+
+private func looksLikeApprovalPrompt(
+    identity: AgentIdentity,
+    loweredVisibleText: String,
+    approvalMarkers: [String]
+) -> Bool {
+    switch identity {
+    case .codex:
+        return looksLikeCodexApprovalPrompt(loweredVisibleText)
+    case .none, .unknown:
+        return false
+    case .kimi, .claudeCode:
+        return containsAny(loweredVisibleText, markers: approvalMarkers)
+    }
+}
+
+private func looksLikeCodexApprovalPrompt(_ text: String) -> Bool {
+    if text.contains("permission required") ||
+        text.contains("requesting permission") ||
+        text.contains("needs your approval") {
+        return true
+    }
+
+    if text.contains("[y/n]") &&
+        (text.contains("approve") || text.contains("permission") || text.contains("allow")) {
+        return true
+    }
+
+    return false
 }
 
 private func looksLikeNumberedChoiceMenu(_ text: String) -> Bool {

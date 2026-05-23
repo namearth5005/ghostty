@@ -413,6 +413,46 @@ struct TerminalUnderstandingTests {
     }
 
     @Test
+    func engineIgnoresCodexWelcomePermissionsLineWhenClassifyingPrompt() {
+        let engine = TerminalUnderstandingEngine()
+        let snapshot = TerminalSnapshot.makePreview(
+            terminalID: "term-7b",
+            windowID: "win-1",
+            tabID: "tab-7b",
+            title: "OpenAI Codex",
+            cwd: "/tmp/project",
+            isFocused: true,
+            visibleText: """
+            >_ OpenAI Codex (v0.131.0)
+
+            model: gpt-5.4 xhigh
+            directory: ~/speed2/ghostty
+            permissions: YOLO mode
+
+            • Hello. What do you want to work on in ghostty?
+
+            ›
+            """,
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessName: "codex",
+            cursorIsAtPrompt: true,
+            usingAlternateScreen: true
+        )
+
+        let understanding = engine.understand(
+            current: snapshot,
+            previous: nil,
+            lastOutcome: nil
+        )
+
+        #expect(understanding.agentIdentity == .codex)
+        #expect(understanding.agentInteractionState == .waitingText)
+        #expect(understanding.agentInteractionContext == .waitingText(question: "• Hello. What do you want to work on in ghostty?"))
+        #expect(understanding.shortExplanation.contains("waiting"))
+    }
+
+    @Test
     func engineKeepsKimiQuestionAboveInputChromeAsWaitingTextPrompt() {
         let engine = TerminalUnderstandingEngine()
         let snapshot = TerminalSnapshot.makePreview(

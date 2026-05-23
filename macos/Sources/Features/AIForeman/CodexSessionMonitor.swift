@@ -10,11 +10,13 @@ import Foundation
 final class CodexSessionMonitor {
     let workingDirectory: String?
     let sessionsBase: URL
+    private let now: () -> Date
 
     private var timer: Timer?
     private var lastOffset: UInt64 = 0
     private var resolvedSessionPath: URL?
     private var recordBuffer: [CodexWireRecord] = []
+    private var monitorStartedAt: Date?
 
     var onEvent: ((CodexWireRecord) -> Void)?
     var onError: ((Error) -> Void)?
@@ -22,11 +24,16 @@ final class CodexSessionMonitor {
     /// If `workingDirectory` is provided, the monitor prefers sessions whose
     /// `session_meta.cwd` matches. If nil, it does a global scan.
     /// `sessionsBase` defaults to `~/.codex/sessions` but can be overridden for testing.
-    init(workingDirectory: String?, sessionsBase: URL? = nil) {
+    init(
+        workingDirectory: String?,
+        sessionsBase: URL? = nil,
+        now: @escaping () -> Date = Date.init
+    ) {
         self.workingDirectory = workingDirectory
         self.sessionsBase = sessionsBase ?? FileManager.default
             .homeDirectoryForCurrentUser
             .appendingPathComponent(".codex/sessions")
+        self.now = now
     }
 
     func start() {
@@ -34,6 +41,7 @@ final class CodexSessionMonitor {
         resolvedSessionPath = nil
         lastOffset = 0
         recordBuffer.removeAll()
+        monitorStartedAt = now()
 
         resolveSessionPath()
 
@@ -104,6 +112,8 @@ final class CodexSessionMonitor {
 
     private func resolveSessionPath() {
         guard FileManager.default.fileExists(atPath: sessionsBase.path) else { return }
+        let stalenessThreshold = now().addingTimeInterval(-600)
+        let launchGraceDate = monitorStartedAt?.addingTimeInterval(-5)
 
         // Recursively find all .jsonl files under sessions/
         var candidateFiles: [URL] = []
@@ -117,6 +127,10 @@ final class CodexSessionMonitor {
                 guard let attrs = try? FileManager.default.attributesOfItem(atPath: fileURL.path),
                       let modDate = attrs[.modificationDate] as? Date,
                       attrs[.size] as? UInt64 ?? 0 > 0 else { continue }
+                guard modDate > stalenessThreshold else { continue }
+                if let launchGraceDate, modDate < launchGraceDate {
+                    continue
+                }
                 candidateFiles.append(fileURL)
             }
         }
