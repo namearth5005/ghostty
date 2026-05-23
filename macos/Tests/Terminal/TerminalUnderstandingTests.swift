@@ -721,6 +721,144 @@ struct TerminalUnderstandingTests {
     }
 
     @Test
+    func managedManualAndNewTabCodexApprovalPromptsShareUnderstandingAndSuggestions() {
+        let engine = TerminalUnderstandingEngine()
+        let visibleText = """
+        Permission required
+
+        Allow OpenAI Codex to edit auth.ts? [y/n]
+        """
+
+        let existingTab = TerminalSnapshot.makePreview(
+            terminalID: "codex-existing-approval",
+            windowID: "win-1",
+            tabID: "tab-10",
+            title: "shell",
+            cwd: "/tmp/project",
+            isFocused: true,
+            visibleText: visibleText,
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessID: 1_111,
+            foregroundProcessName: "codex",
+            cursorIsAtPrompt: false,
+            usingAlternateScreen: true
+        )
+        let newTab = TerminalSnapshot.makePreview(
+            terminalID: "codex-new-tab-approval",
+            windowID: "win-1",
+            tabID: "tab-11",
+            title: "nambouchara@Nams-MacBook-Pro:~",
+            cwd: "/tmp/project",
+            isFocused: false,
+            visibleText: visibleText,
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessID: 1_222,
+            foregroundProcessName: "codex",
+            cursorIsAtPrompt: false,
+            usingAlternateScreen: true
+        )
+        let managed = TerminalSnapshot.makePreview(
+            terminalID: "codex-managed-approval",
+            windowID: "win-1",
+            tabID: "tab-12",
+            title: "OpenAI Codex",
+            cwd: "/tmp/project",
+            isFocused: false,
+            visibleText: visibleText,
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessID: 1_333,
+            foregroundProcessName: "codex",
+            cursorIsAtPrompt: false,
+            usingAlternateScreen: true
+        )
+
+        let existingUnderstanding = engine.understand(current: existingTab, previous: nil, lastOutcome: nil)
+        let newTabUnderstanding = engine.understand(current: newTab, previous: nil, lastOutcome: nil)
+        let managedUnderstanding = engine.understand(current: managed, previous: nil, lastOutcome: nil)
+
+        #expect(interactiveParitySignature(existingUnderstanding) == interactiveParitySignature(newTabUnderstanding))
+        #expect(interactiveParitySignature(existingUnderstanding) == interactiveParitySignature(managedUnderstanding))
+        #expect(existingUnderstanding.agentInteractionState == .waitingApproval)
+        #expect(existingUnderstanding.agentInteractionContext.typeString == "waitingApproval")
+        #expect(existingUnderstanding.lastMeaningfulEvent == "Allow OpenAI Codex to edit auth.ts? [y/n]")
+        #expect(existingUnderstanding.suggestedNextActions.map(\.title) == [
+            "Review the approval request",
+            "Let Foreman explain the requested action",
+        ])
+        #expect(existingUnderstanding.suggestedNextActions.map(\.isRecommended) == [true, false])
+    }
+
+    @Test
+    func managedManualAndNewTabClaudeApprovalPromptsShareUnderstandingAndSuggestions() {
+        let engine = TerminalUnderstandingEngine()
+        let visibleText = "Allow Claude Code to run the suggested command? [y/n]"
+
+        let existingTab = TerminalSnapshot.makePreview(
+            terminalID: "claude-existing-approval",
+            windowID: "win-1",
+            tabID: "tab-13",
+            title: "shell",
+            cwd: "/tmp/project",
+            isFocused: true,
+            visibleText: visibleText,
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessID: 1_444,
+            foregroundProcessName: "claude",
+            cursorIsAtPrompt: false,
+            usingAlternateScreen: true
+        )
+        let newTab = TerminalSnapshot.makePreview(
+            terminalID: "claude-new-tab-approval",
+            windowID: "win-1",
+            tabID: "tab-14",
+            title: "nambouchara@Nams-MacBook-Pro:~",
+            cwd: "/tmp/project",
+            isFocused: false,
+            visibleText: visibleText,
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessID: 1_555,
+            foregroundProcessName: "claude",
+            cursorIsAtPrompt: false,
+            usingAlternateScreen: true
+        )
+        let managed = TerminalSnapshot.makePreview(
+            terminalID: "claude-managed-approval",
+            windowID: "win-1",
+            tabID: "tab-15",
+            title: "Claude Code",
+            cwd: "/tmp/project",
+            isFocused: false,
+            visibleText: visibleText,
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessID: 1_666,
+            foregroundProcessName: "claude",
+            cursorIsAtPrompt: false,
+            usingAlternateScreen: true
+        )
+
+        let existingUnderstanding = engine.understand(current: existingTab, previous: nil, lastOutcome: nil)
+        let newTabUnderstanding = engine.understand(current: newTab, previous: nil, lastOutcome: nil)
+        let managedUnderstanding = engine.understand(current: managed, previous: nil, lastOutcome: nil)
+
+        #expect(interactiveParitySignature(existingUnderstanding) == interactiveParitySignature(newTabUnderstanding))
+        #expect(interactiveParitySignature(existingUnderstanding) == interactiveParitySignature(managedUnderstanding))
+        #expect(existingUnderstanding.agentInteractionState == .waitingApproval)
+        #expect(existingUnderstanding.agentInteractionContext.typeString == "waitingApproval")
+        #expect(existingUnderstanding.lastMeaningfulEvent == "Allow Claude Code to run the suggested command? [y/n]")
+        #expect(existingUnderstanding.suggestedNextActions.map(\.title) == [
+            "Review the approval request",
+            "Let Foreman explain the requested action",
+        ])
+        #expect(existingUnderstanding.suggestedNextActions.map(\.isRecommended) == [true, false])
+    }
+
+    @Test
     func engineClassifiesCommandNotFoundAsFailedWithRankedSuggestions() {
         let engine = TerminalUnderstandingEngine()
         let snapshot = TerminalSnapshot.makePreview(
