@@ -118,4 +118,21 @@ struct AgentScreenInteractionDetectorTests {
 
         #expect(detection == nil)
     }
+
+    @Test
+    func staleApprovalHistoryDoesNotDetectWaitingApprovalSurface() {
+        let detection = detector.detect(
+            identity: .codex,
+            visibleText: """
+            Permission required
+
+            Allow OpenAI Codex to edit auth.ts? [y/n]
+
+            Running repository analysis...
+            """,
+            lastEvent: "Running repository analysis..."
+        )
+
+        #expect(detection == nil)
+    }
 }

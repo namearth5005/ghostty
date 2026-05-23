@@ -28,7 +28,7 @@ struct AgentScreenInteractionDetector {
             )
         }
 
-        if hasApprovalPrompt(in: lowered, identity: identity) {
+        if hasApprovalPrompt(in: visibleText, identity: identity) {
             return Detection(
                 context: .waitingApproval(description: lastEvent, tool: nil),
                 reason: .approvalPrompt
@@ -69,20 +69,74 @@ struct AgentScreenInteractionDetector {
         return nil
     }
 
-    private func hasApprovalPrompt(in loweredVisibleText: String, identity: AgentIdentity) -> Bool {
+    private func hasApprovalPrompt(in visibleText: String, identity: AgentIdentity) -> Bool {
+        let lines = visibleText
+            .split(separator: "\n")
+            .map { String($0).trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+
+        guard !lines.isEmpty else {
+            return false
+        }
+
+        let trailingApprovalLines = lines
+            .reversed()
+            .prefix { isApprovalTailLine(String($0), identity: identity) }
+
+        guard !trailingApprovalLines.isEmpty else {
+            return false
+        }
+
+        return trailingApprovalLines.contains { isApprovalMarker(String($0), identity: identity) }
+    }
+
+    private func isApprovalTailLine(_ line: String, identity: AgentIdentity) -> Bool {
+        let lowered = line.lowercased()
+
         switch identity {
         case .kimi:
-            return loweredVisibleText.contains("shell is requesting approval to run command")
-                || loweredVisibleText.contains("approve once")
-                || loweredVisibleText.contains("approve for this session")
-                || loweredVisibleText.contains("reject, tell the model what to do instead")
+            return isKimiApprovalLine(lowered)
         case .codex:
-            return looksLikeCodexApprovalPrompt(loweredVisibleText)
+            return isCodexApprovalLine(lowered)
         case .claudeCode:
-            return containsAny(loweredVisibleText, markers: ["approve", "allow once", "allow always", "[y/n]", "yes / no", "allow this", "allow edit"])
+            return isClaudeApprovalLine(lowered)
         case .none, .unknown:
             return false
         }
+    }
+
+    private func isApprovalMarker(_ line: String, identity: AgentIdentity) -> Bool {
+        let lowered = line.lowercased()
+
+        switch identity {
+        case .kimi:
+            return lowered.contains("shell is requesting approval to run command")
+                || lowered.contains("approve once")
+                || lowered.contains("approve for this session")
+                || lowered.contains("reject, tell the model what to do instead")
+        case .codex:
+            return looksLikeCodexApprovalPrompt(lowered)
+        case .claudeCode:
+            return containsAny(lowered, markers: ["approve", "allow once", "allow always", "[y/n]", "yes / no", "allow this", "allow edit"])
+        case .none, .unknown:
+            return false
+        }
+    }
+
+    private func isKimiApprovalLine(_ lowered: String) -> Bool {
+        isApprovalMarker(lowered, identity: .kimi) ||
+            isNumberedOptionLine(lowered) && containsAny(lowered, markers: ["approve", "reject"])
+    }
+
+    private func isCodexApprovalLine(_ lowered: String) -> Bool {
+        looksLikeCodexApprovalPrompt(lowered) ||
+            lowered.contains("permission required") ||
+            lowered.contains("requesting permission") ||
+            lowered.contains("needs your approval")
+    }
+
+    private func isClaudeApprovalLine(_ lowered: String) -> Bool {
+        containsAny(lowered, markers: ["approve", "allow once", "allow always", "[y/n]", "yes / no", "allow this", "allow edit"])
     }
 
     private func containsChoiceMarkers(in visibleText: String, identity: AgentIdentity) -> Bool {
@@ -127,6 +181,15 @@ struct AgentScreenInteractionDetector {
 
     private func containsAny(_ text: String, markers: [String]) -> Bool {
         markers.contains(where: text.contains)
+    }
+
+    private func isNumberedOptionLine(_ line: String) -> Bool {
+        guard let firstScalar = line.unicodeScalars.first,
+              CharacterSet.decimalDigits.contains(firstScalar) else {
+            return false
+        }
+
+        return line.contains(". ")
     }
 
     private func looksLikeCodexApprovalPrompt(_ text: String) -> Bool {

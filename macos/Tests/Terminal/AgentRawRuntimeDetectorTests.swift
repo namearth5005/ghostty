@@ -366,4 +366,50 @@ struct AgentRawRuntimeDetectorTests {
 
         #expect(detection.state == .working)
     }
+
+    @Test
+    func staleApprovalHistoryDoesNotBlockCodexWorkingState() {
+        let previous = TerminalSnapshot.makePreview(
+            terminalID: "codex-stale-approval",
+            windowID: "win-1",
+            tabID: "tab-1",
+            title: "OpenAI Codex",
+            cwd: "/tmp/project",
+            isFocused: true,
+            visibleText: """
+            Permission required
+
+            Allow OpenAI Codex to edit auth.ts? [y/n]
+            """,
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessName: "codex",
+            cursorIsAtPrompt: true,
+            usingAlternateScreen: true
+        )
+        let current = TerminalSnapshot.makePreview(
+            terminalID: "codex-stale-approval",
+            windowID: "win-1",
+            tabID: "tab-1",
+            title: "OpenAI Codex",
+            cwd: "/tmp/project",
+            isFocused: true,
+            visibleText: """
+            Permission required
+
+            Allow OpenAI Codex to edit auth.ts? [y/n]
+
+            Running repository analysis...
+            """,
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessName: "codex",
+            cursorIsAtPrompt: false,
+            usingAlternateScreen: true
+        )
+
+        let detection = detector.detect(identity: .codex, current: current, previous: previous)
+
+        #expect(detection.state == .working)
+    }
 }
