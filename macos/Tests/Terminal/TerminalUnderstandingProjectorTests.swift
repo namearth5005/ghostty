@@ -198,6 +198,49 @@ struct TerminalUnderstandingProjectorTests {
         #expect(understanding.importantDetails == ["What would you like me to do here?"])
     }
 
+    @Test
+    func waitingProjectionFallsBackToInteractionQuestionWhenScreenHasNoMeaningfulEvent() {
+        let question = "What should I do here?"
+        let snapshot = TerminalSnapshot.makePreview(
+            terminalID: "kimi-term",
+            windowID: "win-1",
+            tabID: "tab-1",
+            title: "Kimi Code",
+            cwd: "/tmp/project",
+            isFocused: true,
+            visibleText: """
+            ─ input ─────────────────────────────────────────────────────────
+
+            agent (Kimi-k2.6 ●)  ~/speed2  ctrl-x: toggle mode | shift-tab: plan mode
+            context: 5.4% (14.3k/262.1k)
+            """,
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessName: "kimi",
+            cursorIsAtPrompt: true,
+            usingAlternateScreen: true
+        )
+        let classification = AgentMeaningDetector.Detection(
+            identity: .kimi,
+            interactionState: .waitingText,
+            runtimeState: .blocked,
+            supportLevel: .firstClass,
+            evidence: [.init(source: .wireSignal, detail: "question request", confidence: 1.0)],
+            context: .waitingText(question: question)
+        )
+
+        let understanding = projector.project(
+            current: snapshot,
+            classification: classification,
+            lastOutcome: Optional<TerminalOutcomeReport>.none,
+            lastEvent: "No meaningful terminal event detected."
+        )
+
+        #expect(understanding.lastMeaningfulEvent == question)
+        #expect(understanding.shortExplanation == "Kimi is waiting for your response: \(question)")
+        #expect(understanding.suggestedNextActions.first?.reason == question)
+    }
+
     private func projectionParitySignature(_ understanding: TerminalUnderstanding) -> ProjectionParitySignature {
         ProjectionParitySignature(
             state: understanding.state,

@@ -65,10 +65,11 @@ enum TerminalScreenText {
         }
 
         if lowered.hasPrefix("agent ("),
-           lowered.contains("context:") ||
+           (lowered.contains("context:") ||
             lowered.contains("ctrl-") ||
             lowered.contains("shift-tab") ||
-            lowered.contains("@:") {
+            lowered.contains("@:") ||
+            lowered.hasPrefix("agent (kimi")) {
             return true
         }
 
@@ -98,7 +99,7 @@ enum TerminalScreenText {
         } else {
             trailingLines = []
         }
-        guard trailingLines.allSatisfy(isChoiceMenuFooter) else {
+        guard trailingLines.allSatisfy(isChoiceMenuTailLine) else {
             return nil
         }
 
@@ -157,5 +158,9 @@ enum TerminalScreenText {
 
         return lowered.contains("enter to confirm") ||
             lowered.contains("esc to cancel")
+    }
+
+    private static func isChoiceMenuTailLine(_ line: String) -> Bool {
+        isChoiceMenuFooter(line) || looksLikeTerminalInputChrome(line)
     }
 }

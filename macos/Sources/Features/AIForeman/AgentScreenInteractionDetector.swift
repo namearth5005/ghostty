@@ -59,8 +59,11 @@ struct AgentScreenInteractionDetector {
         }
 
         if identity == .kimi && isKimiInputRegion(visibleText) {
+            let question = TerminalScreenText.looksLikeQuestion(normalizedLastEvent)
+                ? normalizedLastEvent
+                : nil
             return Detection(
-                context: .waitingText(question: nil),
+                context: .waitingText(question: question),
                 reason: .kimiInputRegion
             )
         }
@@ -161,7 +164,7 @@ struct AgentScreenInteractionDetector {
             return false
         }
 
-        guard loweredLines.allSatisfy(isKimiWelcomeLine) else {
+        guard loweredLines.allSatisfy(isKimiWelcomeSurfaceLine) else {
             return false
         }
 
@@ -172,17 +175,17 @@ struct AgentScreenInteractionDetector {
 
     private func isKimiInputRegion(_ visibleText: String) -> Bool {
         let loweredLines = normalizedNonEmptyLines(from: visibleText).map { $0.lowercased() }
-        guard loweredLines.count >= 3 else {
+        guard loweredLines.count >= 2 else {
             return false
         }
 
-        guard loweredLines.allSatisfy(isKimiInputLine) else {
+        let trailingInputLines = Array(loweredLines.reversed().prefix { isKimiInputLine($0) })
+        guard !trailingInputLines.isEmpty else {
             return false
         }
 
-        return loweredLines.contains(where: { $0.contains("agent (kimi") }) &&
-            loweredLines.contains(where: { $0.hasPrefix("context:") }) &&
-            loweredLines.contains(where: { $0.contains("input") })
+        return trailingInputLines.contains(where: { $0.hasPrefix("agent (kimi") }) &&
+            trailingInputLines.contains(where: isKimiInputMarkerLine)
     }
 
     private func activeChoicePromptQuestion(identity: AgentIdentity, lastEvent: String) -> String? {
@@ -215,7 +218,22 @@ struct AgentScreenInteractionDetector {
             lowered.hasPrefix("model:")
     }
 
+    private func isKimiWelcomeSurfaceLine(_ lowered: String) -> Bool {
+        isKimiWelcomeLine(lowered) ||
+            lowered.hasPrefix("session:") ||
+            lowered.hasPrefix("tip:") ||
+            isKimiInputLine(lowered)
+    }
+
     private func isKimiInputLine(_ lowered: String) -> Bool {
+        if isKimiInputMarkerLine(lowered) {
+            return true
+        }
+
+        return lowered.hasPrefix("agent (kimi") || lowered.hasPrefix("context:")
+    }
+
+    private func isKimiInputMarkerLine(_ lowered: String) -> Bool {
         if lowered == "input" {
             return true
         }
@@ -224,13 +242,9 @@ struct AgentScreenInteractionDetector {
             .replacingOccurrences(of: "input", with: "")
             .trimmingCharacters(in: .whitespaces)
         let inputChromeRun = withoutInput.filter { !$0.isWhitespace }
-        if lowered.contains("input"),
-           !inputChromeRun.isEmpty,
-           inputChromeRun.allSatisfy({ $0 == "-" || $0 == "─" || $0 == "━" }) {
-            return true
-        }
-
-        return lowered.hasPrefix("agent (kimi") || lowered.hasPrefix("context:")
+        return lowered.contains("input") &&
+            !inputChromeRun.isEmpty &&
+            inputChromeRun.allSatisfy({ $0 == "-" || $0 == "─" || $0 == "━" })
     }
 
     private func isNumberedOptionLine(_ line: String) -> Bool {

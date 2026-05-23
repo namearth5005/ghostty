@@ -7,6 +7,10 @@ struct TerminalUnderstandingProjector {
         lastOutcome: TerminalOutcomeReport?,
         lastEvent: String
     ) -> TerminalUnderstanding {
+        let effectiveLastEvent = resolvedLastMeaningfulEvent(
+            lastEvent: lastEvent,
+            classification: classification
+        )
         let state = classifyState(
             current: current,
             lastOutcome: lastOutcome,
@@ -16,7 +20,7 @@ struct TerminalUnderstandingProjector {
             for: current,
             state: state,
             classification: classification,
-            lastEvent: lastEvent
+            lastEvent: effectiveLastEvent
         )
 
         return TerminalUnderstanding(
@@ -27,18 +31,49 @@ struct TerminalUnderstandingProjector {
             agentIdentity: classification?.identity ?? .none,
             agentInteractionState: classification?.interactionState ?? .unknown,
             supportLevel: classification?.supportLevel ?? .genericFallback,
-            lastMeaningfulEvent: lastEvent,
+            lastMeaningfulEvent: effectiveLastEvent,
             shortExplanation: explain(
                 state: state,
                 snapshot: current,
                 classification: classification,
-                lastEvent: lastEvent
+                lastEvent: effectiveLastEvent
             ),
             importantDetails: importantDetails(from: current.visibleText, state: state),
             evidence: classification?.evidence ?? [],
             suggestedNextActions: suggestedActions,
             agentInteractionContext: classification?.context ?? .none
         )
+    }
+
+    private func resolvedLastMeaningfulEvent(
+        lastEvent: String,
+        classification: AgentMeaningDetector.Detection?
+    ) -> String {
+        let trimmed = lastEvent.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.isEmpty || trimmed == "No meaningful terminal event detected." else {
+            return lastEvent
+        }
+
+        guard let classification else {
+            return lastEvent
+        }
+
+        switch classification.context {
+        case .waitingText(let question):
+            return question ?? lastEvent
+        case .waitingChoice(let question, _):
+            return question
+        case .waitingApproval(let description, _):
+            return description.isEmpty ? lastEvent : description
+        case .running(let stepDescription):
+            return stepDescription ?? lastEvent
+        case .completed(let summary):
+            return summary ?? lastEvent
+        case .error(let description):
+            return description
+        case .none:
+            return lastEvent
+        }
     }
 
     private func classifyState(

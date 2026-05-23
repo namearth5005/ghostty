@@ -101,4 +101,28 @@ struct TerminalScreenTextTests {
 
         #expect(event == "Reading repository files...")
     }
+
+    @Test
+    func activeChoiceMenuContextAllowsKimiInputChromeTail() {
+        let context = TerminalScreenText.activeChoiceMenuContext(
+            from: """
+            Kimi is analyzing how this project can work with Claude Code, ChatGPT, and Cursor.
+
+            What do you want to do?
+
+            ❯ 1. Keep the core clinical content as provider-agnostic files
+              2. Create different adapters for each platform
+
+            agent (Kimi-k2.6 *) ~/speed2
+            """
+        )
+
+        #expect(context == .init(
+            question: "What do you want to do?",
+            options: [
+                "Keep the core clinical content as provider-agnostic files",
+                "Create different adapters for each platform",
+            ]
+        ))
+    }
 }
