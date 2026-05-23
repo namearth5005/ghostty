@@ -101,8 +101,8 @@ struct AgentRuntimeRefreshPlanTests {
         #expect(plan.entry(for: managedCodex.terminalID)?.monitorTarget == .codex(workingDirectory: "/tmp/codex"))
         #expect(plan.entry(for: manualKimi.terminalID)?.monitorTarget == .kimi(workingDirectory: "/tmp/kimi"))
         #expect(plan.entry(for: managedKimi.terminalID)?.monitorTarget == .kimi(workingDirectory: "/tmp/kimi"))
-        #expect(plan.entry(for: manualClaude.terminalID)?.monitorTarget == .claude(pid: 505))
-        #expect(plan.entry(for: managedClaude.terminalID)?.monitorTarget == .claude(pid: 606))
+        #expect(plan.entry(for: manualClaude.terminalID)?.monitorTarget == .claude(pid: 505, workingDirectory: "/tmp/claude"))
+        #expect(plan.entry(for: managedClaude.terminalID)?.monitorTarget == .claude(pid: 606, workingDirectory: "/tmp/claude"))
     }
 
     @Test

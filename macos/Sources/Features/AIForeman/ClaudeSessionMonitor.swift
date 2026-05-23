@@ -10,28 +10,39 @@ import Foundation
 /// JSON file that gets overwritten in place rather than appended to.
 final class ClaudeSessionMonitor {
     let pid: Int?
+    let workingDirectory: String?
     private let sessionsBase: URL
+    private let now: () -> Date
 
     private var timer: Timer?
     private var recordBuffer: [ClaudeSessionState] = []
     private var lastStatus: String?
+    private var monitorStartedAt: Date?
 
     var onEvent: ((ClaudeSessionState) -> Void)?
     var onError: ((Error) -> Void)?
 
     /// `pid` is the foreground process ID of the Claude Code instance.
     /// If nil, the monitor scans all session files and picks the most recent.
-    init(pid: Int?, sessionsBase: URL? = nil) {
+    init(
+        pid: Int?,
+        workingDirectory: String? = nil,
+        sessionsBase: URL? = nil,
+        now: @escaping () -> Date = Date.init
+    ) {
         self.pid = pid
+        self.workingDirectory = workingDirectory
         self.sessionsBase = sessionsBase ?? FileManager.default
             .homeDirectoryForCurrentUser
             .appendingPathComponent(".claude/sessions")
+        self.now = now
     }
 
     func start() {
         stop()
         recordBuffer.removeAll()
         lastStatus = nil
+        monitorStartedAt = now()
 
         let t = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in
             self?.poll()
@@ -80,15 +91,33 @@ final class ClaudeSessionMonitor {
             return nil
         }
 
+        let stalenessThreshold = now().addingTimeInterval(-600)
+        let launchGraceDate = monitorStartedAt?.addingTimeInterval(-5)
         let jsonFiles = files
             .filter { $0.hasSuffix(".json") }
             .map { sessionsBase.appendingPathComponent($0) }
 
-        let result = jsonFiles.compactMap { url -> (ClaudeSessionState, Date)? in
+        let candidates = jsonFiles.compactMap { url -> (ClaudeSessionState, Date)? in
             guard let state = parseState(at: url),
                   let modDate = fileModDate(url) else { return nil }
+            guard modDate > stalenessThreshold else { return nil }
+            if let launchGraceDate, modDate < launchGraceDate {
+                return nil
+            }
             return (state, modDate)
-        }.max(by: { $0.1 < $1.1 })?.0
+        }
+
+        let matchingCandidates: [(ClaudeSessionState, Date)]
+        if let workingDirectory, !workingDirectory.isEmpty {
+            matchingCandidates = candidates.filter { state, _ in
+                guard let cwd = state.cwd, !cwd.isEmpty else { return false }
+                return pathsMatch(lhs: cwd, rhs: workingDirectory)
+            }
+        } else {
+            matchingCandidates = candidates
+        }
+
+        let result = matchingCandidates.max(by: { $0.1 < $1.1 })?.0
 
         if let result {
             DebugLogger.log("[ClaudeSessionMonitor] fallback scan matched file status=\(result.status ?? "nil") pid=\(result.pid)")
@@ -109,5 +138,9 @@ final class ClaudeSessionMonitor {
 
     private func fileModDate(_ url: URL) -> Date? {
         (try? FileManager.default.attributesOfItem(atPath: url.path)[.modificationDate]) as? Date
+    }
+
+    private func pathsMatch(lhs: String, rhs: String) -> Bool {
+        lhs == rhs || lhs.hasPrefix(rhs) || rhs.hasPrefix(lhs)
     }
 }

@@ -4,7 +4,7 @@ struct AgentRuntimeRefreshPlan {
     enum MonitorTarget: Equatable, Sendable {
         case kimi(workingDirectory: String)
         case codex(workingDirectory: String?)
-        case claude(pid: Int?)
+        case claude(pid: Int?, workingDirectory: String?)
     }
 
     struct Entry: Equatable, Sendable {
@@ -41,7 +41,10 @@ struct AgentRuntimeRefreshPlan {
             case .some(.codex):
                 .codex(workingDirectory: snapshot.cwd)
             case .some(.claudeCode):
-                .claude(pid: snapshot.runtime.foregroundProcessID)
+                .claude(
+                    pid: snapshot.runtime.foregroundProcessID,
+                    workingDirectory: snapshot.cwd
+                )
             case .some(.none), .some(.unknown), nil:
                 nil
             }

@@ -1716,12 +1716,12 @@ extension AppDelegate {
                 return (entry.snapshot.terminalID, workingDirectory)
             }
         )
-        let claudeTargets: [String: Int?] = Dictionary(
+        let claudeTargets: [String: (pid: Int?, workingDirectory: String?)] = Dictionary(
             uniqueKeysWithValues: monitorPlan.entries.compactMap { entry in
-                guard case let .claude(pid) = entry.monitorTarget else {
+                guard case let .claude(pid, workingDirectory) = entry.monitorTarget else {
                     return nil
                 }
-                return (entry.snapshot.terminalID, pid)
+                return (entry.snapshot.terminalID, (pid, workingDirectory))
             }
         )
 
@@ -1779,19 +1779,27 @@ extension AppDelegate {
 
         // Manage Claude wire monitors per terminal
         for snapshot in allSnapshots {
-            guard let monitorPID = claudeTargets[snapshot.terminalID] else {
+            guard let claudeTarget = claudeTargets[snapshot.terminalID] else {
                 continue
             }
+            let monitorPID = claudeTarget.pid
+            let monitorCwd = claudeTarget.workingDirectory
 
             if let existing = claudeWireMonitors[snapshot.terminalID] {
-                if existing.pid != monitorPID {
+                if existing.pid != monitorPID || existing.workingDirectory != monitorCwd {
                     existing.stop()
-                    let monitor = ClaudeSessionMonitor(pid: monitorPID)
+                    let monitor = ClaudeSessionMonitor(
+                        pid: monitorPID,
+                        workingDirectory: monitorCwd
+                    )
                     monitor.start()
                     claudeWireMonitors[snapshot.terminalID] = monitor
                 }
             } else {
-                let monitor = ClaudeSessionMonitor(pid: monitorPID)
+                let monitor = ClaudeSessionMonitor(
+                    pid: monitorPID,
+                    workingDirectory: monitorCwd
+                )
                 monitor.start()
                 claudeWireMonitors[snapshot.terminalID] = monitor
             }
