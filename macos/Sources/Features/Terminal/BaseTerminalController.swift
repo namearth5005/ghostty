@@ -177,10 +177,9 @@ class BaseTerminalController: NSWindowController,
         }
         foremanSidebarStore.onLaunchAgent = { [weak self] identity in
             guard let self else { return }
-            let request = ManagedAgentLaunchRequest(
+            let request = Self.makeManagedAgentLaunchRequest(
                 identity: identity,
-                workingDirectory: self.focusedSurface?.pwd,
-                location: .tab
+                workingDirectory: self.focusedSurface?.pwd
             )
             _ = (NSApp.delegate as? AppDelegate)?.launchManagedAgent(request)
         }
@@ -298,6 +297,20 @@ class BaseTerminalController: NSWindowController,
         store.objectWillChange.sink { _ in
             onChange()
         }
+    }
+
+    static func makeManagedAgentLaunchRequest(
+        identity: AgentIdentity,
+        workingDirectory: String?,
+        initialPrompt: String? = nil,
+        location: ManagedAgentLaunchLocation = .tab
+    ) -> ManagedAgentLaunchRequest {
+        ManagedAgentLaunchRequest(
+            identity: identity,
+            workingDirectory: workingDirectory,
+            initialPrompt: initialPrompt,
+            location: location
+        )
     }
 
     // MARK: Methods

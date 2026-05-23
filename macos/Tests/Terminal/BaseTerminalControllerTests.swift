@@ -18,4 +18,32 @@ struct BaseTerminalControllerTests {
             #expect(changeCount == 2)
         }
     }
+
+    @Test
+    func managedAgentLaunchRequestUsesFocusedWorkingDirectoryAndTabLocation() {
+        let request = BaseTerminalController.makeManagedAgentLaunchRequest(
+            identity: .codex,
+            workingDirectory: "/tmp/project"
+        )
+
+        #expect(request.identity == .codex)
+        #expect(request.workingDirectory == "/tmp/project")
+        #expect(request.initialPrompt == nil)
+        #expect(request.location == .tab)
+    }
+
+    @Test
+    func managedAgentLaunchRequestPreservesExplicitOverrides() {
+        let request = BaseTerminalController.makeManagedAgentLaunchRequest(
+            identity: .claudeCode,
+            workingDirectory: nil,
+            initialPrompt: "review this branch",
+            location: .window
+        )
+
+        #expect(request.identity == .claudeCode)
+        #expect(request.workingDirectory == nil)
+        #expect(request.initialPrompt == "review this branch")
+        #expect(request.location == .window)
+    }
 }
