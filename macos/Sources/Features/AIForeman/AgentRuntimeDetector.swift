@@ -1,6 +1,8 @@
 import Foundation
 
 struct AgentRuntimeDetector {
+    private let identityDetector = AgentIdentityDetector()
+
     enum State: String, Codable, Equatable, Sendable {
         case unknown
         case idle
@@ -15,11 +17,11 @@ struct AgentRuntimeDetector {
     }
 
     func identity(for snapshot: TerminalSnapshot) -> AgentIdentity? {
-        detectIdentity(snapshot)
+        identityDetector.identity(for: snapshot)
     }
 
     func matches(_ snapshot: TerminalSnapshot, identity expectedIdentity: AgentIdentity) -> Bool {
-        identity(for: snapshot) == expectedIdentity
+        identityDetector.matches(snapshot, identity: expectedIdentity)
     }
 
     func detect(
@@ -29,7 +31,7 @@ struct AgentRuntimeDetector {
         codexWireRecords: [CodexWireRecord] = [],
         claudeWireRecords: [ClaudeSessionState] = []
     ) -> Detection? {
-        guard let identity = detectIdentity(current) else {
+        guard let identity = identityDetector.identity(for: current) else {
             return nil
         }
 
@@ -43,56 +45,6 @@ struct AgentRuntimeDetector {
         }
 
         return detectFromScreen(identity: identity, current: current, previous: previous)
-    }
-
-    private func detectIdentity(_ snapshot: TerminalSnapshot) -> AgentIdentity? {
-        if let foregroundProcessName = snapshot.runtime.foregroundProcessName?
-            .trimmingCharacters(in: .whitespacesAndNewlines),
-           !foregroundProcessName.isEmpty {
-            if let processMatch = detectIdentity(in: foregroundProcessName) {
-                return processMatch
-            }
-
-            return detectIdentity(inVisibleText: snapshot.visibleText)
-        }
-
-        if let visibleMatch = detectIdentity(inVisibleText: snapshot.visibleText) {
-            return visibleMatch
-        }
-
-        return detectIdentity(in: snapshot.title)
-    }
-
-    private func detectIdentity(inVisibleText visibleText: String) -> AgentIdentity? {
-        let visible = visibleText.lowercased()
-        if visible.contains("welcome to kimi code cli") || visible.contains("agent (kimi") {
-            return .kimi
-        }
-        if visible.contains("welcome to claude code") || visible.contains("claude code") {
-            return .claudeCode
-        }
-        if visible.contains("openai codex") {
-            return .codex
-        }
-
-        return nil
-    }
-
-    private func detectIdentity(in candidate: String?) -> AgentIdentity? {
-        guard let candidate else { return nil }
-        let lowered = candidate.lowercased()
-
-        if lowered.contains("kimi code") || lowered == "kimi" || lowered.contains("kimi") {
-            return .kimi
-        }
-        if lowered.contains("claude code") || lowered == "claude" || lowered.contains("claude") {
-            return .claudeCode
-        }
-        if lowered.contains("openai codex") || lowered == "codex" || lowered.contains("codex") {
-            return .codex
-        }
-
-        return nil
     }
 
     private func detectFromWire(
