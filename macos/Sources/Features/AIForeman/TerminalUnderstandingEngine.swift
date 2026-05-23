@@ -376,19 +376,8 @@ struct TerminalUnderstandingEngine {
         }
     }
 
-    private func runtimeState(for context: AgentInteractionContext) -> AgentRuntimeDetector.State {
-        switch context {
-        case .none:
-            return .unknown
-        case .running:
-            return .working
-        case .waitingApproval, .waitingChoice, .waitingText:
-            return .blocked
-        case .completed:
-            return .idle
-        case .error:
-            return .blocked
-        }
+    private func runtimeState(for context: AgentInteractionContext) -> AgentRuntimeState {
+        AgentRuntimeState(context: context)
     }
 
     private func classifyState(
@@ -708,7 +697,7 @@ struct TerminalUnderstandingEngine {
 private struct AgentClassification {
     let identity: AgentIdentity
     let interactionState: AgentInteractionState
-    let runtimeState: AgentRuntimeDetector.State
+    let runtimeState: AgentRuntimeState
     let supportLevel: AgentSupportLevel
     let evidence: [UnderstandingEvidence]
     let context: AgentInteractionContext
@@ -805,7 +794,7 @@ private func extractNumberedOptions(_ text: String) -> [String] {
 private func classification(
     _ identity: AgentIdentity,
     _ interactionState: AgentInteractionState,
-    runtimeState: AgentRuntimeDetector.State,
+    runtimeState: AgentRuntimeState,
     _ source: UnderstandingEvidenceSource,
     _ detail: String,
     _ confidence: Double,
