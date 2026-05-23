@@ -31,19 +31,33 @@ enum ManagedAgentLaunchLocation: String, Codable, Equatable, Sendable {
 struct ManagedAgentLaunchRequest: Equatable, Sendable {
     let identity: AgentIdentity
     let workingDirectory: String?
+    let sourceWindowNumber: Int?
     let initialPrompt: String?
     let location: ManagedAgentLaunchLocation
 
     init(
         identity: AgentIdentity,
         workingDirectory: String? = nil,
+        sourceWindowNumber: Int? = nil,
         initialPrompt: String? = nil,
         location: ManagedAgentLaunchLocation = .tab
     ) {
         self.identity = identity
         self.workingDirectory = workingDirectory
+        self.sourceWindowNumber = sourceWindowNumber
         self.initialPrompt = initialPrompt
         self.location = location
+    }
+
+    func resolvedWindowNumber(
+        availableWindowNumbers: [Int],
+        fallbackWindowNumber: Int?
+    ) -> Int? {
+        if let sourceWindowNumber, availableWindowNumbers.contains(sourceWindowNumber) {
+            return sourceWindowNumber
+        }
+
+        return fallbackWindowNumber
     }
 }
 

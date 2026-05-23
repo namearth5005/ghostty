@@ -23,11 +23,13 @@ struct BaseTerminalControllerTests {
     func managedAgentLaunchRequestUsesFocusedWorkingDirectoryAndTabLocation() {
         let request = BaseTerminalController.makeManagedAgentLaunchRequest(
             identity: .codex,
-            workingDirectory: "/tmp/project"
+            workingDirectory: "/tmp/project",
+            sourceWindowNumber: 42
         )
 
         #expect(request.identity == .codex)
         #expect(request.workingDirectory == "/tmp/project")
+        #expect(request.sourceWindowNumber == 42)
         #expect(request.initialPrompt == nil)
         #expect(request.location == .tab)
     }
@@ -37,12 +39,14 @@ struct BaseTerminalControllerTests {
         let request = BaseTerminalController.makeManagedAgentLaunchRequest(
             identity: .claudeCode,
             workingDirectory: nil,
+            sourceWindowNumber: nil,
             initialPrompt: "review this branch",
             location: .window
         )
 
         #expect(request.identity == .claudeCode)
         #expect(request.workingDirectory == nil)
+        #expect(request.sourceWindowNumber == nil)
         #expect(request.initialPrompt == "review this branch")
         #expect(request.location == .window)
     }

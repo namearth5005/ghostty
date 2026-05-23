@@ -30,4 +30,34 @@ struct ManagedAgentRegistryTests {
         #expect(kimi.supportLevel == .firstClass)
         #expect(kimi.makeSurfaceConfiguration(workingDirectory: nil, initialPrompt: nil).command == "kimi")
     }
+
+    @Test
+    func launchRequestPrefersSourceWindowWhenAvailable() {
+        let request = ManagedAgentLaunchRequest(
+            identity: .codex,
+            sourceWindowNumber: 12
+        )
+
+        #expect(
+            request.resolvedWindowNumber(
+                availableWindowNumbers: [4, 12, 18],
+                fallbackWindowNumber: 4
+            ) == 12
+        )
+    }
+
+    @Test
+    func launchRequestFallsBackWhenSourceWindowIsUnavailable() {
+        let request = ManagedAgentLaunchRequest(
+            identity: .kimi,
+            sourceWindowNumber: 99
+        )
+
+        #expect(
+            request.resolvedWindowNumber(
+                availableWindowNumbers: [4, 12, 18],
+                fallbackWindowNumber: 4
+            ) == 4
+        )
+    }
 }

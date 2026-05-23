@@ -1892,8 +1892,17 @@ extension AppDelegate {
             initialPrompt: request.initialPrompt
         )
 
-        let preferredParent = TerminalController.preferredParent?.focusedSurface
-            ?? TerminalController.preferredParent?.surfaceTree.root?.leftmostLeaf()
+        let availableControllers = TerminalController.all
+        let preferredController = TerminalController.preferredParent
+        let resolvedWindowNumber = request.resolvedWindowNumber(
+            availableWindowNumbers: availableControllers.compactMap { $0.window?.windowNumber },
+            fallbackWindowNumber: preferredController?.window?.windowNumber
+        )
+        let parentController = resolvedWindowNumber.flatMap { windowNumber in
+            availableControllers.first { $0.window?.windowNumber == windowNumber }
+        } ?? preferredController
+        let preferredParent = parentController?.focusedSurface
+            ?? parentController?.surfaceTree.root?.leftmostLeaf()
 
         switch request.location {
         case .tab:

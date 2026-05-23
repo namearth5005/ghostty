@@ -179,7 +179,8 @@ class BaseTerminalController: NSWindowController,
             guard let self else { return }
             let request = Self.makeManagedAgentLaunchRequest(
                 identity: identity,
-                workingDirectory: self.focusedSurface?.pwd
+                workingDirectory: self.focusedSurface?.pwd,
+                sourceWindowNumber: self.window?.windowNumber
             )
             _ = (NSApp.delegate as? AppDelegate)?.launchManagedAgent(request)
         }
@@ -302,12 +303,14 @@ class BaseTerminalController: NSWindowController,
     static func makeManagedAgentLaunchRequest(
         identity: AgentIdentity,
         workingDirectory: String?,
+        sourceWindowNumber: Int? = nil,
         initialPrompt: String? = nil,
         location: ManagedAgentLaunchLocation = .tab
     ) -> ManagedAgentLaunchRequest {
         ManagedAgentLaunchRequest(
             identity: identity,
             workingDirectory: workingDirectory,
+            sourceWindowNumber: sourceWindowNumber,
             initialPrompt: initialPrompt,
             location: location
         )
