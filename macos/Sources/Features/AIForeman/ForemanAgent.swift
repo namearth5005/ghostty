@@ -285,6 +285,7 @@ actor ForemanAgent {
         cancelCurrentTask()
         pauseState = .none
         captureSnapshots = nil
+        captureObservedContext = nil
         Task {
             await MainActor.run {
                 conversation.stop()

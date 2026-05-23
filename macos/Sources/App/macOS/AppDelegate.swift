@@ -1535,8 +1535,7 @@ extension AppDelegate {
             await agent.start(
                 goal: goal,
                 mode: mode,
-                captureSnapshots: { [weak self] in
-                    guard let self else { return [] }
+                captureSnapshots: {
                     var allSnapshots: [TerminalSnapshot] = []
                     for controller in TerminalController.all {
                         allSnapshots.append(contentsOf: controller.captureTerminalSnapshots())
@@ -1572,8 +1571,7 @@ extension AppDelegate {
         Task { [weak self] in
             guard let self else { return }
             await self.foremanAgent?.approvePendingAction(
-                captureSnapshots: { [weak self] in
-                    guard let self else { return [] }
+                captureSnapshots: {
                     var allSnapshots: [TerminalSnapshot] = []
                     for controller in TerminalController.all {
                         allSnapshots.append(contentsOf: controller.captureTerminalSnapshots())
