@@ -3,6 +3,18 @@ import Testing
 @testable import Ghostty
 
 struct TerminalUnderstandingTests {
+    private struct InteractiveParitySignature: Equatable {
+        let state: TerminalUnderstandingState
+        let agentIdentity: AgentIdentity
+        let interactionState: AgentInteractionState
+        let supportLevel: AgentSupportLevel
+        let lastMeaningfulEvent: String
+        let shortExplanation: String
+        let importantDetails: [String]
+        let suggestedNextActions: [TerminalSuggestedAction]
+        let interactionContext: AgentInteractionContext
+    }
+
     private func paritySignature(_ understanding: TerminalUnderstanding) -> (
         state: TerminalUnderstandingState,
         agentIdentity: AgentIdentity,
@@ -18,6 +30,20 @@ struct TerminalUnderstandingTests {
             supportLevel: understanding.supportLevel,
             shortExplanation: understanding.shortExplanation,
             suggestedActionTitles: understanding.suggestedNextActions.map(\.title)
+        )
+    }
+
+    private func interactiveParitySignature(_ understanding: TerminalUnderstanding) -> InteractiveParitySignature {
+        InteractiveParitySignature(
+            state: understanding.state,
+            agentIdentity: understanding.agentIdentity,
+            interactionState: understanding.agentInteractionState,
+            supportLevel: understanding.supportLevel,
+            lastMeaningfulEvent: understanding.lastMeaningfulEvent,
+            shortExplanation: understanding.shortExplanation,
+            importantDetails: understanding.importantDetails,
+            suggestedNextActions: understanding.suggestedNextActions,
+            interactionContext: understanding.agentInteractionContext
         )
     }
 
@@ -385,6 +411,239 @@ struct TerminalUnderstandingTests {
         #expect(existingUnderstanding.agentIdentity == AgentIdentity.claudeCode)
         #expect(existingUnderstanding.state == TerminalUnderstandingState.waiting)
         #expect(existingUnderstanding.agentInteractionState == AgentInteractionState.waitingChoice)
+    }
+
+    @Test
+    func managedManualAndNewTabCodexQuestionPromptsShareReplyUnderstandingAndSuggestions() {
+        let engine = TerminalUnderstandingEngine()
+        let visibleText = """
+        • Hello. What do you want to work on in ghostty?
+
+        ›
+        """
+
+        let existingTab = TerminalSnapshot.makePreview(
+            terminalID: "codex-existing-reply",
+            windowID: "win-1",
+            tabID: "tab-1",
+            title: "shell",
+            cwd: "/tmp/project",
+            isFocused: true,
+            visibleText: visibleText,
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessID: 111,
+            foregroundProcessName: "codex",
+            cursorIsAtPrompt: true,
+            usingAlternateScreen: true
+        )
+        let newTab = TerminalSnapshot.makePreview(
+            terminalID: "codex-new-tab-reply",
+            windowID: "win-1",
+            tabID: "tab-2",
+            title: "nambouchara@Nams-MacBook-Pro:~",
+            cwd: "/tmp/project",
+            isFocused: false,
+            visibleText: visibleText,
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessID: 222,
+            foregroundProcessName: "codex",
+            cursorIsAtPrompt: true,
+            usingAlternateScreen: true
+        )
+        let managed = TerminalSnapshot.makePreview(
+            terminalID: "codex-managed-reply",
+            windowID: "win-1",
+            tabID: "tab-3",
+            title: "OpenAI Codex",
+            cwd: "/tmp/project",
+            isFocused: false,
+            visibleText: visibleText,
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessID: 333,
+            foregroundProcessName: "codex",
+            cursorIsAtPrompt: true,
+            usingAlternateScreen: true
+        )
+
+        let existingUnderstanding = engine.understand(current: existingTab, previous: nil, lastOutcome: nil)
+        let newTabUnderstanding = engine.understand(current: newTab, previous: nil, lastOutcome: nil)
+        let managedUnderstanding = engine.understand(current: managed, previous: nil, lastOutcome: nil)
+
+        #expect(interactiveParitySignature(existingUnderstanding) == interactiveParitySignature(newTabUnderstanding))
+        #expect(interactiveParitySignature(existingUnderstanding) == interactiveParitySignature(managedUnderstanding))
+        #expect(existingUnderstanding.agentInteractionState == .waitingText)
+        #expect(existingUnderstanding.agentInteractionContext == .waitingText(question: "• Hello. What do you want to work on in ghostty?"))
+        #expect(existingUnderstanding.suggestedNextActions == [
+            .init(
+                title: "Reply to the agent",
+                command: nil,
+                reason: "• Hello. What do you want to work on in ghostty?",
+                isRecommended: true
+            )
+        ])
+    }
+
+    @Test
+    func managedManualAndNewTabKimiReplyPromptsShareUnderstandingAndSuggestions() {
+        let engine = TerminalUnderstandingEngine()
+        let visibleText = """
+        I'm now in the /Users/nambouchara/speed2/mend directory. Here's what's inside:
+        .claude/
+        docs/
+        hooks/
+        install.sh
+        journal-skill/
+        skill/
+        templates/
+        LICENSE
+        README.md
+        .gitignore
+
+        What would you like me to do here?
+
+        ─ input ─────────────────────────────────────────────────────────
+
+
+        agent (Kimi-k2.6 ●)  ~/speed2  ctrl-x: toggle mode | shift-tab: plan mode
+        context: 5.4% (14.3k/262.1k)
+        """
+
+        let existingTab = TerminalSnapshot.makePreview(
+            terminalID: "kimi-existing-reply",
+            windowID: "win-1",
+            tabID: "tab-4",
+            title: "shell",
+            cwd: "/Users/nambouchara/speed2",
+            isFocused: true,
+            visibleText: visibleText,
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessID: 444,
+            foregroundProcessName: "kimi",
+            cursorIsAtPrompt: true,
+            usingAlternateScreen: true
+        )
+        let newTab = TerminalSnapshot.makePreview(
+            terminalID: "kimi-new-tab-reply",
+            windowID: "win-1",
+            tabID: "tab-5",
+            title: "nambouchara@Nams-MacBook-Pro:~",
+            cwd: "/Users/nambouchara/speed2",
+            isFocused: false,
+            visibleText: visibleText,
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessID: 555,
+            foregroundProcessName: "kimi",
+            cursorIsAtPrompt: true,
+            usingAlternateScreen: true
+        )
+        let managed = TerminalSnapshot.makePreview(
+            terminalID: "kimi-managed-reply",
+            windowID: "win-1",
+            tabID: "tab-6",
+            title: "Kimi Code",
+            cwd: "/Users/nambouchara/speed2",
+            isFocused: false,
+            visibleText: visibleText,
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessID: 666,
+            foregroundProcessName: "kimi",
+            cursorIsAtPrompt: true,
+            usingAlternateScreen: true
+        )
+
+        let existingUnderstanding = engine.understand(current: existingTab, previous: nil, lastOutcome: nil)
+        let newTabUnderstanding = engine.understand(current: newTab, previous: nil, lastOutcome: nil)
+        let managedUnderstanding = engine.understand(current: managed, previous: nil, lastOutcome: nil)
+
+        #expect(interactiveParitySignature(existingUnderstanding) == interactiveParitySignature(newTabUnderstanding))
+        #expect(interactiveParitySignature(existingUnderstanding) == interactiveParitySignature(managedUnderstanding))
+        #expect(existingUnderstanding.agentInteractionState == .waitingText)
+        #expect(existingUnderstanding.agentInteractionContext == .waitingText(question: "What would you like me to do here?"))
+        #expect(existingUnderstanding.suggestedNextActions == [
+            .init(
+                title: "Reply to the agent",
+                command: nil,
+                reason: "What would you like me to do here?",
+                isRecommended: true
+            )
+        ])
+    }
+
+    @Test
+    func managedManualAndNewTabKimiApprovalPromptsShareUnderstandingAndSuggestions() {
+        let engine = TerminalUnderstandingEngine()
+        let visibleText = """
+        Shell is requesting approval to run command
+
+        1. Approve once
+        2. Reject, tell the model what to do instead
+        """
+
+        let existingTab = TerminalSnapshot.makePreview(
+            terminalID: "kimi-existing-approval",
+            windowID: "win-1",
+            tabID: "tab-7",
+            title: "shell",
+            cwd: "/tmp/project",
+            isFocused: true,
+            visibleText: visibleText,
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessID: 777,
+            foregroundProcessName: "kimi",
+            cursorIsAtPrompt: false,
+            usingAlternateScreen: true
+        )
+        let newTab = TerminalSnapshot.makePreview(
+            terminalID: "kimi-new-tab-approval",
+            windowID: "win-1",
+            tabID: "tab-8",
+            title: "nambouchara@Nams-MacBook-Pro:~",
+            cwd: "/tmp/project",
+            isFocused: false,
+            visibleText: visibleText,
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessID: 888,
+            foregroundProcessName: "kimi",
+            cursorIsAtPrompt: false,
+            usingAlternateScreen: true
+        )
+        let managed = TerminalSnapshot.makePreview(
+            terminalID: "kimi-managed-approval",
+            windowID: "win-1",
+            tabID: "tab-9",
+            title: "Kimi Code",
+            cwd: "/tmp/project",
+            isFocused: false,
+            visibleText: visibleText,
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessID: 999,
+            foregroundProcessName: "kimi",
+            cursorIsAtPrompt: false,
+            usingAlternateScreen: true
+        )
+
+        let existingUnderstanding = engine.understand(current: existingTab, previous: nil, lastOutcome: nil)
+        let newTabUnderstanding = engine.understand(current: newTab, previous: nil, lastOutcome: nil)
+        let managedUnderstanding = engine.understand(current: managed, previous: nil, lastOutcome: nil)
+
+        #expect(interactiveParitySignature(existingUnderstanding) == interactiveParitySignature(newTabUnderstanding))
+        #expect(interactiveParitySignature(existingUnderstanding) == interactiveParitySignature(managedUnderstanding))
+        #expect(existingUnderstanding.agentInteractionState == .waitingApproval)
+        #expect(existingUnderstanding.agentInteractionContext.typeString == "waitingApproval")
+        #expect(existingUnderstanding.suggestedNextActions.map(\.title) == [
+            "Review the approval request",
+            "Let Foreman explain the requested action",
+        ])
+        #expect(existingUnderstanding.suggestedNextActions.map(\.isRecommended) == [true, false])
     }
 
     @Test
