@@ -135,4 +135,41 @@ struct AgentScreenInteractionDetectorTests {
 
         #expect(detection == nil)
     }
+
+    @Test
+    func staleKimiWelcomeHistoryDoesNotDetectWaitingTextSurface() {
+        let detection = detector.detect(
+            identity: .kimi,
+            visibleText: """
+            Welcome to Kimi Code CLI!
+            Send /help for help information.
+
+            Directory: /tmp/project
+            Model: Kimi-k2.6
+
+            Thinking...
+            """,
+            lastEvent: "Thinking..."
+        )
+
+        #expect(detection == nil)
+    }
+
+    @Test
+    func staleKimiInputHistoryDoesNotDetectWaitingTextSurface() {
+        let detection = detector.detect(
+            identity: .kimi,
+            visibleText: """
+            ─ input ─────────────────────────────────────────────────────────
+
+            agent (Kimi-k2.6 ●)  ~/speed2  ctrl-x: toggle mode | shift-tab: plan mode
+            context: 5.4% (14.3k/262.1k)
+
+            Reading repository files...
+            """,
+            lastEvent: "Reading repository files..."
+        )
+
+        #expect(detection == nil)
+    }
 }

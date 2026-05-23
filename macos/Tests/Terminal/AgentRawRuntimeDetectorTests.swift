@@ -412,4 +412,102 @@ struct AgentRawRuntimeDetectorTests {
 
         #expect(detection.state == .working)
     }
+
+    @Test
+    func staleKimiWelcomeHistoryDoesNotBlockWorkingState() {
+        let previous = TerminalSnapshot.makePreview(
+            terminalID: "kimi-stale-welcome",
+            windowID: "win-1",
+            tabID: "tab-1",
+            title: "Kimi Code",
+            cwd: "/tmp/project",
+            isFocused: true,
+            visibleText: """
+            Welcome to Kimi Code CLI!
+            Send /help for help information.
+
+            Directory: /tmp/project
+            Model: Kimi-k2.6
+            """,
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessName: "kimi",
+            cursorIsAtPrompt: true,
+            usingAlternateScreen: true
+        )
+        let current = TerminalSnapshot.makePreview(
+            terminalID: "kimi-stale-welcome",
+            windowID: "win-1",
+            tabID: "tab-1",
+            title: "Kimi Code",
+            cwd: "/tmp/project",
+            isFocused: true,
+            visibleText: """
+            Welcome to Kimi Code CLI!
+            Send /help for help information.
+
+            Directory: /tmp/project
+            Model: Kimi-k2.6
+
+            Thinking...
+            """,
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessName: "kimi",
+            cursorIsAtPrompt: false,
+            usingAlternateScreen: true
+        )
+
+        let detection = detector.detect(identity: .kimi, current: current, previous: previous)
+
+        #expect(detection.state == .working)
+    }
+
+    @Test
+    func staleKimiInputHistoryDoesNotBlockWorkingState() {
+        let previous = TerminalSnapshot.makePreview(
+            terminalID: "kimi-stale-input",
+            windowID: "win-1",
+            tabID: "tab-1",
+            title: "Kimi Code",
+            cwd: "/tmp/project",
+            isFocused: true,
+            visibleText: """
+            ─ input ─────────────────────────────────────────────────────────
+
+            agent (Kimi-k2.6 ●)  ~/speed2  ctrl-x: toggle mode | shift-tab: plan mode
+            context: 5.4% (14.3k/262.1k)
+            """,
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessName: "kimi",
+            cursorIsAtPrompt: true,
+            usingAlternateScreen: true
+        )
+        let current = TerminalSnapshot.makePreview(
+            terminalID: "kimi-stale-input",
+            windowID: "win-1",
+            tabID: "tab-1",
+            title: "Kimi Code",
+            cwd: "/tmp/project",
+            isFocused: true,
+            visibleText: """
+            ─ input ─────────────────────────────────────────────────────────
+
+            agent (Kimi-k2.6 ●)  ~/speed2  ctrl-x: toggle mode | shift-tab: plan mode
+            context: 5.4% (14.3k/262.1k)
+
+            Reading repository files...
+            """,
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessName: "kimi",
+            cursorIsAtPrompt: false,
+            usingAlternateScreen: true
+        )
+
+        let detection = detector.detect(identity: .kimi, current: current, previous: previous)
+
+        #expect(detection.state == .working)
+    }
 }

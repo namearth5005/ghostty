@@ -18,10 +18,9 @@ struct AgentScreenInteractionDetector {
         visibleText: String,
         lastEvent: String
     ) -> Detection? {
-        let lowered = visibleText.lowercased()
         let normalizedLastEvent = lastEvent.trimmingCharacters(in: .whitespacesAndNewlines)
 
-        if identity == .kimi && isKimiWelcomeScreen(lowered) {
+        if identity == .kimi && isKimiWelcomeScreen(visibleText) {
             return Detection(
                 context: .waitingText(question: nil),
                 reason: .kimiWelcome
@@ -59,7 +58,7 @@ struct AgentScreenInteractionDetector {
             )
         }
 
-        if identity == .kimi && isKimiInputRegion(lowered) {
+        if identity == .kimi && isKimiInputRegion(visibleText) {
             return Detection(
                 context: .waitingText(question: nil),
                 reason: .kimiInputRegion
@@ -156,15 +155,34 @@ struct AgentScreenInteractionDetector {
         return containsAny(lowered, markers: choiceMarkers)
     }
 
-    private func isKimiWelcomeScreen(_ loweredVisibleText: String) -> Bool {
-        loweredVisibleText.contains("welcome to kimi code cli")
-            && loweredVisibleText.contains("directory:")
-            && loweredVisibleText.contains("model:")
+    private func isKimiWelcomeScreen(_ visibleText: String) -> Bool {
+        let loweredLines = normalizedNonEmptyLines(from: visibleText).map { $0.lowercased() }
+        guard loweredLines.count >= 4 else {
+            return false
+        }
+
+        guard loweredLines.allSatisfy(isKimiWelcomeLine) else {
+            return false
+        }
+
+        return loweredLines.contains(where: { $0.contains("welcome to kimi code cli") }) &&
+            loweredLines.contains(where: { $0.hasPrefix("directory:") }) &&
+            loweredLines.contains(where: { $0.hasPrefix("model:") })
     }
 
-    private func isKimiInputRegion(_ loweredVisibleText: String) -> Bool {
-        loweredVisibleText.contains("agent (kimi")
-            && loweredVisibleText.contains("input")
+    private func isKimiInputRegion(_ visibleText: String) -> Bool {
+        let loweredLines = normalizedNonEmptyLines(from: visibleText).map { $0.lowercased() }
+        guard loweredLines.count >= 3 else {
+            return false
+        }
+
+        guard loweredLines.allSatisfy(isKimiInputLine) else {
+            return false
+        }
+
+        return loweredLines.contains(where: { $0.contains("agent (kimi") }) &&
+            loweredLines.contains(where: { $0.hasPrefix("context:") }) &&
+            loweredLines.contains(where: { $0.contains("input") })
     }
 
     private func activeChoicePromptQuestion(identity: AgentIdentity, lastEvent: String) -> String? {
@@ -181,6 +199,38 @@ struct AgentScreenInteractionDetector {
 
     private func containsAny(_ text: String, markers: [String]) -> Bool {
         markers.contains(where: text.contains)
+    }
+
+    private func normalizedNonEmptyLines(from visibleText: String) -> [String] {
+        visibleText
+            .split(separator: "\n")
+            .map { String($0).trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+    }
+
+    private func isKimiWelcomeLine(_ lowered: String) -> Bool {
+        lowered.contains("welcome to kimi code cli") ||
+            lowered == "send /help for help information." ||
+            lowered.hasPrefix("directory:") ||
+            lowered.hasPrefix("model:")
+    }
+
+    private func isKimiInputLine(_ lowered: String) -> Bool {
+        if lowered == "input" {
+            return true
+        }
+
+        let withoutInput = lowered
+            .replacingOccurrences(of: "input", with: "")
+            .trimmingCharacters(in: .whitespaces)
+        let inputChromeRun = withoutInput.filter { !$0.isWhitespace }
+        if lowered.contains("input"),
+           !inputChromeRun.isEmpty,
+           inputChromeRun.allSatisfy({ $0 == "-" || $0 == "─" || $0 == "━" }) {
+            return true
+        }
+
+        return lowered.hasPrefix("agent (kimi") || lowered.hasPrefix("context:")
     }
 
     private func isNumberedOptionLine(_ line: String) -> Bool {
