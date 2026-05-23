@@ -75,6 +75,34 @@ struct AgentIdentityDetectorTests {
     }
 
     @Test
+    func explicitManagedTitlesRemainValidFallbackIdentitySignals() {
+        let cases: [(String, AgentIdentity)] = [
+            ("OpenAI Codex", .codex),
+            ("Kimi Code", .kimi),
+            ("Claude Code", .claudeCode),
+        ]
+
+        for (title, identity) in cases {
+            let snapshot = TerminalSnapshot.makePreview(
+                terminalID: "term-\(identity.rawValue)",
+                windowID: "win-1",
+                tabID: "tab-1",
+                title: title,
+                cwd: "/tmp/project",
+                isFocused: true,
+                visibleText: "",
+                recentScrollbackLines: [],
+                lastInputPreview: nil,
+                foregroundProcessName: nil,
+                cursorIsAtPrompt: true,
+                usingAlternateScreen: true
+            )
+
+            #expect(detector.identity(for: snapshot) == identity)
+        }
+    }
+
+    @Test
     func visibleAgentBannerCanOverrideKnownShellForeground() {
         let snapshot = TerminalSnapshot.makePreview(
             terminalID: "term-1",
@@ -116,6 +144,58 @@ struct AgentIdentityDetectorTests {
         )
 
         #expect(detector.identity(for: snapshot) == nil)
+    }
+
+    @Test
+    func pathLikeTitleContainingAgentNameDoesNotCreateIdentityWithoutOtherEvidence() {
+        let snapshots = [
+            TerminalSnapshot.makePreview(
+                terminalID: "term-claude-path",
+                windowID: "win-1",
+                tabID: "tab-1",
+                title: "nambouchara@Nams-MacBook-Pro:~/claude-hooks",
+                cwd: "/tmp/claude-hooks",
+                isFocused: true,
+                visibleText: "nambouchara@Nams-MacBook-Pro claude-hooks % ",
+                recentScrollbackLines: [],
+                lastInputPreview: nil,
+                foregroundProcessName: nil,
+                cursorIsAtPrompt: true,
+                usingAlternateScreen: false
+            ),
+            TerminalSnapshot.makePreview(
+                terminalID: "term-codex-path",
+                windowID: "win-1",
+                tabID: "tab-2",
+                title: "nambouchara@Nams-MacBook-Pro:~/codex-playground",
+                cwd: "/tmp/codex-playground",
+                isFocused: false,
+                visibleText: "nambouchara@Nams-MacBook-Pro codex-playground % ",
+                recentScrollbackLines: [],
+                lastInputPreview: nil,
+                foregroundProcessName: nil,
+                cursorIsAtPrompt: true,
+                usingAlternateScreen: false
+            ),
+            TerminalSnapshot.makePreview(
+                terminalID: "term-kimi-path",
+                windowID: "win-1",
+                tabID: "tab-3",
+                title: "nambouchara@Nams-MacBook-Pro:~/kimi-tools",
+                cwd: "/tmp/kimi-tools",
+                isFocused: false,
+                visibleText: "nambouchara@Nams-MacBook-Pro kimi-tools % ",
+                recentScrollbackLines: [],
+                lastInputPreview: nil,
+                foregroundProcessName: nil,
+                cursorIsAtPrompt: true,
+                usingAlternateScreen: false
+            ),
+        ]
+
+        for snapshot in snapshots {
+            #expect(detector.identity(for: snapshot) == nil)
+        }
     }
 
     @Test

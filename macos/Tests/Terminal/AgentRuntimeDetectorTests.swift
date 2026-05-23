@@ -377,4 +377,25 @@ struct AgentRuntimeDetectorTests {
         #expect(detector.identity(for: snapshot) == nil)
         #expect(detector.detect(current: snapshot) == nil)
     }
+
+    @Test
+    func pathLikeTitleContainingAgentNameDoesNotCreateRuntimeDetectionWhenProcessIsMissing() {
+        let snapshot = TerminalSnapshot.makePreview(
+            terminalID: "term-shell-path",
+            windowID: "win-1",
+            tabID: "tab-1",
+            title: "nambouchara@Nams-MacBook-Pro:~/claude-hooks",
+            cwd: "/tmp/claude-hooks",
+            isFocused: true,
+            visibleText: "nambouchara@Nams-MacBook-Pro claude-hooks % ",
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessName: nil,
+            cursorIsAtPrompt: true,
+            usingAlternateScreen: false
+        )
+
+        #expect(detector.identity(for: snapshot) == nil)
+        #expect(detector.detect(current: snapshot) == nil)
+    }
 }

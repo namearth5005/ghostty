@@ -223,6 +223,61 @@ struct AgentRuntimeRefreshPlanTests {
     }
 
     @Test
+    func pathLikeTitleContainingAgentNameDoesNotCreateMonitorTargetWhenProcessIsMissing() {
+        let snapshots = [
+            TerminalSnapshot.makePreview(
+                terminalID: "claude-path-shell",
+                windowID: "w1",
+                tabID: "t1",
+                title: "nambouchara@host:~/claude-hooks",
+                cwd: "/tmp/claude-hooks",
+                isFocused: true,
+                visibleText: "nambouchara@host claude-hooks % ",
+                recentScrollbackLines: [],
+                lastInputPreview: nil,
+                foregroundProcessName: nil,
+                cursorIsAtPrompt: true,
+                usingAlternateScreen: false
+            ),
+            TerminalSnapshot.makePreview(
+                terminalID: "codex-path-shell",
+                windowID: "w1",
+                tabID: "t2",
+                title: "nambouchara@host:~/codex-playground",
+                cwd: "/tmp/codex-playground",
+                isFocused: false,
+                visibleText: "nambouchara@host codex-playground % ",
+                recentScrollbackLines: [],
+                lastInputPreview: nil,
+                foregroundProcessName: nil,
+                cursorIsAtPrompt: true,
+                usingAlternateScreen: false
+            ),
+            TerminalSnapshot.makePreview(
+                terminalID: "kimi-path-shell",
+                windowID: "w1",
+                tabID: "t3",
+                title: "nambouchara@host:~/kimi-tools",
+                cwd: "/tmp/kimi-tools",
+                isFocused: false,
+                visibleText: "nambouchara@host kimi-tools % ",
+                recentScrollbackLines: [],
+                lastInputPreview: nil,
+                foregroundProcessName: nil,
+                cursorIsAtPrompt: true,
+                usingAlternateScreen: false
+            ),
+        ]
+
+        let plan = AgentRuntimeRefreshPlan(snapshots: snapshots)
+
+        for snapshot in snapshots {
+            #expect(plan.entry(for: snapshot.terminalID)?.monitorTarget == nil)
+            #expect(plan.entry(for: snapshot.terminalID)?.detection == nil)
+        }
+    }
+
+    @Test
     func monitorTargetsRequireAttachableKeysInsteadOfUnsafeGlobalScans() {
         let codex = TerminalSnapshot.makePreview(
             terminalID: "codex-no-cwd",

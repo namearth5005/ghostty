@@ -3,7 +3,7 @@ import Foundation
 struct AgentIdentityDetector {
     func identity(for snapshot: TerminalSnapshot) -> AgentIdentity? {
         if let foregroundProcessName = normalized(snapshot.runtime.foregroundProcessName) {
-            if let processMatch = detectIdentity(in: foregroundProcessName) {
+            if let processMatch = detectIdentity(inProcessName: foregroundProcessName) {
                 return processMatch
             }
 
@@ -14,7 +14,7 @@ struct AgentIdentityDetector {
             return visibleMatch
         }
 
-        return detectIdentity(in: snapshot.title)
+        return detectIdentity(inTitle: snapshot.title)
     }
 
     func matches(_ snapshot: TerminalSnapshot, identity expectedIdentity: AgentIdentity) -> Bool {
@@ -36,7 +36,7 @@ struct AgentIdentityDetector {
         return nil
     }
 
-    private func detectIdentity(in candidate: String?) -> AgentIdentity? {
+    private func detectIdentity(inProcessName candidate: String?) -> AgentIdentity? {
         guard let candidate else { return nil }
         let lowered = candidate.lowercased()
 
@@ -51,6 +51,31 @@ struct AgentIdentityDetector {
         }
 
         return nil
+    }
+
+    private func detectIdentity(inTitle candidate: String?) -> AgentIdentity? {
+        guard let lowered = normalized(candidate)?.lowercased() else {
+            return nil
+        }
+
+        if matchesExplicitTitle(lowered, exact: "kimi code") {
+            return .kimi
+        }
+        if matchesExplicitTitle(lowered, exact: "claude code") {
+            return .claudeCode
+        }
+        if matchesExplicitTitle(lowered, exact: "openai codex") {
+            return .codex
+        }
+
+        return nil
+    }
+
+    private func matchesExplicitTitle(_ loweredTitle: String, exact canonicalTitle: String) -> Bool {
+        loweredTitle == canonicalTitle ||
+            loweredTitle.hasPrefix(canonicalTitle + " (") ||
+            loweredTitle.hasPrefix(canonicalTitle + " -") ||
+            loweredTitle.hasPrefix(canonicalTitle + " —")
     }
 
     private func normalized(_ candidate: String?) -> String? {
