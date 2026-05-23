@@ -69,20 +69,11 @@ final class KimiWireSessionMonitor {
     // MARK: - Polling
 
     func poll() {
-        // Re-resolve on every poll to catch new sessions (Kimi creates a new session per interaction).
-        // Only switch to a newly-discovered file if it is recent (modified within last 2 min).
-        // If resolve returns nil, keep reading from the current file so long-running
-        // sessions aren't dropped just because the file hasn't been touched recently.
-        let previousPath = resolvedWirePath
-        let candidatePath = resolveWirePath()
-
-        if let newPath = candidatePath, newPath != previousPath {
-            let isRecent = fileIsRecent(newPath, within: 120)
-            if previousPath == nil || isRecent {
-                resolvedWirePath = newPath
-                DebugLogger.log("[KimiWireMonitor] switched session from '\(previousPath?.lastPathComponent ?? "nil")' to '\(newPath.lastPathComponent)'")
-                lastOffset = 0
-            }
+        // Bind to one resolved wire path at a time. The app layer recreates
+        // the monitor when a terminal locally starts a fresh interaction so we
+        // don't drift onto another same-cwd session from a different tab.
+        if resolvedWirePath == nil {
+            resolvedWirePath = resolveWirePath()
         }
 
         guard resolvedWirePath != nil else { return }
@@ -205,12 +196,4 @@ final class KimiWireSessionMonitor {
         return digest.map { String(format: "%02hhx", $0) }.joined()
     }
 
-    private func fileModDate(_ url: URL) -> Date? {
-        (try? FileManager.default.attributesOfItem(atPath: url.path)[.modificationDate]) as? Date
-    }
-
-    private func fileIsRecent(_ url: URL, within seconds: TimeInterval) -> Bool {
-        guard let modDate = fileModDate(url) else { return false }
-        return now().timeIntervalSince(modDate) < seconds
-    }
 }

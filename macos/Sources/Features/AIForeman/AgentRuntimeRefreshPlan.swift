@@ -12,6 +12,7 @@ struct AgentRuntimeRefreshPlan {
         let snapshot: TerminalSnapshot
         let detection: AgentRuntimeDetector.Detection?
         let monitorTarget: MonitorTarget?
+        let shouldRestartMonitor: Bool
     }
 
     let entries: [Entry]
@@ -36,11 +37,17 @@ struct AgentRuntimeRefreshPlan {
             )
             let identity = detection?.identity ?? detector.identity(for: snapshot)
             let monitorTarget = Self.monitorTarget(for: identity, snapshot: snapshot)
+            let shouldRestartMonitor = Self.shouldRestartMonitor(
+                for: identity,
+                current: snapshot,
+                previous: previousSnapshotsByTerminalID[snapshot.terminalID]
+            )
 
             return Entry(
                 snapshot: snapshot,
                 detection: detection,
-                monitorTarget: monitorTarget
+                monitorTarget: monitorTarget,
+                shouldRestartMonitor: shouldRestartMonitor
             )
         }
 
@@ -90,5 +97,27 @@ struct AgentRuntimeRefreshPlan {
         }
 
         return workingDirectory
+    }
+
+    private static func shouldRestartMonitor(
+        for identity: AgentIdentity?,
+        current: TerminalSnapshot,
+        previous: TerminalSnapshot?
+    ) -> Bool {
+        guard let identity,
+              identity == .codex || identity == .kimi || identity == .claudeCode,
+              let previous else {
+            return false
+        }
+
+        if let previousPID = previous.runtime.foregroundProcessID,
+           let currentPID = current.runtime.foregroundProcessID,
+           previousPID != currentPID {
+            return true
+        }
+
+        return previous.signals.likelyWaitingForInput &&
+            !current.signals.likelyWaitingForInput &&
+            current.visibleText != previous.visibleText
     }
 }

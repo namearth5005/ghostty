@@ -242,6 +242,54 @@ struct KimiWireSessionMonitorTests {
         #expect(monitor.records().count == 1)
         #expect(monitor.records().first?.message.type == "StepBegin")
     }
+
+    @Test
+    func monitorStaysBoundToResolvedWirePathUntilMonitorIsRecreated() throws {
+        let baseDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("kimi-sessions-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: baseDir) }
+
+        let workingDirectory = "/tmp/project"
+        let md5 = KimiWireSessionMonitor.md5Hash(workingDirectory)
+        let md5Dir = baseDir.appendingPathComponent(md5)
+        try FileManager.default.createDirectory(at: md5Dir, withIntermediateDirectories: true)
+
+        var now = Date()
+        let firstSessionDir = md5Dir.appendingPathComponent("session-a")
+        try FileManager.default.createDirectory(at: firstSessionDir, withIntermediateDirectories: true)
+        let firstWirePath = firstSessionDir.appendingPathComponent("wire.jsonl")
+        try #"{"timestamp":1,"message":{"type":"StepBegin","payload":{"n":1}}}"#
+            .appending("\n")
+            .write(to: firstWirePath, atomically: true, encoding: .utf8)
+        now = now.addingTimeInterval(1)
+        try FileManager.default.setAttributes([.modificationDate: now], ofItemAtPath: firstWirePath.path)
+
+        let monitor = KimiWireSessionMonitor(
+            workingDirectory: workingDirectory,
+            sessionsBaseDirectory: baseDir,
+            now: { now }
+        )
+        monitor.start()
+        monitor.stop()
+        monitor.poll()
+
+        #expect(monitor.records().count == 1)
+        #expect(monitor.records().first?.message.type == "StepBegin")
+
+        let secondSessionDir = md5Dir.appendingPathComponent("session-b")
+        try FileManager.default.createDirectory(at: secondSessionDir, withIntermediateDirectories: true)
+        let secondWirePath = secondSessionDir.appendingPathComponent("wire.jsonl")
+        try #"{"timestamp":2,"message":{"type":"TurnEnd","payload":{}}}"#
+            .appending("\n")
+            .write(to: secondWirePath, atomically: true, encoding: .utf8)
+        now = now.addingTimeInterval(1)
+        try FileManager.default.setAttributes([.modificationDate: now], ofItemAtPath: secondWirePath.path)
+
+        monitor.poll()
+
+        #expect(monitor.records().count == 1)
+        #expect(monitor.records().first?.message.type == "StepBegin")
+    }
 }
 
 private func writeKimiWire(

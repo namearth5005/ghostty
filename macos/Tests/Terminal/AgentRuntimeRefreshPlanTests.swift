@@ -305,4 +305,86 @@ struct AgentRuntimeRefreshPlanTests {
         #expect(plan.entry(for: pidOnly.terminalID)?.monitorTarget == .claude(pid: 12345, workingDirectory: nil))
         #expect(plan.entry(for: cwdOnly.terminalID)?.monitorTarget == .claudeWorkingDirectory("/tmp/project"))
     }
+
+    @Test
+    func monitorRestartFollowsFreshTerminalExecutionInsteadOfBackgroundSessionChurn() {
+        let previous = TerminalSnapshot.makePreview(
+            terminalID: "codex-term",
+            windowID: "w1",
+            tabID: "t1",
+            title: "OpenAI Codex",
+            cwd: "/tmp/project",
+            isFocused: true,
+            visibleText: "OpenAI Codex\nWhat should I work on next?\n›",
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessID: 1001,
+            foregroundProcessName: "codex",
+            cursorIsAtPrompt: true,
+            usingAlternateScreen: true
+        )
+        let current = TerminalSnapshot.makePreview(
+            terminalID: "codex-term",
+            windowID: "w1",
+            tabID: "t1",
+            title: "OpenAI Codex",
+            cwd: "/tmp/project",
+            isFocused: true,
+            visibleText: "• Working (0s • esc to interrupt)",
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessID: 1001,
+            foregroundProcessName: "codex",
+            cursorIsAtPrompt: false,
+            usingAlternateScreen: true
+        )
+
+        let plan = AgentRuntimeRefreshPlan(
+            snapshots: [current],
+            previousSnapshotsByTerminalID: [current.terminalID: previous]
+        )
+
+        #expect(plan.entry(for: current.terminalID)?.shouldRestartMonitor == true)
+    }
+
+    @Test
+    func steadyWaitingStateDoesNotRestartMonitor() {
+        let previous = TerminalSnapshot.makePreview(
+            terminalID: "kimi-term",
+            windowID: "w1",
+            tabID: "t1",
+            title: "Kimi Code",
+            cwd: "/tmp/project",
+            isFocused: true,
+            visibleText: "Welcome to Kimi Code CLI\nWhat do you need help with?\n›",
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessID: 2001,
+            foregroundProcessName: "kimi",
+            cursorIsAtPrompt: true,
+            usingAlternateScreen: true
+        )
+        let current = TerminalSnapshot.makePreview(
+            terminalID: "kimi-term",
+            windowID: "w1",
+            tabID: "t1",
+            title: "Kimi Code",
+            cwd: "/tmp/project",
+            isFocused: true,
+            visibleText: "Welcome to Kimi Code CLI\nWhat do you need help with?\n›",
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessID: 2001,
+            foregroundProcessName: "kimi",
+            cursorIsAtPrompt: true,
+            usingAlternateScreen: true
+        )
+
+        let plan = AgentRuntimeRefreshPlan(
+            snapshots: [current],
+            previousSnapshotsByTerminalID: [current.terminalID: previous]
+        )
+
+        #expect(plan.entry(for: current.terminalID)?.shouldRestartMonitor == false)
+    }
 }

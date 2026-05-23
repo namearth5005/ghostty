@@ -5,8 +5,10 @@ import Foundation
 /// Codex writes events to date-sharded files:
 ///   ~/.codex/sessions/YYYY/MM/DD/rollout-<timestamp>-<UUID>.jsonl
 ///
-/// A new session file is created for each turn, so the monitor re-resolves
-/// the path on every poll and switches when a newer non-empty file appears.
+/// A new session file is created for each turn. This monitor binds to one
+/// resolved session file at a time; the app layer recreates the monitor when a
+/// terminal locally starts a fresh turn so we do not hop to unrelated same-cwd
+/// sessions from other tabs.
 final class CodexSessionMonitor {
     let workingDirectory: String?
     let sessionsBase: URL
@@ -69,11 +71,8 @@ final class CodexSessionMonitor {
     // MARK: - Polling
 
     func poll() {
-        let previousPath = resolvedSessionPath
-        resolveSessionPath()
-        if let newPath = resolvedSessionPath, newPath != previousPath {
-            DebugLogger.log("[CodexMonitor] switched session from '\(previousPath?.lastPathComponent ?? "nil")' to '\(newPath.lastPathComponent)'")
-            lastOffset = 0
+        if resolvedSessionPath == nil {
+            resolveSessionPath()
         }
         guard let path = resolvedSessionPath else { return }
 

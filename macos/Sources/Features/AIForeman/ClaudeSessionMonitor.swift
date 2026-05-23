@@ -18,6 +18,7 @@ final class ClaudeSessionMonitor {
     private var recordBuffer: [ClaudeSessionState] = []
     private var lastStatus: String?
     private var monitorStartedAt: Date?
+    private var resolvedFallbackPath: URL?
 
     var onEvent: ((ClaudeSessionState) -> Void)?
     var onError: ((Error) -> Void)?
@@ -43,6 +44,7 @@ final class ClaudeSessionMonitor {
         recordBuffer.removeAll()
         lastStatus = nil
         monitorStartedAt = now()
+        resolvedFallbackPath = nil
 
         let t = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in
             self?.poll()
@@ -81,11 +83,31 @@ final class ClaudeSessionMonitor {
             let path = sessionsBase.appendingPathComponent("\(pid).json")
             if let state = parseState(at: path) {
                 DebugLogger.log("[ClaudeSessionMonitor] matched PID file \(path.lastPathComponent) status=\(state.status ?? "nil")")
+                resolvedFallbackPath = nil
                 return state
             }
             DebugLogger.log("[ClaudeSessionMonitor] PID file not found for \(pid), falling back to scan")
         }
 
+        if let resolvedFallbackPath {
+            if let state = parseState(at: resolvedFallbackPath) {
+                return state
+            }
+            self.resolvedFallbackPath = nil
+        }
+
+        resolvedFallbackPath = resolveFallbackPath()
+
+        guard let resolvedFallbackPath,
+              let state = parseState(at: resolvedFallbackPath) else {
+            return nil
+        }
+
+        DebugLogger.log("[ClaudeSessionMonitor] fallback scan matched file status=\(state.status ?? "nil") pid=\(state.pid)")
+        return state
+    }
+
+    private func resolveFallbackPath() -> URL? {
         // Fallback: scan all session files and pick the most recently modified
         guard let files = try? FileManager.default.contentsOfDirectory(atPath: sessionsBase.path) else {
             return nil
@@ -117,12 +139,7 @@ final class ClaudeSessionMonitor {
             matchingCandidates = candidates
         }
 
-        let result = matchingCandidates.max(by: { $0.1 < $1.1 })?.0
-
-        if let result {
-            DebugLogger.log("[ClaudeSessionMonitor] fallback scan matched file status=\(result.status ?? "nil") pid=\(result.pid)")
-        }
-        return result
+        return matchingCandidates.max(by: { $0.1 < $1.1 })?.0.sessionFileURL(in: sessionsBase)
     }
 
     private func parseState(at url: URL) -> ClaudeSessionState? {
@@ -142,5 +159,11 @@ final class ClaudeSessionMonitor {
 
     private func pathsMatch(lhs: String, rhs: String) -> Bool {
         lhs == rhs || lhs.hasPrefix(rhs) || rhs.hasPrefix(lhs)
+    }
+}
+
+private extension ClaudeSessionState {
+    func sessionFileURL(in base: URL) -> URL {
+        base.appendingPathComponent("\(pid).json")
     }
 }

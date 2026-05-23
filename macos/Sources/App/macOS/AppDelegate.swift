@@ -1699,6 +1699,9 @@ extension AppDelegate {
             }
         let allSnapshots = snapshotsByController.flatMap(\.snapshots)
         let monitorPlan = AgentRuntimeRefreshPlan(snapshots: allSnapshots)
+        let monitorEntriesByTerminalID = Dictionary(
+            uniqueKeysWithValues: monitorPlan.entries.map { ($0.snapshot.terminalID, $0) }
+        )
 
         let kimiTargets: [String: String] = Dictionary(
             uniqueKeysWithValues: monitorPlan.entries.compactMap { entry in
@@ -1734,9 +1737,10 @@ extension AppDelegate {
             guard let monitorCwd = kimiTargets[snapshot.terminalID] else {
                 continue
             }
+            let shouldRestart = monitorEntriesByTerminalID[snapshot.terminalID]?.shouldRestartMonitor == true
 
             if let existing = kimiWireMonitors[snapshot.terminalID] {
-                if existing.workingDirectory != monitorCwd {
+                if existing.workingDirectory != monitorCwd || shouldRestart {
                     existing.stop()
                     let monitor = KimiWireSessionMonitor(workingDirectory: monitorCwd)
                     monitor.start()
@@ -1760,9 +1764,10 @@ extension AppDelegate {
             guard let monitorCwd = codexTargets[snapshot.terminalID] else {
                 continue
             }
+            let shouldRestart = monitorEntriesByTerminalID[snapshot.terminalID]?.shouldRestartMonitor == true
 
             if let existing = codexWireMonitors[snapshot.terminalID] {
-                if existing.workingDirectory != monitorCwd {
+                if existing.workingDirectory != monitorCwd || shouldRestart {
                     existing.stop()
                     let monitor = CodexSessionMonitor(workingDirectory: monitorCwd)
                     monitor.start()
@@ -1788,9 +1793,12 @@ extension AppDelegate {
             }
             let monitorPID = claudeTarget.pid
             let monitorCwd = claudeTarget.workingDirectory
+            let shouldRestart = monitorEntriesByTerminalID[snapshot.terminalID]?.shouldRestartMonitor == true
 
             if let existing = claudeWireMonitors[snapshot.terminalID] {
-                if existing.pid != monitorPID || existing.workingDirectory != monitorCwd {
+                if existing.pid != monitorPID ||
+                    existing.workingDirectory != monitorCwd ||
+                    (monitorPID == nil && shouldRestart) {
                     existing.stop()
                     let monitor = ClaudeSessionMonitor(
                         pid: monitorPID,

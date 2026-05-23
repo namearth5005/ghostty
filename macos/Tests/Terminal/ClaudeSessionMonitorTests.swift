@@ -79,4 +79,54 @@ struct ClaudeSessionMonitorTests {
 
         monitor.stop()
     }
+
+    @Test
+    func fallbackScanStaysBoundToResolvedSessionUntilMonitorIsRecreated() throws {
+        let tmpDir = FileManager.default.temporaryDirectory.appendingPathComponent("claude-monitor-\(UUID().uuidString)")
+        let sessionsDir = tmpDir.appendingPathComponent("sessions")
+
+        try? FileManager.default.removeItem(at: tmpDir)
+        try FileManager.default.createDirectory(at: sessionsDir, withIntermediateDirectories: true)
+
+        defer {
+            try? FileManager.default.removeItem(at: tmpDir)
+        }
+
+        var now = Date()
+        let firstFile = sessionsDir.appendingPathComponent("22222.json")
+        let firstContent = """
+        {"pid":22222,"sessionId":"match-a","cwd":"/tmp/project","status":"idle","updatedAt":1714828801000,"startedAt":1714828800000,"version":"2.1.128","kind":"interactive"}
+        """
+        try firstContent.write(to: firstFile, atomically: true, encoding: .utf8)
+        now = now.addingTimeInterval(1)
+        try FileManager.default.setAttributes([.modificationDate: now], ofItemAtPath: firstFile.path)
+
+        let monitor = ClaudeSessionMonitor(
+            pid: nil,
+            workingDirectory: "/tmp/project",
+            sessionsBase: sessionsDir,
+            now: { now }
+        )
+        monitor.start()
+        monitor.stop()
+        monitor.poll()
+
+        #expect(monitor.records().count == 1)
+        #expect(monitor.records().first?.pid == 22222)
+        #expect(monitor.records().first?.status == "idle")
+
+        let secondFile = sessionsDir.appendingPathComponent("33333.json")
+        let secondContent = """
+        {"pid":33333,"sessionId":"match-b","cwd":"/tmp/project","status":"working","updatedAt":1714828802000,"startedAt":1714828800000,"version":"2.1.128","kind":"interactive"}
+        """
+        try secondContent.write(to: secondFile, atomically: true, encoding: .utf8)
+        now = now.addingTimeInterval(1)
+        try FileManager.default.setAttributes([.modificationDate: now], ofItemAtPath: secondFile.path)
+
+        monitor.poll()
+
+        #expect(monitor.records().count == 1)
+        #expect(monitor.records().first?.pid == 22222)
+        #expect(monitor.records().first?.status == "idle")
+    }
 }
