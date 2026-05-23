@@ -272,6 +272,129 @@ struct AgentRuntimeRefreshPlanTests {
     }
 
     @Test
+    func managedLaunchAttachmentHintsSupplyStartupWorkingDirectoriesAcrossAgents() {
+        let codex = TerminalSnapshot.makePreview(
+            terminalID: "codex-bootstrap",
+            windowID: "w1",
+            tabID: "t1",
+            title: "OpenAI Codex",
+            cwd: nil,
+            isFocused: true,
+            visibleText: "OpenAI Codex\nWhat should I work on next?",
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessID: 111,
+            foregroundProcessName: "codex"
+        )
+        let kimi = TerminalSnapshot.makePreview(
+            terminalID: "kimi-bootstrap",
+            windowID: "w1",
+            tabID: "t2",
+            title: "Kimi Code",
+            cwd: nil,
+            isFocused: false,
+            visibleText: "Welcome to Kimi Code CLI\nWhat do you need help with?",
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessID: 222,
+            foregroundProcessName: "kimi"
+        )
+        let claude = TerminalSnapshot.makePreview(
+            terminalID: "claude-bootstrap",
+            windowID: "w1",
+            tabID: "t3",
+            title: "Claude Code",
+            cwd: nil,
+            isFocused: false,
+            visibleText: "Welcome to Claude Code\nWhat would you like to do?",
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessID: 333,
+            foregroundProcessName: "claude"
+        )
+
+        let plan = AgentRuntimeRefreshPlan(
+            snapshots: [codex, kimi, claude],
+            attachmentHintsByTerminalID: [
+                codex.terminalID: AgentRuntimeAttachmentHint(identity: .codex, workingDirectory: " /tmp/codex-bootstrap "),
+                kimi.terminalID: AgentRuntimeAttachmentHint(identity: .kimi, workingDirectory: "/tmp/kimi-bootstrap"),
+                claude.terminalID: AgentRuntimeAttachmentHint(identity: .claudeCode, workingDirectory: "/tmp/claude-bootstrap"),
+            ]
+        )
+
+        #expect(plan.entry(for: codex.terminalID)?.monitorTarget == .codex(workingDirectory: "/tmp/codex-bootstrap"))
+        #expect(plan.entry(for: kimi.terminalID)?.monitorTarget == .kimi(workingDirectory: "/tmp/kimi-bootstrap"))
+        #expect(plan.entry(for: claude.terminalID)?.monitorTarget == .claude(pid: 333, workingDirectory: "/tmp/claude-bootstrap"))
+    }
+
+    @Test
+    func attachmentHintDoesNotOverrideRealWorkingDirectory() {
+        let snapshot = TerminalSnapshot.makePreview(
+            terminalID: "codex-real-cwd",
+            windowID: "w1",
+            tabID: "t1",
+            title: "OpenAI Codex",
+            cwd: "/tmp/real-project",
+            isFocused: true,
+            visibleText: "OpenAI Codex\nWhat should I work on next?",
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessID: 444,
+            foregroundProcessName: "codex"
+        )
+
+        let plan = AgentRuntimeRefreshPlan(
+            snapshots: [snapshot],
+            attachmentHintsByTerminalID: [
+                snapshot.terminalID: AgentRuntimeAttachmentHint(identity: .codex, workingDirectory: "/tmp/bootstrap-project"),
+            ]
+        )
+
+        #expect(plan.entry(for: snapshot.terminalID)?.monitorTarget == .codex(workingDirectory: "/tmp/real-project"))
+    }
+
+    @Test
+    func attachmentHintIsIgnoredForMismatchedOrMissingIdentity() {
+        let mismatched = TerminalSnapshot.makePreview(
+            terminalID: "codex-mismatch",
+            windowID: "w1",
+            tabID: "t1",
+            title: "OpenAI Codex",
+            cwd: nil,
+            isFocused: true,
+            visibleText: "OpenAI Codex\nWhat should I work on next?",
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessID: 555,
+            foregroundProcessName: "codex"
+        )
+        let unknown = TerminalSnapshot.makePreview(
+            terminalID: "unknown-bootstrap",
+            windowID: "w1",
+            tabID: "t2",
+            title: "shell",
+            cwd: nil,
+            isFocused: false,
+            visibleText: "nambouchara@host project % ",
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessName: "zsh",
+            cursorIsAtPrompt: true
+        )
+
+        let plan = AgentRuntimeRefreshPlan(
+            snapshots: [mismatched, unknown],
+            attachmentHintsByTerminalID: [
+                mismatched.terminalID: AgentRuntimeAttachmentHint(identity: .kimi, workingDirectory: "/tmp/wrong-agent"),
+                unknown.terminalID: AgentRuntimeAttachmentHint(identity: .codex, workingDirectory: "/tmp/no-identity"),
+            ]
+        )
+
+        #expect(plan.entry(for: mismatched.terminalID)?.monitorTarget == nil)
+        #expect(plan.entry(for: unknown.terminalID)?.monitorTarget == nil)
+    }
+
+    @Test
     func claudeCanStillAttachByPidOrWorkingDirectoryAlone() {
         let pidOnly = TerminalSnapshot.makePreview(
             terminalID: "claude-pid-only",

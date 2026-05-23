@@ -1,5 +1,10 @@
 import Foundation
 
+struct AgentRuntimeAttachmentHint: Equatable, Sendable {
+    let identity: AgentIdentity
+    let workingDirectory: String?
+}
+
 struct AgentRuntimeRefreshPlan {
     enum MonitorTarget: Equatable, Sendable {
         case kimi(workingDirectory: String)
@@ -25,6 +30,7 @@ struct AgentRuntimeRefreshPlan {
         kimiWireRecordsByTerminalID: [String: [KimiWireRecord]] = [:],
         codexWireRecordsByTerminalID: [String: [CodexWireRecord]] = [:],
         claudeWireRecordsByTerminalID: [String: [ClaudeSessionState]] = [:],
+        attachmentHintsByTerminalID: [String: AgentRuntimeAttachmentHint] = [:],
         detector: AgentRuntimeDetector = AgentRuntimeDetector()
     ) {
         let builtEntries = snapshots.map { snapshot in
@@ -36,7 +42,11 @@ struct AgentRuntimeRefreshPlan {
                 claudeWireRecords: claudeWireRecordsByTerminalID[snapshot.terminalID] ?? []
             )
             let identity = detection?.identity ?? detector.identity(for: snapshot)
-            let monitorTarget = Self.monitorTarget(for: identity, snapshot: snapshot)
+            let monitorTarget = Self.monitorTarget(
+                for: identity,
+                snapshot: snapshot,
+                hint: attachmentHintsByTerminalID[snapshot.terminalID]
+            )
             let shouldRestartMonitor = Self.shouldRestartMonitor(
                 for: identity,
                 current: snapshot,
@@ -63,9 +73,14 @@ struct AgentRuntimeRefreshPlan {
 
     private static func monitorTarget(
         for identity: AgentIdentity?,
-        snapshot: TerminalSnapshot
+        snapshot: TerminalSnapshot,
+        hint: AgentRuntimeAttachmentHint?
     ) -> MonitorTarget? {
-        let workingDirectory = normalizedWorkingDirectory(snapshot.cwd)
+        let workingDirectory = preferredWorkingDirectory(
+            for: identity,
+            snapshot: snapshot,
+            hint: hint
+        )
 
         switch identity {
         case .some(.kimi):
@@ -88,6 +103,22 @@ struct AgentRuntimeRefreshPlan {
         case .some(.none), .some(.unknown), nil:
             return nil
         }
+    }
+
+    private static func preferredWorkingDirectory(
+        for identity: AgentIdentity?,
+        snapshot: TerminalSnapshot,
+        hint: AgentRuntimeAttachmentHint?
+    ) -> String? {
+        if let workingDirectory = normalizedWorkingDirectory(snapshot.cwd) {
+            return workingDirectory
+        }
+
+        guard hint?.identity == identity else {
+            return nil
+        }
+
+        return normalizedWorkingDirectory(hint?.workingDirectory)
     }
 
     private static func normalizedWorkingDirectory(_ workingDirectory: String?) -> String? {

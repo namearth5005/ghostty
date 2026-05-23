@@ -6,6 +6,11 @@ import Sparkle
 import StoreKit
 import GhosttyKit
 
+private struct ManagedAgentAttachmentBootstrap {
+    let hint: AgentRuntimeAttachmentHint
+    let expiresAt: Date
+}
+
 class AppDelegate: NSObject,
                     ObservableObject,
                     NSApplicationDelegate,
@@ -193,6 +198,7 @@ class AppDelegate: NSObject,
     private var kimiWireMonitors: [String: KimiWireSessionMonitor] = [:]
     private var codexWireMonitors: [String: CodexSessionMonitor] = [:]
     private var claudeWireMonitors: [String: ClaudeSessionMonitor] = [:]
+    private var managedAgentAttachmentBootstraps: [String: ManagedAgentAttachmentBootstrap] = [:]
 
     /// Signals
     private var signals: [DispatchSourceSignal] = []
@@ -1698,7 +1704,24 @@ extension AppDelegate {
                 (controller, controller.captureTerminalSnapshots())
             }
         let allSnapshots = snapshotsByController.flatMap(\.snapshots)
-        let monitorPlan = AgentRuntimeRefreshPlan(snapshots: allSnapshots)
+        let activeTerminalIDs = Set(allSnapshots.map(\.terminalID))
+        let now = Date()
+        managedAgentAttachmentBootstraps = managedAgentAttachmentBootstraps.filter { terminalID, bootstrap in
+            activeTerminalIDs.contains(terminalID) && bootstrap.expiresAt > now
+        }
+
+        for snapshot in allSnapshots {
+            if let cwd = snapshot.cwd?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !cwd.isEmpty {
+                managedAgentAttachmentBootstraps.removeValue(forKey: snapshot.terminalID)
+            }
+        }
+
+        let attachmentHintsByTerminalID = managedAgentAttachmentBootstraps.mapValues(\.hint)
+        let monitorPlan = AgentRuntimeRefreshPlan(
+            snapshots: allSnapshots,
+            attachmentHintsByTerminalID: attachmentHintsByTerminalID
+        )
         let monitorEntriesByTerminalID = Dictionary(
             uniqueKeysWithValues: monitorPlan.entries.map { ($0.snapshot.terminalID, $0) }
         )
@@ -1837,7 +1860,8 @@ extension AppDelegate {
             previousSnapshotsByTerminalID: aiForemanPreviousSnapshots,
             kimiWireRecordsByTerminalID: kimiWireRecordsByTerminalID,
             codexWireRecordsByTerminalID: codexWireRecordsByTerminalID,
-            claudeWireRecordsByTerminalID: claudeWireRecordsByTerminalID
+            claudeWireRecordsByTerminalID: claudeWireRecordsByTerminalID,
+            attachmentHintsByTerminalID: attachmentHintsByTerminalID
         )
 
         let understandings = runtimePlan.entries.map { entry in
@@ -1947,7 +1971,9 @@ extension AppDelegate {
                 from: preferredParent?.window,
                 withBaseConfig: config
             ) {
-                return controller.surfaceTree.root?.leftmostLeaf().id.uuidString
+                let terminalID = controller.surfaceTree.root?.leftmostLeaf().id.uuidString
+                registerManagedAgentAttachmentBootstrap(request, terminalID: terminalID)
+                return terminalID
             }
 
             let controller = TerminalController.newWindow(
@@ -1955,7 +1981,9 @@ extension AppDelegate {
                 withBaseConfig: config,
                 withParent: preferredParent?.window
             )
-            return controller.surfaceTree.root?.leftmostLeaf().id.uuidString
+            let terminalID = controller.surfaceTree.root?.leftmostLeaf().id.uuidString
+            registerManagedAgentAttachmentBootstrap(request, terminalID: terminalID)
+            return terminalID
 
         case .window:
             let controller = TerminalController.newWindow(
@@ -1963,8 +1991,29 @@ extension AppDelegate {
                 withBaseConfig: config,
                 withParent: preferredParent?.window
             )
-            return controller.surfaceTree.root?.leftmostLeaf().id.uuidString
+            let terminalID = controller.surfaceTree.root?.leftmostLeaf().id.uuidString
+            registerManagedAgentAttachmentBootstrap(request, terminalID: terminalID)
+            return terminalID
         }
+    }
+
+    private func registerManagedAgentAttachmentBootstrap(
+        _ request: ManagedAgentLaunchRequest,
+        terminalID: String?
+    ) {
+        guard let terminalID,
+              let workingDirectory = request.workingDirectory?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !workingDirectory.isEmpty else {
+            return
+        }
+
+        managedAgentAttachmentBootstraps[terminalID] = ManagedAgentAttachmentBootstrap(
+            hint: AgentRuntimeAttachmentHint(
+                identity: request.identity,
+                workingDirectory: workingDirectory
+            ),
+            expiresAt: Date().addingTimeInterval(15)
+        )
     }
 
     @MainActor
