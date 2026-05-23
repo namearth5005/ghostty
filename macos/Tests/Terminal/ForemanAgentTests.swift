@@ -3,6 +3,29 @@ import Testing
 @testable import Ghostty
 
 struct ForemanAgentTests {
+    struct PendingAttentionSignature: Equatable {
+        let agentIdentity: AgentIdentity
+        let interactionState: AgentInteractionState
+        let title: String
+        let description: String
+        let detail: String?
+        let actions: [PendingAgentAction]
+        let status: PendingAgentAttentionStatus
+        let errorMessage: String?
+    }
+
+    struct UnderstandingSignature: Equatable {
+        let state: TerminalUnderstandingState
+        let agentIdentity: AgentIdentity
+        let interactionState: AgentInteractionState
+        let supportLevel: AgentSupportLevel
+        let lastMeaningfulEvent: String
+        let shortExplanation: String
+        let importantDetails: [String]
+        let suggestedNextActions: [TerminalSuggestedAction]
+        let interactionContext: AgentInteractionContext
+    }
+
     @Test
     func plainReplyEndsTurnWithoutEnteringWaitingState() async throws {
         let conversation = await MainActor.run { ForemanConversation() }
@@ -636,6 +659,143 @@ struct ForemanAgentTests {
     }
 
     @Test
+    func draftPendingAttentionForKimiRepliesSharesParityAcrossLaunchPaths() async throws {
+        let cases: [(terminalID: String, snapshots: [TerminalSnapshot])] = [
+            ("kimi-existing", kimiReplySnapshots(terminalID: "kimi-existing", title: "shell", isFocused: true)),
+            ("kimi-new-tab", kimiReplySnapshots(terminalID: "kimi-new-tab", title: "nambouchara@Nams-MacBook-Pro:~")),
+            ("kimi-managed", kimiReplySnapshots(terminalID: "kimi-managed", title: "Kimi Code")),
+        ]
+
+        var signatures: [PendingAttentionSignature] = []
+        var forwardedUnderstandings: [UnderstandingSignature] = []
+
+        for entry in cases {
+            let result = try await draftPendingAttentionCase(
+                snapshots: entry.snapshots,
+                event: AgentNeedsAttentionEvent(
+                    terminalID: entry.terminalID,
+                    agentIdentity: .kimi,
+                    interactionState: .waitingText,
+                    deltaText: "What would you like me to do here?",
+                    timestamp: Date(timeIntervalSince1970: 1),
+                    fingerprint: "\(entry.terminalID)|kimi|waitingText|next"
+                ),
+                replyDraft: try makeReplyDraftResponse(
+                    thought: "Kimi is asking what to do next.",
+                    suggestion: .replyToAgent(
+                        terminalID: entry.terminalID,
+                        message: "Read README.md and summarize what this project does.",
+                        reason: "Kimi has entered the mend repo and is asking for the next instruction.",
+                        confidence: 1.0
+                    )
+                )
+            )
+
+            signatures.append(try #require(result.signature))
+            forwardedUnderstandings.append(try #require(result.understanding))
+        }
+
+        #expect(signatures.dropFirst().allSatisfy { $0 == signatures.first })
+        #expect(forwardedUnderstandings.dropFirst().allSatisfy { $0 == forwardedUnderstandings.first })
+        #expect(signatures.first?.title == "Suggested reply")
+        #expect(signatures.first?.description == "Kimi has entered the mend repo and is asking for the next instruction.")
+        #expect(signatures.first?.detail == "What would you like me to do here?")
+        #expect(signatures.first?.actions.first?.title == "Read README.md and summarize what this project does.")
+        #expect(forwardedUnderstandings.first?.interactionState == .waitingText)
+        #expect(forwardedUnderstandings.first?.interactionContext == .waitingText(question: "What would you like me to do here?"))
+    }
+
+    @Test
+    func draftPendingAttentionForKimiAskHumanSharesParityAcrossLaunchPaths() async throws {
+        let cases: [(terminalID: String, snapshots: [TerminalSnapshot])] = [
+            ("kimi-existing", kimiReplySnapshots(terminalID: "kimi-existing", title: "shell", isFocused: true)),
+            ("kimi-new-tab", kimiReplySnapshots(terminalID: "kimi-new-tab", title: "nambouchara@Nams-MacBook-Pro:~")),
+            ("kimi-managed", kimiReplySnapshots(terminalID: "kimi-managed", title: "Kimi Code")),
+        ]
+
+        var signatures: [PendingAttentionSignature] = []
+
+        for entry in cases {
+            let result = try await draftPendingAttentionCase(
+                snapshots: entry.snapshots,
+                event: AgentNeedsAttentionEvent(
+                    terminalID: entry.terminalID,
+                    agentIdentity: .kimi,
+                    interactionState: .waitingText,
+                    deltaText: "What would you like me to do here?",
+                    timestamp: Date(timeIntervalSince1970: 1),
+                    fingerprint: "\(entry.terminalID)|kimi|waitingText|next"
+                ),
+                replyDraft: try makeReplyDraftResponse(
+                    thought: "The agent needs a goal from the human.",
+                    suggestion: .askHuman(
+                        terminalID: entry.terminalID,
+                        message: "What should Kimi do in the mend directory?",
+                        reason: "Kimi is asking for the next task and Foreman has no active user goal.",
+                        confidence: 1.0
+                    )
+                )
+            )
+
+            signatures.append(try #require(result.signature))
+        }
+
+        #expect(signatures.dropFirst().allSatisfy { $0 == signatures.first })
+        #expect(signatures.first?.title == "Needs direction")
+        #expect(signatures.first?.description == "What should Kimi do in the mend directory?")
+        #expect(signatures.first?.detail == "Kimi is asking for the next task and Foreman has no active user goal.")
+        #expect(signatures.first?.actions.first?.title == "Ask Kimi to recommend next step")
+        #expect(signatures.first?.actions.first?.payload == "Please inspect README.md and the current project structure, then suggest the most useful next task and explain why before making changes.")
+    }
+
+    @Test
+    func draftPendingAttentionForCodexRepliesSharesParityAcrossLaunchPaths() async throws {
+        let cases: [(terminalID: String, snapshots: [TerminalSnapshot])] = [
+            ("codex-existing", codexReplySnapshots(terminalID: "codex-existing", title: "shell", isFocused: true)),
+            ("codex-new-tab", codexReplySnapshots(terminalID: "codex-new-tab", title: "nambouchara@Nams-MacBook-Pro:~")),
+            ("codex-managed", codexReplySnapshots(terminalID: "codex-managed", title: "OpenAI Codex")),
+        ]
+
+        var signatures: [PendingAttentionSignature] = []
+        var forwardedUnderstandings: [UnderstandingSignature] = []
+
+        for entry in cases {
+            let result = try await draftPendingAttentionCase(
+                snapshots: entry.snapshots,
+                event: AgentNeedsAttentionEvent(
+                    terminalID: entry.terminalID,
+                    agentIdentity: .codex,
+                    interactionState: .waitingText,
+                    deltaText: "What should I work on next?",
+                    timestamp: Date(timeIntervalSince1970: 1),
+                    fingerprint: "\(entry.terminalID)|codex|waitingText|next"
+                ),
+                replyDraft: try makeReplyDraftResponse(
+                    thought: "Codex is asking what to work on next.",
+                    suggestion: .replyToAgent(
+                        terminalID: entry.terminalID,
+                        message: "Inspect the current files and summarize the next useful change.",
+                        reason: "Codex is asking for the next concrete task in this project.",
+                        confidence: 1.0
+                    )
+                )
+            )
+
+            signatures.append(try #require(result.signature))
+            forwardedUnderstandings.append(try #require(result.understanding))
+        }
+
+        #expect(signatures.dropFirst().allSatisfy { $0 == signatures.first })
+        #expect(forwardedUnderstandings.dropFirst().allSatisfy { $0 == forwardedUnderstandings.first })
+        #expect(signatures.first?.title == "Suggested reply")
+        #expect(signatures.first?.description == "Codex is asking for the next concrete task in this project.")
+        #expect(signatures.first?.detail == "What should I work on next?")
+        #expect(signatures.first?.actions.first?.title == "Inspect the current files and summarize the next useful change.")
+        #expect(forwardedUnderstandings.first?.interactionState == .waitingText)
+        #expect(forwardedUnderstandings.first?.interactionContext == .waitingText(question: "• Hello. What do you want to work on in ghostty?"))
+    }
+
+    @Test
     func reactAutonomousModeExecutesCommandDirectly() async throws {
         let conversation = await MainActor.run {
             let c = ForemanConversation()
@@ -870,6 +1030,67 @@ private actor CommandRecorder {
     }
 }
 
+private func pendingAttentionSignature(_ attention: PendingAgentAttention?) -> ForemanAgentTests.PendingAttentionSignature? {
+    guard let attention else { return nil }
+    return .init(
+        agentIdentity: attention.agentIdentity,
+        interactionState: attention.interactionState,
+        title: attention.title,
+        description: attention.description,
+        detail: attention.detail,
+        actions: attention.actions,
+        status: attention.status,
+        errorMessage: attention.errorMessage
+    )
+}
+
+private func understandingSignature(_ understanding: TerminalUnderstanding?) -> ForemanAgentTests.UnderstandingSignature? {
+    guard let understanding else { return nil }
+    return .init(
+        state: understanding.state,
+        agentIdentity: understanding.agentIdentity,
+        interactionState: understanding.agentInteractionState,
+        supportLevel: understanding.supportLevel,
+        lastMeaningfulEvent: understanding.lastMeaningfulEvent,
+        shortExplanation: understanding.shortExplanation,
+        importantDetails: understanding.importantDetails,
+        suggestedNextActions: understanding.suggestedNextActions,
+        interactionContext: understanding.agentInteractionContext
+    )
+}
+
+private func draftPendingAttentionCase(
+    snapshots: [TerminalSnapshot],
+    event: AgentNeedsAttentionEvent,
+    replyDraft: AgentReplyDraftResponse
+) async throws -> (
+    signature: ForemanAgentTests.PendingAttentionSignature?,
+    understanding: ForemanAgentTests.UnderstandingSignature?
+) {
+    let conversation = await MainActor.run { ForemanConversation() }
+    let client = ScriptedForemanClient(replyDrafts: [replyDraft])
+    let commandRecorder = CommandRecorder()
+    let agent = makeAgent(
+        conversation: conversation,
+        client: client,
+        commandRecorder: commandRecorder
+    )
+
+    let attention = try await agent.draftPendingAttention(
+        for: event,
+        captureSnapshots: { snapshots }
+    )
+
+    let commands = await commandRecorder.recordedCommands()
+    #expect(commands.isEmpty)
+    let understandings = await client.recordedUnderstandings()
+
+    return (
+        signature: pendingAttentionSignature(attention),
+        understanding: understandingSignature(understandings.first?.first)
+    )
+}
+
 private actor ScriptedForemanClient: ForemanLLMClient {
     private var responses: [AgentStepResponse]
     private var replyDrafts: [AgentReplyDraftResponse]
@@ -948,6 +1169,76 @@ private actor ScriptedForemanClient: ForemanLLMClient {
     func agentStepCallCount() -> Int {
         stepCallCount
     }
+}
+
+private func kimiReplySnapshots(
+    terminalID: String,
+    title: String,
+    isFocused: Bool = false
+) -> [TerminalSnapshot] {
+    [
+        TerminalSnapshot.makePreview(
+            terminalID: terminalID,
+            windowID: "win-1",
+            tabID: "tab-1",
+            title: title,
+            cwd: "/Users/nambouchara/speed2",
+            isFocused: isFocused,
+            visibleText: """
+            I'm now in the /Users/nambouchara/speed2/mend directory. Here's what's inside:
+            .claude/
+            docs/
+            hooks/
+            install.sh
+            journal-skill/
+            skill/
+            templates/
+            LICENSE
+            README.md
+            .gitignore
+
+            What would you like me to do here?
+
+            ─ input ─────────────────────────────────────────────────────────
+
+
+            agent (Kimi-k2.6 ●)  ~/speed2  ctrl-x: toggle mode | shift-tab: plan mode
+            context: 5.4% (14.3k/262.1k)
+            """,
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessName: "kimi",
+            cursorIsAtPrompt: true,
+            usingAlternateScreen: true
+        ),
+    ]
+}
+
+private func codexReplySnapshots(
+    terminalID: String,
+    title: String,
+    isFocused: Bool = false
+) -> [TerminalSnapshot] {
+    [
+        TerminalSnapshot.makePreview(
+            terminalID: terminalID,
+            windowID: "win-1",
+            tabID: "tab-1",
+            title: title,
+            cwd: "/tmp/project",
+            isFocused: isFocused,
+            visibleText: """
+            • Hello. What do you want to work on in ghostty?
+
+            ›
+            """,
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessName: "codex",
+            cursorIsAtPrompt: true,
+            usingAlternateScreen: true
+        ),
+    ]
 }
 
 private enum ScriptedForemanClientError: Error {
