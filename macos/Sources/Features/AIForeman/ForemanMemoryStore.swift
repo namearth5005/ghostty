@@ -7,7 +7,17 @@ actor ForemanMemoryStore {
     private var db: OpaquePointer?
     private let dbPath: URL
 
-    private init() {
+    init(dbPath: URL? = nil) {
+        if let dbPath {
+            let parentDirectory = dbPath.deletingLastPathComponent()
+            try? FileManager.default.createDirectory(
+                at: parentDirectory,
+                withIntermediateDirectories: true
+            )
+            self.dbPath = dbPath
+            return
+        }
+
         let supportDir = FileManager.default.urls(
             for: .applicationSupportDirectory,
             in: .userDomainMask
@@ -19,7 +29,7 @@ actor ForemanMemoryStore {
             withIntermediateDirectories: true
         )
 
-        dbPath = foremanDir.appendingPathComponent("memory.sqlite3")
+        self.dbPath = foremanDir.appendingPathComponent("memory.sqlite3")
     }
 
     func open() throws {
@@ -69,12 +79,23 @@ actor ForemanMemoryStore {
                 timestamp REAL NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS project_goals (
+                project_path TEXT PRIMARY KEY,
+                goal_text TEXT NOT NULL,
+                status TEXT NOT NULL,
+                updated_at REAL NOT NULL,
+                completed_at REAL,
+                last_evaluated_at REAL,
+                last_evidence_snapshot TEXT
+            );
+
             CREATE INDEX IF NOT EXISTS idx_situation_cwd ON situation_outcomes(cwd);
             CREATE INDEX IF NOT EXISTS idx_situation_project ON situation_outcomes(project_path);
             CREATE INDEX IF NOT EXISTS idx_situation_timestamp ON situation_outcomes(timestamp);
             CREATE INDEX IF NOT EXISTS idx_summary_project ON session_summaries(project_path);
+            CREATE INDEX IF NOT EXISTS idx_project_goal_status ON project_goals(status);
 
-            PRAGMA user_version = 1;
+            PRAGMA user_version = 2;
             """
 
         var errMsg: UnsafeMutablePointer<CChar>?
@@ -223,6 +244,97 @@ actor ForemanMemoryStore {
         sqlite3_finalize(stmt)
     }
 
+    func store(projectGoal: ForemanProjectGoal) throws {
+        try open()
+
+        let sql = """
+            INSERT INTO project_goals
+            (project_path, goal_text, status, updated_at, completed_at, last_evaluated_at, last_evidence_snapshot)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(project_path) DO UPDATE SET
+                goal_text = excluded.goal_text,
+                status = excluded.status,
+                updated_at = excluded.updated_at,
+                completed_at = excluded.completed_at,
+                last_evaluated_at = excluded.last_evaluated_at,
+                last_evidence_snapshot = excluded.last_evidence_snapshot;
+            """
+
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+            throw MemoryError.insertFailed
+        }
+
+        sqlite3_bind_text(stmt, 1, (projectGoal.projectID as NSString).utf8String, -1, nil)
+        sqlite3_bind_text(stmt, 2, (projectGoal.goalText as NSString).utf8String, -1, nil)
+        sqlite3_bind_text(stmt, 3, (encodedStatus(projectGoal.status) as NSString).utf8String, -1, nil)
+        sqlite3_bind_double(stmt, 4, projectGoal.updatedAt.timeIntervalSince1970)
+
+        if let completedAt = projectGoal.completedAt {
+            sqlite3_bind_double(stmt, 5, completedAt.timeIntervalSince1970)
+        } else {
+            sqlite3_bind_null(stmt, 5)
+        }
+
+        if let lastEvaluatedAt = projectGoal.lastEvaluatedAt {
+            sqlite3_bind_double(stmt, 6, lastEvaluatedAt.timeIntervalSince1970)
+        } else {
+            sqlite3_bind_null(stmt, 6)
+        }
+
+        if let lastEvidenceSnapshot = projectGoal.lastEvidenceSnapshot {
+            sqlite3_bind_text(stmt, 7, (lastEvidenceSnapshot as NSString).utf8String, -1, nil)
+        } else {
+            sqlite3_bind_null(stmt, 7)
+        }
+
+        guard sqlite3_step(stmt) == SQLITE_DONE else {
+            sqlite3_finalize(stmt)
+            throw MemoryError.insertFailed
+        }
+
+        sqlite3_finalize(stmt)
+    }
+
+    func projectGoals() throws -> [ForemanProjectGoal] {
+        try open()
+
+        let sql = """
+            SELECT project_path, goal_text, status, updated_at, completed_at, last_evaluated_at, last_evidence_snapshot
+            FROM project_goals
+            ORDER BY updated_at DESC;
+            """
+
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+            throw MemoryError.queryFailed
+        }
+
+        var goals: [ForemanProjectGoal] = []
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            if let goal = rowToProjectGoal(stmt) {
+                goals.append(goal)
+            }
+        }
+
+        sqlite3_finalize(stmt)
+        return goals
+    }
+
+    func deleteProjectGoal(for projectID: String) throws {
+        try open()
+
+        let sql = "DELETE FROM project_goals WHERE project_path = ?;"
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+            throw MemoryError.deleteFailed
+        }
+
+        sqlite3_bind_text(stmt, 1, (projectID as NSString).utf8String, -1, nil)
+        sqlite3_step(stmt)
+        sqlite3_finalize(stmt)
+    }
+
     func compactOldRecords(before: Date) throws {
         try open()
 
@@ -272,6 +384,55 @@ actor ForemanMemoryStore {
             projectPath: projectPath
         )
     }
+
+    private func rowToProjectGoal(_ stmt: OpaquePointer?) -> ForemanProjectGoal? {
+        guard let stmt = stmt else { return nil }
+
+        let projectPath = sqlite3_column_text(stmt, 0).map { String(cString: $0) } ?? ""
+        let goalText = sqlite3_column_text(stmt, 1).map { String(cString: $0) } ?? ""
+        let statusRawValue = sqlite3_column_text(stmt, 2).map { String(cString: $0) } ?? "active"
+        let updatedAt = Date(timeIntervalSince1970: sqlite3_column_double(stmt, 3))
+        let completedAt = sqlite3_column_type(stmt, 4) == SQLITE_NULL
+            ? nil
+            : Date(timeIntervalSince1970: sqlite3_column_double(stmt, 4))
+        let lastEvaluatedAt = sqlite3_column_type(stmt, 5) == SQLITE_NULL
+            ? nil
+            : Date(timeIntervalSince1970: sqlite3_column_double(stmt, 5))
+        let lastEvidenceSnapshot = sqlite3_column_text(stmt, 6).map { String(cString: $0) }
+
+        let status: ForemanProjectGoalStatus
+        switch statusRawValue {
+        case "paused":
+            status = .paused
+        case "complete", "completed":
+            status = .completed
+        default:
+            status = .active
+        }
+
+        return ForemanProjectGoal(
+            projectID: projectPath,
+            objective: goalText,
+            status: status,
+            createdAt: updatedAt,
+            updatedAt: updatedAt,
+            completedAt: completedAt,
+            lastEvaluatedAt: lastEvaluatedAt,
+            lastEvidenceSnapshot: lastEvidenceSnapshot
+        )
+    }
+
+    private func encodedStatus(_ status: ForemanProjectGoalStatus) -> String {
+        switch status {
+        case .active:
+            return "active"
+        case .paused:
+            return "paused"
+        case .completed:
+            return "completed"
+        }
+    }
+
     private func extractKeywords(from text: String) -> [String] {
         let lowercased = text.lowercased()
         let tokens = lowercased.components(separatedBy: CharacterSet.alphanumerics.inverted)
@@ -286,6 +447,7 @@ enum MemoryError: Error {
     case openFailed
     case schemaFailed(String)
     case insertFailed
+    case queryFailed
     case deleteFailed
 }
 

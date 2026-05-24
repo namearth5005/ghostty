@@ -1481,6 +1481,125 @@ struct ForemanAgentTests {
     }
 
     @Test
+    func draftPendingAttentionForCompletedGoalSuppressesRecommendationsAcrossLaunchPaths() async throws {
+        let cases: [(terminalID: String, snapshots: [TerminalSnapshot])] = [
+            ("codex-complete-existing", codexReplySnapshots(terminalID: "codex-complete-existing", title: "shell", isFocused: true)),
+            ("codex-complete-new-tab", codexReplySnapshots(terminalID: "codex-complete-new-tab", title: "nambouchara@Nams-MacBook-Pro:~")),
+            ("codex-complete-managed", codexReplySnapshots(terminalID: "codex-complete-managed", title: "OpenAI Codex")),
+        ]
+        let runtime = ForemanProjectGoalRuntime()
+        await runtime.saveGoal("Ship the goal evaluator.", for: "/tmp/project")
+        await runtime.recordEvaluation(
+            .init(
+                progress: .completed,
+                evidenceSnapshot: "Codex completed the evaluator slice and the project goal looks done.",
+                evaluatedAt: Date(timeIntervalSince1970: 10)
+            ),
+            for: "/tmp/project"
+        )
+
+        var signatures: [PendingAttentionSignature] = []
+
+        for entry in cases {
+            let conversation = await MainActor.run { ForemanConversation() }
+            let client = ScriptedForemanClient(replyDrafts: [
+                try makeReplyDraftResponse(
+                    thought: "This should never be drafted once the goal is complete.",
+                    suggestion: .replyToAgent(
+                        terminalID: entry.terminalID,
+                        message: "Keep going.",
+                        reason: "This should not be used.",
+                        confidence: 1.0
+                    )
+                ),
+            ])
+            let commandRecorder = CommandRecorder()
+            let agent = makeAgent(
+                conversation: conversation,
+                client: client,
+                commandRecorder: commandRecorder,
+                goalRuntime: runtime,
+                preferredTerminalID: entry.terminalID
+            )
+
+            let attention = try await agent.draftPendingAttention(
+                for: AgentNeedsAttentionEvent(
+                    terminalID: entry.terminalID,
+                    agentIdentity: .codex,
+                    interactionState: .waitingText,
+                    deltaText: "What should I work on next?",
+                    timestamp: Date(timeIntervalSince1970: 11),
+                    fingerprint: "\(entry.terminalID)|codex|waitingText|complete"
+                ),
+                captureSnapshots: { entry.snapshots }
+            )
+
+            signatures.append(try #require(pendingAttentionSignature(attention)))
+            let draftCalls = await client.replyDraftCallCount()
+            #expect(draftCalls == 0)
+        }
+
+        #expect(signatures.dropFirst().allSatisfy { $0 == signatures.first })
+        #expect(signatures.first?.title == "Goal complete")
+        #expect(signatures.first?.description.contains("continue") == true)
+        #expect(signatures.first?.description.contains("close") == true)
+        #expect(signatures.first?.detail?.contains("/goal reopen") == true)
+        #expect(signatures.first?.detail?.contains("/goal clear") == true)
+        #expect(signatures.first?.actions.isEmpty == true)
+    }
+
+    @Test
+    func draftPendingAttentionAskHumanKeepsGoalActiveAndStoresEvidenceAcrossLaunchPaths() async throws {
+        let cases: [(terminalID: String, snapshots: [TerminalSnapshot])] = [
+            ("codex-blocked-existing", codexReplySnapshots(terminalID: "codex-blocked-existing", title: "shell", isFocused: true)),
+            ("codex-blocked-new-tab", codexReplySnapshots(terminalID: "codex-blocked-new-tab", title: "nambouchara@Nams-MacBook-Pro:~")),
+            ("codex-blocked-managed", codexReplySnapshots(terminalID: "codex-blocked-managed", title: "OpenAI Codex")),
+        ]
+        let projectGoal = "Coordinate the next goal-runtime slice."
+        let runtime = ForemanProjectGoalRuntime()
+        await runtime.saveGoal(projectGoal, for: "/tmp/project")
+
+        var signatures: [PendingAttentionSignature] = []
+
+        for entry in cases {
+            let result = try await draftPendingAttentionCase(
+                snapshots: entry.snapshots,
+                event: AgentNeedsAttentionEvent(
+                    terminalID: entry.terminalID,
+                    agentIdentity: .codex,
+                    interactionState: .waitingText,
+                    deltaText: "What should I work on next?",
+                    timestamp: Date(timeIntervalSince1970: 1),
+                    fingerprint: "\(entry.terminalID)|codex|waitingText|blocked"
+                ),
+                replyDraft: try makeReplyDraftResponse(
+                    thought: "Codex is asking for the next task and needs human direction.",
+                    suggestion: .askHuman(
+                        terminalID: entry.terminalID,
+                        message: "What should Codex do in this project?",
+                        reason: "Codex is asking for the next task and Foreman needs human guidance.",
+                        confidence: 1.0
+                    )
+                ),
+                goalRuntime: runtime
+            )
+
+            signatures.append(try #require(result.signature))
+        }
+
+        let goal = await runtime.goal(for: "/tmp/project")
+
+        #expect(signatures.dropFirst().allSatisfy { $0 == signatures.first })
+        #expect(signatures.first?.title == "Needs direction")
+        #expect(signatures.first?.description == "What should Codex do in this project?")
+        #expect(signatures.first?.actions.first?.payload == goalAwareRecommendNextStepPrompt(goal: projectGoal))
+        #expect(goal?.status == .active)
+        #expect(goal?.completedAt == nil)
+        #expect(goal?.lastEvaluatedAt != nil)
+        #expect(goal?.lastEvidenceSnapshot?.contains("Foreman needs human guidance") == true)
+    }
+
+    @Test
     func draftPendingAttentionForClaudeAskHumanUsesSavedProjectGoalAcrossLaunchPaths() async throws {
         let cases: [(terminalID: String, snapshots: [TerminalSnapshot])] = [
             ("claude-existing", claudeReplySnapshots(terminalID: "claude-existing", title: "shell", isFocused: true)),
@@ -2083,6 +2202,7 @@ private actor ScriptedForemanClient: ForemanLLMClient {
     private var understandingsLog: [[TerminalUnderstanding]] = []
     private var overviewsLog: [TerminalOverview] = []
     private var stepCallCount = 0
+    private var replyDraftCount = 0
 
     init(
         responses: [AgentStepResponse] = [],
@@ -2136,6 +2256,7 @@ private actor ScriptedForemanClient: ForemanLLMClient {
         overview: TerminalOverview,
         lastOutcome: TerminalOutcomeReport?
     ) async throws -> AgentReplyDraftResponse {
+        replyDraftCount += 1
         understandingsLog.append(understandings)
         overviewsLog.append(overview)
         guard !replyDrafts.isEmpty else {
@@ -2154,6 +2275,10 @@ private actor ScriptedForemanClient: ForemanLLMClient {
 
     func agentStepCallCount() -> Int {
         stepCallCount
+    }
+
+    func replyDraftCallCount() -> Int {
+        replyDraftCount
     }
 }
 

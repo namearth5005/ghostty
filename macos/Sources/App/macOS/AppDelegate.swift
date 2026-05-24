@@ -198,7 +198,7 @@ class AppDelegate: NSObject,
     private var aiForemanPreviousSnapshots: [String: TerminalSnapshot] = [:]
     private var aiForemanPreviousUnderstandings: [String: TerminalUnderstanding] = [:]
     private let agentStateMonitor = AgentStateMonitor()
-    private let foremanProjectGoalRuntime = ForemanProjectGoalRuntime()
+    private var foremanProjectGoalRuntime = ForemanProjectGoalRuntime(loadPersistedGoals: true)
     private var kimiWireMonitors: [String: KimiWireSessionMonitor] = [:]
     private var codexWireMonitors: [String: CodexSessionMonitor] = [:]
     private var claudeWireMonitors: [String: ClaudeSessionMonitor] = [:]
@@ -1560,6 +1560,11 @@ extension AppDelegate {
 
     @MainActor
     func sendChatMessage(_ text: String, store: ForemanSidebarStore) {
+        if let command = ForemanProjectGoalCommand.parse(text) {
+            handleForemanGoalCommand(command, store: store)
+            return
+        }
+
         Task {
             await foremanAgent?.receiveUserMessage(text)
         }
@@ -1571,6 +1576,70 @@ extension AppDelegate {
             await self?.foremanAgent?.stop()
             self?.foremanAgent = nil
             self?.foremanAgentStore = nil
+        }
+    }
+
+    @MainActor
+    private func handleForemanGoalCommand(_ command: ForemanProjectGoalCommand, store: ForemanSidebarStore) {
+        Task { [weak self] in
+            guard let self else { return }
+
+            let resolvedProjectID = await MainActor.run(resultType: String?.self) {
+                self.resolveForemanProjectID(for: store)
+            }
+            guard let projectID = resolvedProjectID else {
+                await MainActor.run {
+                    store.conversation.errorMessage = "Foreman could not resolve a project for that goal command."
+                }
+                return
+            }
+
+            let message: String
+            switch command {
+            case .help:
+                message = """
+                Goal commands:
+                /goal reopen
+                /goal complete
+                /goal clear
+                /goal set <new goal>
+                """
+
+            case .complete:
+                await foremanProjectGoalRuntime.setStatus(
+                    .completed,
+                    for: projectID,
+                    evidenceSnapshot: "Marked complete from the Foreman sidebar."
+                )
+                message = "Marked the saved project goal complete."
+
+            case .reopen:
+                await foremanProjectGoalRuntime.setStatus(
+                    .active,
+                    for: projectID,
+                    evidenceSnapshot: "Reopened from the Foreman sidebar."
+                )
+                message = "Reopened the saved project goal."
+
+            case .clear:
+                await foremanProjectGoalRuntime.clearGoal(for: projectID)
+                message = "Cleared the saved project goal."
+
+            case .set(let newGoal):
+                await foremanProjectGoalRuntime.saveGoal(newGoal, for: projectID)
+                message = "Saved a new project goal: \(newGoal)"
+            }
+
+            let updatedGoal = await foremanProjectGoalRuntime.goal(for: projectID)
+            await MainActor.run {
+                store.conversation.errorMessage = nil
+                store.conversation.goal = updatedGoal?.goalText
+                store.conversation.setActiveProjectGoal(updatedGoal)
+                store.conversation.addMessage(role: .agent, content: message)
+                if updatedGoal == nil {
+                    store.conversation.setStatus(.idle)
+                }
+            }
         }
     }
 
@@ -1891,6 +1960,25 @@ extension AppDelegate {
     }
 
     @MainActor
+    private func resolveForemanProjectID(for store: ForemanSidebarStore) -> String? {
+        if let projectID = store.conversation.activeProjectGoal?.projectID {
+            return projectID
+        }
+
+        let snapshots = TerminalController.all.flatMap { $0.captureTerminalSnapshots() }
+        if let selectedTerminalID = store.selectedTerminalID {
+            let snapshot = snapshots.first { $0.terminalID == selectedTerminalID }
+            return ForemanProjectPathResolver.projectPath(from: snapshot?.cwd)
+        }
+
+        if let focusedSnapshot = snapshots.first(where: \.isFocused) {
+            return ForemanProjectPathResolver.projectPath(from: focusedSnapshot.cwd)
+        }
+
+        return snapshots.lazy.compactMap { ForemanProjectPathResolver.projectPath(from: $0.cwd) }.first
+    }
+
+    @MainActor
     private func terminalController(for store: ForemanSidebarStore) -> TerminalController? {
         TerminalController.all.first(where: { $0.foremanSidebarStore === store })
     }
@@ -1913,6 +2001,13 @@ extension AppDelegate {
         UserDefaults.ghostty.synchronize()
 #endif
     }
+
+#if DEBUG
+    @MainActor
+    func setForemanProjectGoalRuntimeForTests(_ runtime: ForemanProjectGoalRuntime) {
+        foremanProjectGoalRuntime = runtime
+    }
+#endif
 
     @MainActor
     func launchManagedAgent(_ request: ManagedAgentLaunchRequest) -> String? {

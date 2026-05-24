@@ -14,6 +14,7 @@ actor ForemanAgent {
     private let onSendCommand: @MainActor (String, String) async -> Bool
     private let onStatusChange: @MainActor (AgentStatus) -> Void
     private let onAction: @MainActor (AgentAction, String) -> Void
+    private let goalEvaluator = ForemanProjectGoalEvaluator()
 
     private var currentTask: Task<Void, Never>?
     private let observedContextBuilder = ForemanObservedContextBuilder()
@@ -83,6 +84,7 @@ actor ForemanAgent {
         await MainActor.run {
             conversation.addMessage(role: .user, content: text)
         }
+        await reopenCompletedGoalAfterUserMessageIfNeeded(text)
 
         switch pauseState {
         case .awaitingUserReply:
@@ -219,10 +221,20 @@ actor ForemanAgent {
                 understandings: understandings
             )
         }
-        await updateConversationProjectGoal(
+        _ = await updateConversationProjectGoal(
             for: event.terminalID,
             terminals: terminals
         )
+        if let evaluatedGoal = await evaluateProjectGoal(
+            for: event.terminalID,
+            terminals: terminals,
+            understandings: understandings
+        ), evaluatedGoal.status.suppressesRecommendations {
+            return makeCompletedGoalAttention(
+                for: event,
+                goal: evaluatedGoal
+            )
+        }
 
         let response = try await foremanService.draftAgentReply(
             conversation: conversation,
@@ -238,6 +250,12 @@ actor ForemanAgent {
         await MainActor.run {
             conversation.incrementIteration()
         }
+        _ = await evaluateProjectGoal(
+            for: event.terminalID,
+            terminals: terminals,
+            understandings: understandings,
+            recommendationOutcome: .replyDraft(response.suggestion)
+        )
 
         switch response.suggestion {
         case .replyToAgent(let terminalID, let message, let reason, _):
@@ -378,10 +396,21 @@ actor ForemanAgent {
                     understandings: understandings
                 )
             }
-            await updateConversationProjectGoal(
+            _ = await updateConversationProjectGoal(
                 for: preferredTerminalID ?? overview.primaryTerminalID,
                 terminals: terminals
             )
+            if let evaluatedGoal = await evaluateProjectGoal(
+                for: preferredTerminalID ?? overview.primaryTerminalID,
+                terminals: terminals,
+                understandings: understandings
+            ), evaluatedGoal.status.suppressesRecommendations {
+                await pauseForCompletedGoal(
+                    evaluatedGoal,
+                    terminalID: preferredTerminalID ?? overview.primaryTerminalID
+                )
+                break
+            }
 
             if let runningAgent = runningAgentWithoutAttention(in: understandings) {
                 await pauseUntilAgentNeedsAttention(runningAgent)
@@ -404,6 +433,12 @@ actor ForemanAgent {
             await MainActor.run {
                 conversation.incrementIteration()
             }
+            _ = await evaluateProjectGoal(
+                for: preferredTerminalID ?? overview.primaryTerminalID,
+                terminals: terminals,
+                understandings: understandings,
+                recommendationOutcome: .agentAction(response.action)
+            )
 
             // 3. Execute
             let shouldContinue = try await executeAction(response)
@@ -630,10 +665,21 @@ actor ForemanAgent {
                 understandings: understandings
             )
         }
-        await updateConversationProjectGoal(
+        _ = await updateConversationProjectGoal(
             for: event.terminalID,
             terminals: terminals
         )
+        if let evaluatedGoal = await evaluateProjectGoal(
+            for: event.terminalID,
+            terminals: terminals,
+            understandings: understandings
+        ), evaluatedGoal.status.suppressesRecommendations {
+            await pauseForCompletedGoal(
+                evaluatedGoal,
+                terminalID: event.terminalID
+            )
+            return
+        }
 
         if let runningAgent = runningAgentWithoutAttention(in: understandings) {
             await pauseUntilAgentNeedsAttention(runningAgent)
@@ -656,6 +702,12 @@ actor ForemanAgent {
         await MainActor.run {
             conversation.incrementIteration()
         }
+        _ = await evaluateProjectGoal(
+            for: event.terminalID,
+            terminals: terminals,
+            understandings: understandings,
+            recommendationOutcome: .agentAction(response.action)
+        )
 
         // Execute (one action, then stop)
         _ = try await executeAction(response, terminalID: event.terminalID)
@@ -752,25 +804,38 @@ actor ForemanAgent {
         }
 
         await goalRuntime.saveGoal(goal, for: projectID)
-        return await goalRuntime.activeGoal(for: projectID)
+        return await goalRuntime.goal(for: projectID)
     }
 
     private func updateConversationProjectGoal(
         for terminalID: String?,
         terminals: [TerminalSnapshot]
-    ) async {
-        let projectGoal: ForemanProjectGoal?
-        if let terminalID {
-            projectGoal = await goalRuntime.goal(forTerminalID: terminalID, in: terminals)
-        } else if let projectID = resolvedProjectID(in: terminals) {
-            projectGoal = await goalRuntime.activeGoal(for: projectID)
-        } else {
-            projectGoal = nil
-        }
+    ) async -> ForemanProjectGoal? {
+        let projectGoal = await resolvedConversationProjectGoal(
+            for: terminalID,
+            terminals: terminals
+        )
 
         await MainActor.run {
             conversation.setActiveProjectGoal(projectGoal)
         }
+
+        return projectGoal
+    }
+
+    private func resolvedConversationProjectGoal(
+        for terminalID: String?,
+        terminals: [TerminalSnapshot]
+    ) async -> ForemanProjectGoal? {
+        if let terminalID {
+            return await goalRuntime.goal(forTerminalID: terminalID, in: terminals)
+        }
+
+        if let projectID = resolvedProjectID(in: terminals) {
+            return await goalRuntime.goal(for: projectID)
+        }
+
+        return nil
     }
 
     private func resolvedProjectID(in snapshots: [TerminalSnapshot]) -> String? {
@@ -827,5 +892,111 @@ actor ForemanAgent {
         return """
         Please inspect the current project state and recommend the single most useful next step. Explain why before making changes.
         """
+    }
+
+    private func evaluateProjectGoal(
+        for terminalID: String?,
+        terminals: [TerminalSnapshot],
+        understandings: [TerminalUnderstanding],
+        recommendationOutcome: ForemanProjectGoalRecommendationOutcome? = nil
+    ) async -> ForemanProjectGoal? {
+        guard let goal = await resolvedConversationProjectGoal(
+            for: terminalID,
+            terminals: terminals
+        ) else {
+            return nil
+        }
+
+        // A completed goal stays latched until Foreman observes an explicit
+        // agent outcome or the user reopens/replaces the goal.
+        if goal.status.suppressesRecommendations, recommendationOutcome == nil {
+            await MainActor.run {
+                conversation.setActiveProjectGoal(goal)
+            }
+            return goal
+        }
+
+        let evaluation = goalEvaluator.evaluate(
+            goal: goal,
+            projectID: goal.projectID,
+            terminals: terminals,
+            understandings: understandings,
+            recommendationOutcome: recommendationOutcome
+        )
+        await goalRuntime.recordEvaluation(
+            evaluation,
+            for: goal.projectID
+        )
+
+        let refreshedGoal = await goalRuntime.goal(for: goal.projectID)
+        await MainActor.run {
+            conversation.setActiveProjectGoal(refreshedGoal)
+        }
+
+        return refreshedGoal
+    }
+
+    private func makeCompletedGoalAttention(
+        for event: AgentNeedsAttentionEvent,
+        goal: ForemanProjectGoal
+    ) -> PendingAgentAttention {
+        PendingAgentAttention(
+            terminalID: event.terminalID,
+            agentIdentity: event.agentIdentity,
+            interactionState: event.interactionState,
+            fingerprint: event.fingerprint,
+            title: "Goal complete",
+            description: "The saved project goal already looks complete. Choose whether to continue, extend, or close it before sending more work.",
+            detail: completedGoalDetail(for: goal),
+            actions: []
+        )
+    }
+
+    private func pauseForCompletedGoal(
+        _ goal: ForemanProjectGoal,
+        terminalID: String?
+    ) async {
+        let message = "✅ \(goal.goalText) looks complete.\n\n\(completedGoalDetail(for: goal))"
+        let prompt = "Continue it, extend it, or close it?"
+
+        await MainActor.run {
+            if conversation.messages.last?.content != message {
+                conversation.addMessage(
+                    role: .agent,
+                    content: message,
+                    action: .askUser(question: prompt),
+                    terminalID: terminalID
+                )
+            }
+            conversation.setStatus(.waitingForUser)
+        }
+        pauseState = .awaitingUserReply(question: prompt)
+    }
+
+    private func completedGoalDetail(for goal: ForemanProjectGoal) -> String {
+        let evidence = goal.lastEvidenceSnapshot ?? "Recent observed terminal state suggests the project goal is finished."
+        return """
+        \(evidence)
+
+        Use `/goal reopen` to continue it, `/goal set <new goal>` to extend it, or `/goal clear` to close it.
+        """
+    }
+
+    private func reopenCompletedGoalAfterUserMessageIfNeeded(_ text: String) async {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+
+        let completedGoal = await MainActor.run { conversation.activeProjectGoal }
+        guard let completedGoal, completedGoal.status == .completed else { return }
+
+        await goalRuntime.setStatus(
+            .active,
+            for: completedGoal.projectID,
+            evidenceSnapshot: "Reopened after a new user follow-up."
+        )
+        let reopenedGoal = await goalRuntime.goal(for: completedGoal.projectID)
+        await MainActor.run {
+            conversation.setActiveProjectGoal(reopenedGoal)
+        }
     }
 }
