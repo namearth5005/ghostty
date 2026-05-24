@@ -701,6 +701,106 @@ struct AgentStateMonitorTests {
     }
 
     @Test
+    func managedManualAndNewTabKimiWelcomeToContextQuestionTransitionFiresEquivalentAttentionEvents() {
+        let monitor = AgentStateMonitor()
+        var capturedEvents: [AgentNeedsAttentionEvent] = []
+        monitor.onEvent = { event in
+            capturedEvents.append(event)
+        }
+
+        let welcomeStates = [
+            TerminalUnderstanding.preview(
+                terminalID: "kimi-transition-manual",
+                state: .waiting,
+                shortExplanation: "Kimi is waiting for your response.",
+                lastMeaningfulEvent: "Welcome to Kimi Code CLI!",
+                importantDetails: [
+                    "Welcome to Kimi Code CLI!",
+                    "Directory: /tmp/kimi",
+                ],
+                suggestedNextActions: [],
+                agentIdentity: .kimi,
+                agentInteractionState: .waitingText
+            ),
+            TerminalUnderstanding.preview(
+                terminalID: "kimi-transition-new-tab",
+                state: .waiting,
+                shortExplanation: "Kimi is waiting for your response.",
+                lastMeaningfulEvent: "Welcome to Kimi Code CLI!",
+                importantDetails: [
+                    "Welcome to Kimi Code CLI!",
+                    "Directory: /tmp/kimi",
+                ],
+                suggestedNextActions: [],
+                agentIdentity: .kimi,
+                agentInteractionState: .waitingText
+            ),
+            TerminalUnderstanding.preview(
+                terminalID: "kimi-transition-managed",
+                state: .waiting,
+                shortExplanation: "Kimi is waiting for your response.",
+                lastMeaningfulEvent: "Welcome to Kimi Code CLI!",
+                importantDetails: [
+                    "Welcome to Kimi Code CLI!",
+                    "Directory: /tmp/kimi",
+                ],
+                suggestedNextActions: [],
+                agentIdentity: .kimi,
+                agentInteractionState: .waitingText
+            ),
+        ]
+        monitor.observe(understandings: welcomeStates)
+        #expect(capturedEvents.isEmpty)
+
+        let question = "What should I do here?"
+        let details = [
+            "agent (Kimi-k2.6) ~/speed2",
+            "context: 5.4% (14.3k/262.1k)",
+        ]
+        let actionableStates = [
+            TerminalUnderstanding.preview(
+                terminalID: "kimi-transition-manual",
+                state: .waiting,
+                shortExplanation: "Kimi is waiting for your response.",
+                lastMeaningfulEvent: "context: 5.4% (14.3k/262.1k)",
+                importantDetails: details,
+                suggestedNextActions: [],
+                agentIdentity: .kimi,
+                agentInteractionState: .waitingText,
+                agentInteractionContext: .waitingText(question: question)
+            ),
+            TerminalUnderstanding.preview(
+                terminalID: "kimi-transition-new-tab",
+                state: .waiting,
+                shortExplanation: "Kimi is waiting for your response.",
+                lastMeaningfulEvent: "context: 5.4% (14.3k/262.1k)",
+                importantDetails: details,
+                suggestedNextActions: [],
+                agentIdentity: .kimi,
+                agentInteractionState: .waitingText,
+                agentInteractionContext: .waitingText(question: question)
+            ),
+            TerminalUnderstanding.preview(
+                terminalID: "kimi-transition-managed",
+                state: .waiting,
+                shortExplanation: "Kimi is waiting for your response.",
+                lastMeaningfulEvent: "context: 5.4% (14.3k/262.1k)",
+                importantDetails: details,
+                suggestedNextActions: [],
+                agentIdentity: .kimi,
+                agentInteractionState: .waitingText,
+                agentInteractionContext: .waitingText(question: question)
+            ),
+        ]
+        monitor.observe(understandings: actionableStates)
+
+        #expect(capturedEvents.count == 3)
+        #expect(capturedEvents.allSatisfy { $0.agentIdentity == .kimi })
+        #expect(capturedEvents.allSatisfy { $0.interactionState == .waitingText })
+        #expect(Set(capturedEvents.map(\.deltaText)) == [question])
+    }
+
+    @Test
     func managedManualAndNewTabCodexQuestionPromptsFireEquivalentAttentionEvents() {
         let monitor = AgentStateMonitor()
         var capturedEvents: [AgentNeedsAttentionEvent] = []
