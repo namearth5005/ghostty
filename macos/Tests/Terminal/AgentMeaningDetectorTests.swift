@@ -21,6 +21,25 @@ struct AgentMeaningDetectorTests {
         )
     }
 
+    private func kimiQuestionRecord(question: String) -> KimiWireRecord {
+        KimiWireRecord(
+            timestamp: 1,
+            message: KimiWireMessage(
+                type: "QuestionRequest",
+                payload: KimiWirePayload(
+                    questions: [
+                        QuestionItem(
+                            question: question,
+                            header: nil,
+                            options: nil,
+                            multi_select: nil
+                        ),
+                    ]
+                )
+            )
+        )
+    }
+
     @Test
     func rawBlockedCodexPromptMapsToWaitingText() {
         let snapshot = TerminalSnapshot.makePreview(
@@ -331,6 +350,214 @@ struct AgentMeaningDetectorTests {
         #expect(detection?.interactionState == .waitingText)
         #expect(detection?.runtimeState == .blocked)
         #expect(detection?.context == .waitingText(question: "• Hello. What do you want to work on in ghostty?"))
+    }
+
+    @Test
+    func managedManualAndNewTabCodexRunningToWaitingTextTransitionSharesMeaning() throws {
+        let prompt = "• Hello. What do you want to work on in ghostty?"
+        let cases: [(terminalID: String, title: String, isFocused: Bool)] = [
+            ("codex-transition-existing", "shell", true),
+            ("codex-transition-new-tab", "nambouchara@host:~", false),
+            ("codex-transition-managed", "OpenAI Codex", false),
+        ]
+
+        var detections: [(identity: AgentIdentity?, interactionState: AgentInteractionState?, runtimeState: AgentRuntimeState?, context: AgentInteractionContext?, evidenceSource: UnderstandingEvidenceSource?)] = []
+
+        for entry in cases {
+            let previous = TerminalSnapshot.makePreview(
+                terminalID: entry.terminalID,
+                windowID: "win-1",
+                tabID: "tab-\(entry.terminalID)",
+                title: entry.title,
+                cwd: "/tmp/project",
+                isFocused: entry.isFocused,
+                visibleText: "• Working (0s • esc to interrupt)",
+                recentScrollbackLines: [],
+                lastInputPreview: nil,
+                foregroundProcessName: "codex",
+                cursorIsAtPrompt: false,
+                usingAlternateScreen: true
+            )
+            let current = TerminalSnapshot.makePreview(
+                terminalID: entry.terminalID,
+                windowID: "win-1",
+                tabID: "tab-\(entry.terminalID)",
+                title: entry.title,
+                cwd: "/tmp/project",
+                isFocused: entry.isFocused,
+                visibleText: """
+                • Hello. What do you want to work on in ghostty?
+
+                ›
+                """,
+                recentScrollbackLines: [],
+                lastInputPreview: nil,
+                foregroundProcessName: "codex",
+                cursorIsAtPrompt: true,
+                usingAlternateScreen: true
+            )
+
+            detections.append(signature(detector.detect(
+                current: current,
+                previous: previous,
+                lastOutcome: nil,
+                lastEvent: prompt
+            )))
+        }
+
+        let first = try #require(detections.first)
+        #expect(detections.dropFirst().allSatisfy { $0 == first })
+        #expect(first.identity == .codex)
+        #expect(first.interactionState == .waitingText)
+        #expect(first.runtimeState == .blocked)
+        #expect(first.context == .waitingText(question: prompt))
+    }
+
+    @Test
+    func managedManualAndNewTabKimiWelcomeToWireQuestionTransitionSharesMeaning() throws {
+        let question = "What should I do here?"
+        let cases: [(terminalID: String, title: String, isFocused: Bool)] = [
+            ("kimi-transition-existing", "shell", true),
+            ("kimi-transition-new-tab", "nambouchara@host:~", false),
+            ("kimi-transition-managed", "Kimi Code", false),
+        ]
+
+        var detections: [(identity: AgentIdentity?, interactionState: AgentInteractionState?, runtimeState: AgentRuntimeState?, context: AgentInteractionContext?, evidenceSource: UnderstandingEvidenceSource?)] = []
+
+        for entry in cases {
+            let previous = TerminalSnapshot.makePreview(
+                terminalID: entry.terminalID,
+                windowID: "win-2",
+                tabID: "tab-\(entry.terminalID)",
+                title: entry.title,
+                cwd: "/tmp/project",
+                isFocused: entry.isFocused,
+                visibleText: """
+                Welcome to Kimi Code CLI!
+                Send /help for help information.
+
+                Directory: /tmp/project
+                Session: abc123
+                Model: Kimi-k2.6
+
+                ── input ──────────────────────────────────────────────
+                agent (Kimi-k2.6 ●)  /tmp/project
+                """,
+                recentScrollbackLines: [],
+                lastInputPreview: nil,
+                foregroundProcessName: "kimi",
+                cursorIsAtPrompt: true,
+                usingAlternateScreen: true
+            )
+            let current = TerminalSnapshot.makePreview(
+                terminalID: entry.terminalID,
+                windowID: "win-2",
+                tabID: "tab-\(entry.terminalID)",
+                title: entry.title,
+                cwd: "/tmp/project",
+                isFocused: entry.isFocused,
+                visibleText: """
+                ─ input ─────────────────────────────────────────────────────────
+
+                agent (Kimi-k2.6 ●)  ~/speed2  ctrl-x: toggle mode | shift-tab: plan mode
+                context: 5.4% (14.3k/262.1k)
+                """,
+                recentScrollbackLines: [],
+                lastInputPreview: nil,
+                foregroundProcessName: "kimi",
+                cursorIsAtPrompt: true,
+                usingAlternateScreen: true
+            )
+
+            detections.append(signature(detector.detect(
+                current: current,
+                previous: previous,
+                lastOutcome: nil,
+                lastEvent: "No meaningful terminal event detected.",
+                wireRecords: [kimiQuestionRecord(question: question)]
+            )))
+        }
+
+        let first = try #require(detections.first)
+        #expect(detections.dropFirst().allSatisfy { $0 == first })
+        #expect(first.identity == .kimi)
+        #expect(first.interactionState == .waitingText)
+        #expect(first.runtimeState == .blocked)
+        #expect(first.context == .waitingText(question: question))
+    }
+
+    @Test
+    func managedManualAndNewTabClaudeRunningToTrustPromptTransitionSharesMeaning() throws {
+        let trustPrompt = "Quick safety check: Is this a project you created or one you trust?"
+        let expectedContext: AgentInteractionContext = .waitingChoice(
+            question: trustPrompt,
+            options: ["Yes, I trust this folder", "No, exit"]
+        )
+        let cases: [(terminalID: String, title: String, isFocused: Bool)] = [
+            ("claude-transition-existing", "shell", true),
+            ("claude-transition-new-tab", "nambouchara@host:~", false),
+            ("claude-transition-managed", "Claude Code", false),
+        ]
+
+        var detections: [(identity: AgentIdentity?, interactionState: AgentInteractionState?, runtimeState: AgentRuntimeState?, context: AgentInteractionContext?, evidenceSource: UnderstandingEvidenceSource?)] = []
+
+        for entry in cases {
+            let previous = TerminalSnapshot.makePreview(
+                terminalID: entry.terminalID,
+                windowID: "win-3",
+                tabID: "tab-\(entry.terminalID)",
+                title: entry.title,
+                cwd: "/Users/nambouchara",
+                isFocused: entry.isFocused,
+                visibleText: "Thinking...",
+                recentScrollbackLines: [],
+                lastInputPreview: nil,
+                foregroundProcessName: "claude",
+                cursorIsAtPrompt: false,
+                usingAlternateScreen: true
+            )
+            let current = TerminalSnapshot.makePreview(
+                terminalID: entry.terminalID,
+                windowID: "win-3",
+                tabID: "tab-\(entry.terminalID)",
+                title: entry.title,
+                cwd: "/Users/nambouchara",
+                isFocused: entry.isFocused,
+                visibleText: """
+                Accessing workspace:
+
+                /Users/nambouchara
+
+                Quick safety check: Is this a project you created or one you trust?
+
+                Security guide
+
+                 ❯ 1. Yes, I trust this folder
+                   2. No, exit
+
+                 Enter to confirm · Esc to cancel
+                """,
+                recentScrollbackLines: [],
+                lastInputPreview: nil,
+                foregroundProcessName: "claude",
+                cursorIsAtPrompt: true,
+                usingAlternateScreen: true
+            )
+
+            detections.append(signature(detector.detect(
+                current: current,
+                previous: previous,
+                lastOutcome: nil,
+                lastEvent: trustPrompt
+            )))
+        }
+
+        let first = try #require(detections.first)
+        #expect(detections.dropFirst().allSatisfy { $0 == first })
+        #expect(first.identity == .claudeCode)
+        #expect(first.interactionState == .waitingChoice)
+        #expect(first.runtimeState == .blocked)
+        #expect(first.context == expectedContext)
     }
 
     @Test
