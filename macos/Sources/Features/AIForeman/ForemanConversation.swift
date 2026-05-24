@@ -44,6 +44,7 @@ final class ForemanConversation: ObservableObject {
     @Published var lastOverview: TerminalOverview?
     @Published var lastUnderstandings: [TerminalUnderstanding] = []
     @Published private(set) var hiddenContext: [String] = []
+    @Published private(set) var activeProjectGoal: ForemanProjectGoal?
 
     let maxIterations = 20
 
@@ -57,6 +58,7 @@ final class ForemanConversation: ObservableObject {
         self.lastOverview = nil
         self.lastUnderstandings = []
         self.hiddenContext = []
+        self.activeProjectGoal = nil
         addMessage(role: .user, content: goal)
     }
 
@@ -66,6 +68,7 @@ final class ForemanConversation: ObservableObject {
         lastOverview = nil
         lastUnderstandings = []
         hiddenContext = []
+        activeProjectGoal = nil
     }
 
     func addMessage(
@@ -114,8 +117,20 @@ final class ForemanConversation: ObservableObject {
         self.lastUnderstandings = understandings
     }
 
+    func setActiveProjectGoal(_ goal: ForemanProjectGoal?) {
+        activeProjectGoal = goal
+    }
+
     var hasReachedMaxIterations: Bool {
         iterationCount >= maxIterations
+    }
+
+    var effectiveGoal: String? {
+        if let activeProjectGoal, activeProjectGoal.status.isActive {
+            return activeProjectGoal.objective
+        }
+
+        return goal
     }
 
     var formattedHistory: String {

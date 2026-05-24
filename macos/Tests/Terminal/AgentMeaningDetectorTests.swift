@@ -220,6 +220,54 @@ struct AgentMeaningDetectorTests {
     }
 
     @Test
+    func kimiApprovalScreenWithTrailingInputChromeStillMapsToWaitingApproval() {
+        let snapshot = TerminalSnapshot.makePreview(
+            terminalID: "kimi-term",
+            windowID: "win-1",
+            tabID: "tab-1",
+            title: "Kimi Code",
+            cwd: "/tmp/project",
+            isFocused: true,
+            visibleText: """
+            Shell is requesting approval to run command
+
+            1. Approve once
+            2. Approve for this session
+            3. Reject, tell the model what to do instead
+
+            ─ input ─────────────────────────────────────────────────────────
+
+            agent (Kimi-k2.6 ●)  ~/speed2  ctrl-x: toggle mode | shift-tab: plan mode
+            context: 5.4% (14.3k/262.1k)
+            """,
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessName: "kimi",
+            cursorIsAtPrompt: true,
+            usingAlternateScreen: true
+        )
+        let wireRecord = KimiWireRecord(
+            timestamp: 123,
+            message: KimiWireMessage(
+                type: "TurnBegin",
+                payload: KimiWirePayload()
+            )
+        )
+
+        let detection = detector.detect(
+            current: snapshot,
+            previous: nil,
+            lastOutcome: nil,
+            lastEvent: "Shell is requesting approval to run command",
+            wireRecords: [wireRecord]
+        )
+
+        #expect(detection?.interactionState == .waitingApproval)
+        #expect(detection?.runtimeState == .blocked)
+        #expect(detection?.evidence.first?.source == .screenHeuristic)
+    }
+
+    @Test
     func managedManualAndNewTabClaudeTrustPromptsShareWaitingChoiceMeaning() {
         let visibleText = """
         Accessing workspace:

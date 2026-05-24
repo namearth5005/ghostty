@@ -46,7 +46,7 @@ enum TerminalScreenText {
         })
     }
 
-    private static func looksLikeTerminalInputChrome(_ line: String) -> Bool {
+    static func looksLikeTerminalInputChrome(_ line: String) -> Bool {
         let trimmed = line.trimmingCharacters(in: .whitespaces)
         let lowered = trimmed.lowercased()
 

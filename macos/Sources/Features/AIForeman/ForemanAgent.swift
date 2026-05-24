@@ -9,6 +9,8 @@ actor ForemanAgent {
 
     private let conversation: ForemanConversation
     private let foremanService: ForemanService
+    private let goalRuntime: ForemanProjectGoalRuntime
+    private let preferredTerminalID: String?
     private let onSendCommand: @MainActor (String, String) async -> Bool
     private let onStatusChange: @MainActor (AgentStatus) -> Void
     private let onAction: @MainActor (AgentAction, String) -> Void
@@ -26,12 +28,16 @@ actor ForemanAgent {
     init(
         conversation: ForemanConversation,
         foremanService: ForemanService,
+        goalRuntime: ForemanProjectGoalRuntime = ForemanProjectGoalRuntime(),
+        preferredTerminalID: String? = nil,
         onSendCommand: @escaping @MainActor (String, String) async -> Bool,
         onStatusChange: @escaping @MainActor (AgentStatus) -> Void,
         onAction: @escaping @MainActor (AgentAction, String) -> Void
     ) {
         self.conversation = conversation
         self.foremanService = foremanService
+        self.goalRuntime = goalRuntime
+        self.preferredTerminalID = preferredTerminalID
         self.onSendCommand = onSendCommand
         self.onStatusChange = onStatusChange
         self.onAction = onAction
@@ -53,6 +59,13 @@ actor ForemanAgent {
         currentTask = Task {
             await MainActor.run {
                 conversation.start(goal: goal, mode: mode)
+            }
+
+            let initialSnapshots = await captureSnapshots()
+            if let projectGoal = await saveProjectGoal(goal, from: initialSnapshots) {
+                await MainActor.run {
+                    conversation.setActiveProjectGoal(projectGoal)
+                }
             }
 
             do {
@@ -206,6 +219,10 @@ actor ForemanAgent {
                 understandings: understandings
             )
         }
+        await updateConversationProjectGoal(
+            for: event.terminalID,
+            terminals: terminals
+        )
 
         let response = try await foremanService.draftAgentReply(
             conversation: conversation,
@@ -261,14 +278,7 @@ actor ForemanAgent {
                 title: "Needs direction",
                 description: message.isEmpty ? "The agent is waiting for your direction." : message,
                 detail: reason.isEmpty ? event.deltaText : reason,
-                actions: [
-                    .init(
-                        id: "recommend_next_step",
-                        title: "Ask Kimi to recommend next step",
-                        payload: Self.recommendNextStepPrompt,
-                        style: .primary
-                    ),
-                ]
+                actions: await makeRecommendationActions(for: event)
             )
 
         case .noAction:
@@ -297,8 +307,6 @@ actor ForemanAgent {
         currentTask?.cancel()
         currentTask = nil
     }
-
-    private static let recommendNextStepPrompt = "Please inspect README.md and the current project structure, then suggest the most useful next task and explain why before making changes."
 
     private func shouldResumeAfterUserMessage() async -> Bool {
         await MainActor.run {
@@ -370,6 +378,10 @@ actor ForemanAgent {
                     understandings: understandings
                 )
             }
+            await updateConversationProjectGoal(
+                for: preferredTerminalID ?? overview.primaryTerminalID,
+                terminals: terminals
+            )
 
             if let runningAgent = runningAgentWithoutAttention(in: understandings) {
                 await pauseUntilAgentNeedsAttention(runningAgent)
@@ -618,6 +630,10 @@ actor ForemanAgent {
                 understandings: understandings
             )
         }
+        await updateConversationProjectGoal(
+            for: event.terminalID,
+            terminals: terminals
+        )
 
         if let runningAgent = runningAgentWithoutAttention(in: understandings) {
             await pauseUntilAgentNeedsAttention(runningAgent)
@@ -728,5 +744,88 @@ actor ForemanAgent {
             conversation.setStatus(.idle)
             conversation.isRunning = false
         }
+    }
+
+    private func saveProjectGoal(_ goal: String, from snapshots: [TerminalSnapshot]) async -> ForemanProjectGoal? {
+        guard let projectID = resolvedProjectID(in: snapshots) else {
+            return nil
+        }
+
+        await goalRuntime.saveGoal(goal, for: projectID)
+        return await goalRuntime.activeGoal(for: projectID)
+    }
+
+    private func updateConversationProjectGoal(
+        for terminalID: String?,
+        terminals: [TerminalSnapshot]
+    ) async {
+        let projectGoal: ForemanProjectGoal?
+        if let terminalID {
+            projectGoal = await goalRuntime.goal(forTerminalID: terminalID, in: terminals)
+        } else if let projectID = resolvedProjectID(in: terminals) {
+            projectGoal = await goalRuntime.activeGoal(for: projectID)
+        } else {
+            projectGoal = nil
+        }
+
+        await MainActor.run {
+            conversation.setActiveProjectGoal(projectGoal)
+        }
+    }
+
+    private func resolvedProjectID(in snapshots: [TerminalSnapshot]) -> String? {
+        let preferredSnapshot: TerminalSnapshot?
+        if let preferredTerminalID {
+            preferredSnapshot = snapshots.first { $0.terminalID == preferredTerminalID }
+        } else {
+            preferredSnapshot = nil
+        }
+
+        let orderedSnapshots = [
+            preferredSnapshot,
+            snapshots.first(where: \.isFocused),
+            snapshots.first,
+        ].compactMap { $0 }
+
+        for snapshot in orderedSnapshots {
+            if let projectID = ForemanProjectPathResolver.projectPath(from: snapshot.cwd) {
+                return projectID
+            }
+        }
+
+        return nil
+    }
+
+    private func makeRecommendationActions(
+        for event: AgentNeedsAttentionEvent
+    ) async -> [PendingAgentAction] {
+        let goal = await MainActor.run {
+            conversation.activeProjectGoal?.objective ?? conversation.goal
+        }
+        let title = "Ask \(event.agentIdentity.displayName ?? "the agent") to recommend next step"
+        let payload = recommendationPrompt(for: goal)
+        return [
+            .init(
+                id: "recommend_next_step",
+                title: title,
+                payload: payload,
+                style: .primary
+            ),
+        ]
+    }
+
+    private func recommendationPrompt(for goal: String?) -> String {
+        if let goal, !goal.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return """
+            The saved project goal for this repository is:
+            \(goal)
+
+            Please inspect the current project state and recommend the single most useful next step toward that goal. Explain why before making changes.
+            """
+        }
+
+        return """
+        Please inspect the current project state and recommend the single most useful next step. Explain why before making changes.
+        """
     }
 }

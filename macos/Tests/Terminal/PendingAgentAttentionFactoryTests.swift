@@ -34,7 +34,7 @@ struct PendingAgentAttentionFactoryTests {
         #expect(firstSignature.detail == "WriteFile")
         #expect(firstSignature.actions == [
             PendingAgentAction(id: "approve_once", title: "Approve once", payload: "1", style: .primary),
-            PendingAgentAction(id: "approve_session", title: "Approve session", payload: "2", style: .secondary),
+            PendingAgentAction(id: "approve_session", title: "Approve for session", payload: "2", style: .secondary),
             PendingAgentAction(id: "reject", title: "Reject", payload: "3", style: .destructive),
         ])
     }
@@ -79,6 +79,93 @@ struct PendingAgentAttentionFactoryTests {
             PendingAgentAction(id: "approve", title: "Approve", payload: "y", style: .primary),
             PendingAgentAction(id: "reject", title: "Reject", payload: "n", style: .destructive),
         ])
+    }
+
+    @Test
+    func approvalAttentionUsesVisibleCapabilitiesTruthfullyAcrossModelsAndLaunchPaths() throws {
+        let cases: [
+            (
+                agentIdentity: AgentIdentity,
+                description: String,
+                tool: String,
+                deltaText: String,
+                expectedActions: [PendingAgentAction]
+            )
+        ] = [
+            (
+                agentIdentity: .kimi,
+                description: "Kimi wants to edit auth.ts.",
+                tool: "WriteFile",
+                deltaText: """
+                Shell is requesting approval to run command
+
+                1. Approve once
+                2. Approve for this session
+                3. Reject, tell the model what to do instead
+                """,
+                expectedActions: [
+                    PendingAgentAction(id: "approve_once", title: "Approve once", payload: "1", style: .primary),
+                    PendingAgentAction(id: "approve_session", title: "Approve for session", payload: "2", style: .secondary),
+                    PendingAgentAction(id: "reject_with_feedback", title: "Reject with feedback", payload: "3", style: .destructive),
+                ]
+            ),
+            (
+                agentIdentity: .codex,
+                description: "Codex wants to run the suggested command.",
+                tool: "Shell",
+                deltaText: """
+                Permission required
+
+                [a] Accept once
+                [s] Accept for session
+                [d] Decline
+                """,
+                expectedActions: [
+                    PendingAgentAction(id: "approve_once", title: "Approve once", payload: "a", style: .primary),
+                    PendingAgentAction(id: "approve_session", title: "Approve for session", payload: "s", style: .secondary),
+                    PendingAgentAction(id: "reject", title: "Reject", payload: "d", style: .destructive),
+                ]
+            ),
+            (
+                agentIdentity: .claudeCode,
+                description: "Claude wants to run the suggested command.",
+                tool: "Shell",
+                deltaText: """
+                Claude needs approval
+
+                [y] Allow once
+                [s] Always allow
+                [n] Deny
+                """,
+                expectedActions: [
+                    PendingAgentAction(id: "approve_once", title: "Approve once", payload: "y", style: .primary),
+                    PendingAgentAction(id: "approve_persistent", title: "Always allow", payload: "s", style: .secondary),
+                    PendingAgentAction(id: "reject", title: "Reject", payload: "n", style: .destructive),
+                ]
+            ),
+        ]
+
+        for entry in cases {
+            let signatures = try makeApprovalCases(
+                agentIdentity: entry.agentIdentity,
+                description: entry.description,
+                tool: entry.tool,
+                deltaText: entry.deltaText
+            ).map { approvalCase in
+                let attention = try #require(
+                    PendingAgentAttentionFactory.make(
+                        from: approvalCase.event,
+                        understanding: approvalCase.understanding
+                    )
+                )
+                return paritySignature(attention)
+            }
+            let firstSignature = try #require(signatures.first)
+
+            #expect(signatures.count == 3)
+            #expect(signatures.dropFirst().allSatisfy { $0 == firstSignature })
+            #expect(firstSignature.actions == entry.expectedActions)
+        }
     }
 
     @Test

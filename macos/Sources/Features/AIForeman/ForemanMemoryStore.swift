@@ -131,7 +131,7 @@ actor ForemanMemoryStore {
     func query(cwd: String, visibleText: String, limit: Int = 5) throws -> [SituationOutcomeRecord] {
         try open()
 
-        let projectPath = projectPath(from: cwd)
+        let projectPath = ForemanProjectPathResolver.projectPath(from: cwd) ?? cwd
         let keywords = extractKeywords(from: visibleText)
 
         var results: [SituationOutcomeRecord] = []
@@ -272,19 +272,6 @@ actor ForemanMemoryStore {
             projectPath: projectPath
         )
     }
-
-    private func projectPath(from cwd: String) -> String {
-        var url = URL(fileURLWithPath: cwd)
-        while url.path != "/" {
-            let gitDir = url.appendingPathComponent(".git")
-            if FileManager.default.fileExists(atPath: gitDir.path) {
-                return url.path
-            }
-            url.deleteLastPathComponent()
-        }
-        return cwd
-    }
-
     private func extractKeywords(from text: String) -> [String] {
         let lowercased = text.lowercased()
         let tokens = lowercased.components(separatedBy: CharacterSet.alphanumerics.inverted)

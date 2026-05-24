@@ -1072,7 +1072,7 @@ struct ForemanAgentTests {
         #expect(attention?.detail == "Kimi is asking for the next task and Foreman has no active user goal.")
         #expect(attention?.actions.count == 1)
         #expect(action.title == "Ask Kimi to recommend next step")
-        #expect(action.payload == "Please inspect README.md and the current project structure, then suggest the most useful next task and explain why before making changes.")
+        #expect(action.payload == "Please inspect the current project state and recommend the single most useful next step. Explain why before making changes.")
         #expect(action.style == .primary)
     }
 
@@ -1391,12 +1391,16 @@ struct ForemanAgentTests {
             ("kimi-new-tab", kimiReplySnapshots(terminalID: "kimi-new-tab", title: "nambouchara@Nams-MacBook-Pro:~")),
             ("kimi-managed", kimiReplySnapshots(terminalID: "kimi-managed", title: "Kimi Code")),
         ]
+        let projectGoal = "Coordinate the next Foreman goal-runtime slice across agent terminals."
+        let runtime = ForemanProjectGoalRuntime()
+        await runtime.saveGoal(projectGoal, for: "/Users/nambouchara/speed2")
 
         var signatures: [PendingAttentionSignature] = []
 
         for entry in cases {
             let result = try await draftPendingAttentionCase(
                 snapshots: entry.snapshots,
+                observedContext: nil,
                 event: AgentNeedsAttentionEvent(
                     terminalID: entry.terminalID,
                     agentIdentity: .kimi,
@@ -1413,7 +1417,8 @@ struct ForemanAgentTests {
                         reason: "Kimi is asking for the next task and Foreman has no active user goal.",
                         confidence: 1.0
                     )
-                )
+                ),
+                goalRuntime: runtime
             )
 
             signatures.append(try #require(result.signature))
@@ -1424,7 +1429,103 @@ struct ForemanAgentTests {
         #expect(signatures.first?.description == "What should Kimi do in the mend directory?")
         #expect(signatures.first?.detail == "Kimi is asking for the next task and Foreman has no active user goal.")
         #expect(signatures.first?.actions.first?.title == "Ask Kimi to recommend next step")
-        #expect(signatures.first?.actions.first?.payload == "Please inspect README.md and the current project structure, then suggest the most useful next task and explain why before making changes.")
+        #expect(signatures.first?.actions.first?.payload == goalAwareRecommendNextStepPrompt(goal: projectGoal))
+    }
+
+    @Test
+    func draftPendingAttentionForCodexAskHumanUsesSavedProjectGoalAcrossLaunchPaths() async throws {
+        let cases: [(terminalID: String, snapshots: [TerminalSnapshot])] = [
+            ("codex-existing", codexReplySnapshots(terminalID: "codex-existing", title: "shell", isFocused: true)),
+            ("codex-new-tab", codexReplySnapshots(terminalID: "codex-new-tab", title: "nambouchara@Nams-MacBook-Pro:~")),
+            ("codex-managed", codexReplySnapshots(terminalID: "codex-managed", title: "OpenAI Codex")),
+        ]
+        let projectGoal = "Coordinate the next Foreman goal-runtime slice across agent terminals."
+        let runtime = ForemanProjectGoalRuntime()
+        await runtime.saveGoal(projectGoal, for: "/tmp/project")
+
+        var signatures: [PendingAttentionSignature] = []
+
+        for entry in cases {
+            let result = try await draftPendingAttentionCase(
+                snapshots: entry.snapshots,
+                observedContext: nil,
+                event: AgentNeedsAttentionEvent(
+                    terminalID: entry.terminalID,
+                    agentIdentity: .codex,
+                    interactionState: .waitingText,
+                    deltaText: "What should I work on next?",
+                    timestamp: Date(timeIntervalSince1970: 1),
+                    fingerprint: "\(entry.terminalID)|codex|waitingText|next"
+                ),
+                replyDraft: try makeReplyDraftResponse(
+                    thought: "The agent needs a goal from the human.",
+                    suggestion: .askHuman(
+                        terminalID: entry.terminalID,
+                        message: "What should Codex do in this project?",
+                        reason: "Codex is asking for the next task and Foreman has no active user goal.",
+                        confidence: 1.0
+                    )
+                ),
+                goalRuntime: runtime
+            )
+
+            signatures.append(try #require(result.signature))
+        }
+
+        #expect(signatures.dropFirst().allSatisfy { $0 == signatures.first })
+        #expect(signatures.first?.title == "Needs direction")
+        #expect(signatures.first?.description == "What should Codex do in this project?")
+        #expect(signatures.first?.detail == "Codex is asking for the next task and Foreman has no active user goal.")
+        #expect(signatures.first?.actions.first?.title == "Ask Codex to recommend next step")
+        #expect(signatures.first?.actions.first?.payload == goalAwareRecommendNextStepPrompt(goal: projectGoal))
+    }
+
+    @Test
+    func draftPendingAttentionForClaudeAskHumanUsesSavedProjectGoalAcrossLaunchPaths() async throws {
+        let cases: [(terminalID: String, snapshots: [TerminalSnapshot])] = [
+            ("claude-existing", claudeReplySnapshots(terminalID: "claude-existing", title: "shell", isFocused: true)),
+            ("claude-new-tab", claudeReplySnapshots(terminalID: "claude-new-tab", title: "nambouchara@Nams-MacBook-Pro:~")),
+            ("claude-managed", claudeReplySnapshots(terminalID: "claude-managed", title: "Claude Code")),
+        ]
+        let projectGoal = "Coordinate the next Foreman goal-runtime slice across agent terminals."
+        let runtime = ForemanProjectGoalRuntime()
+        await runtime.saveGoal(projectGoal, for: "/tmp/project")
+
+        var signatures: [PendingAttentionSignature] = []
+
+        for entry in cases {
+            let result = try await draftPendingAttentionCase(
+                snapshots: entry.snapshots,
+                observedContext: nil,
+                event: AgentNeedsAttentionEvent(
+                    terminalID: entry.terminalID,
+                    agentIdentity: .claudeCode,
+                    interactionState: .waitingText,
+                    deltaText: "What should I do next?",
+                    timestamp: Date(timeIntervalSince1970: 1),
+                    fingerprint: "\(entry.terminalID)|claude|waitingText|next"
+                ),
+                replyDraft: try makeReplyDraftResponse(
+                    thought: "The agent needs a goal from the human.",
+                    suggestion: .askHuman(
+                        terminalID: entry.terminalID,
+                        message: "What should Claude Code do in this project?",
+                        reason: "Claude Code is asking for the next task and Foreman has no active user goal.",
+                        confidence: 1.0
+                    )
+                ),
+                goalRuntime: runtime
+            )
+
+            signatures.append(try #require(result.signature))
+        }
+
+        #expect(signatures.dropFirst().allSatisfy { $0 == signatures.first })
+        #expect(signatures.first?.title == "Needs direction")
+        #expect(signatures.first?.description == "What should Claude Code do in this project?")
+        #expect(signatures.first?.detail == "Claude Code is asking for the next task and Foreman has no active user goal.")
+        #expect(signatures.first?.actions.first?.title == "Ask Claude Code to recommend next step")
+        #expect(signatures.first?.actions.first?.payload == goalAwareRecommendNextStepPrompt(goal: projectGoal))
     }
 
     @Test
@@ -1670,12 +1771,16 @@ private func makeReplyDraftResponse(
 private func makeAgent(
     conversation: ForemanConversation,
     client: ScriptedForemanClient,
-    commandRecorder: CommandRecorder
+    commandRecorder: CommandRecorder,
+    goalRuntime: ForemanProjectGoalRuntime = ForemanProjectGoalRuntime(),
+    preferredTerminalID: String? = nil
 ) -> ForemanAgent {
     let service = ForemanService(client: client)
     return ForemanAgent(
         conversation: conversation,
         foremanService: service,
+        goalRuntime: goalRuntime,
+        preferredTerminalID: preferredTerminalID,
         onSendCommand: { terminalID, command in
             await commandRecorder.record(terminalID: terminalID, command: command)
             return true
@@ -1858,7 +1963,8 @@ private func draftPendingAttentionCase(
     snapshots: [TerminalSnapshot],
     observedContext: ForemanObservedTerminalContext? = nil,
     event: AgentNeedsAttentionEvent,
-    replyDraft: AgentReplyDraftResponse
+    replyDraft: AgentReplyDraftResponse,
+    goalRuntime: ForemanProjectGoalRuntime = ForemanProjectGoalRuntime()
 ) async throws -> (
     signature: ForemanAgentTests.PendingAttentionSignature?,
     understanding: ForemanAgentTests.UnderstandingSignature?
@@ -1869,7 +1975,9 @@ private func draftPendingAttentionCase(
     let agent = makeAgent(
         conversation: conversation,
         client: client,
-        commandRecorder: commandRecorder
+        commandRecorder: commandRecorder,
+        goalRuntime: goalRuntime,
+        preferredTerminalID: event.terminalID
     )
 
     let attention = try await agent.draftPendingAttention(
@@ -1954,7 +2062,8 @@ private func startWithObservedContextCase(
 
     try await waitFor {
         let payloads = await client.recordedUnderstandings()
-        return !payloads.isEmpty
+        let isRunning = await MainActor.run { conversation.isRunning }
+        return !payloads.isEmpty && !isRunning
     }
 
     let commands = await commandRecorder.recordedCommands()
@@ -2177,6 +2286,35 @@ private func codexReplySnapshots(
     ]
 }
 
+private func claudeReplySnapshots(
+    terminalID: String,
+    title: String,
+    isFocused: Bool = false
+) -> [TerminalSnapshot] {
+    [
+        TerminalSnapshot.makePreview(
+            terminalID: terminalID,
+            windowID: "win-1",
+            tabID: "tab-1",
+            title: title,
+            cwd: "/tmp/project",
+            isFocused: isFocused,
+            visibleText: """
+            I inspected the repository layout and summarized the active files.
+
+            What should I do next?
+
+            ›
+            """,
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessName: "claude",
+            cursorIsAtPrompt: true,
+            usingAlternateScreen: true
+        ),
+    ]
+}
+
 private func genericCodexWireSnapshots(
     terminalID: String,
     title: String,
@@ -2319,6 +2457,15 @@ private func kimiQuestionRecord(question: String) -> KimiWireRecord {
             )
         )
     )
+}
+
+private func goalAwareRecommendNextStepPrompt(goal: String) -> String {
+    """
+    The saved project goal for this repository is:
+    \(goal)
+
+    Please inspect the current project state and recommend the single most useful next step toward that goal. Explain why before making changes.
+    """
 }
 
 private enum ScriptedForemanClientError: Error {

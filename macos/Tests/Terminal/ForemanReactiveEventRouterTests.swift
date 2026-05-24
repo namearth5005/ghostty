@@ -85,6 +85,81 @@ struct ForemanReactiveEventRouterTests {
     }
 
     @Test
+    func approvalInitialDecisionUsesVisibleCapabilitiesTruthfullyAcrossModelsAndLaunchPaths() {
+        let cases: [
+            (
+                agentIdentity: AgentIdentity,
+                description: String,
+                tool: String,
+                deltaText: String,
+                expectedTitles: [String]
+            )
+        ] = [
+            (
+                agentIdentity: .kimi,
+                description: "Kimi wants to edit auth.ts.",
+                tool: "WriteFile",
+                deltaText: """
+                Shell is requesting approval to run command
+
+                1. Approve once
+                2. Approve for this session
+                3. Reject, tell the model what to do instead
+                """,
+                expectedTitles: ["Approve once", "Approve for session", "Reject with feedback"]
+            ),
+            (
+                agentIdentity: .codex,
+                description: "Codex wants to run the suggested command.",
+                tool: "Shell",
+                deltaText: """
+                Permission required
+
+                [a] Accept once
+                [s] Accept for session
+                [d] Decline
+                """,
+                expectedTitles: ["Approve once", "Approve for session", "Reject"]
+            ),
+            (
+                agentIdentity: .claudeCode,
+                description: "Claude wants to run the suggested command.",
+                tool: "Shell",
+                deltaText: """
+                Claude needs approval
+
+                [y] Allow once
+                [s] Always allow
+                [n] Deny
+                """,
+                expectedTitles: ["Approve once", "Always allow", "Reject"]
+            ),
+        ]
+
+        for entry in cases {
+            let signatures = makeApprovalCases(
+                agentIdentity: entry.agentIdentity,
+                description: entry.description,
+                tool: entry.tool,
+                deltaText: entry.deltaText
+            ).map { approvalCase in
+                signature(
+                    ForemanReactiveEventRouter.initialDecision(
+                        for: approvalCase.event,
+                        understanding: approvalCase.understanding
+                    )
+                )
+            }
+            let firstSignature = signatures.first
+
+            #expect(signatures.count == 3)
+            #expect(signatures.dropFirst().allSatisfy { $0 == firstSignature })
+            #expect(firstSignature?.kind == InitialDecisionSignature.Kind.showPendingAttention)
+            #expect(firstSignature?.actions.map(\.title) == entry.expectedTitles)
+        }
+    }
+
+    @Test
     func claudeChoiceInitialDecisionKeepsManagedLaunchParity() {
         let signatures = claudeChoiceCases().map { entry in
             signature(

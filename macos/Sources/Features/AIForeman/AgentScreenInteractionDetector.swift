@@ -28,8 +28,13 @@ struct AgentScreenInteractionDetector {
         }
 
         if hasApprovalPrompt(in: visibleText, identity: identity) {
+            let description = approvalDescription(
+                in: visibleText,
+                identity: identity,
+                lastEvent: normalizedLastEvent
+            )
             return Detection(
-                context: .waitingApproval(description: lastEvent, tool: nil),
+                context: .waitingApproval(description: description, tool: nil),
                 reason: .approvalPrompt
             )
         }
@@ -81,7 +86,17 @@ struct AgentScreenInteractionDetector {
             return false
         }
 
-        let trailingApprovalLines = lines
+        let candidateLines = Array(
+            lines
+                .reversed()
+                .drop(while: TerminalScreenText.looksLikeTerminalInputChrome)
+                .reversed()
+        )
+        guard !candidateLines.isEmpty else {
+            return false
+        }
+
+        let trailingApprovalLines = candidateLines
             .reversed()
             .prefix { isApprovalTailLine(String($0), identity: identity) }
 
@@ -119,7 +134,21 @@ struct AgentScreenInteractionDetector {
         case .codex:
             return looksLikeCodexApprovalPrompt(lowered)
         case .claudeCode:
-            return containsAny(lowered, markers: ["approve", "allow once", "allow always", "[y/n]", "yes / no", "allow this", "allow edit"])
+            return containsAny(
+                lowered,
+                markers: [
+                    "approve",
+                    "allow once",
+                    "allow always",
+                    "always allow",
+                    "deny",
+                    "[y/n]",
+                    "yes / no",
+                    "allow this",
+                    "allow edit",
+                    "needs approval",
+                ]
+            )
         case .none, .unknown:
             return false
         }
@@ -134,11 +163,42 @@ struct AgentScreenInteractionDetector {
         looksLikeCodexApprovalPrompt(lowered) ||
             lowered.contains("permission required") ||
             lowered.contains("requesting permission") ||
-            lowered.contains("needs your approval")
+            lowered.contains("needs your approval") ||
+            isBracketedOptionLine(
+                lowered,
+                markers: [
+                    "accept once",
+                    "accept for session",
+                    "accept and add to policy",
+                    "decline",
+                    "cancel turn",
+                ]
+            )
     }
 
     private func isClaudeApprovalLine(_ lowered: String) -> Bool {
-        containsAny(lowered, markers: ["approve", "allow once", "allow always", "[y/n]", "yes / no", "allow this", "allow edit"])
+        containsAny(
+            lowered,
+            markers: [
+                "approve",
+                "allow once",
+                "allow always",
+                "always allow",
+                "deny",
+                "[y/n]",
+                "yes / no",
+                "allow this",
+                "allow edit",
+                "needs approval",
+            ]
+        ) || isBracketedOptionLine(
+            lowered,
+            markers: [
+                "allow once",
+                "always allow",
+                "deny",
+            ]
+        )
     }
 
     private func containsChoiceMarkers(in visibleText: String, identity: AgentIdentity) -> Bool {
@@ -204,6 +264,64 @@ struct AgentScreenInteractionDetector {
         markers.contains(where: text.contains)
     }
 
+    private func approvalDescription(
+        in visibleText: String,
+        identity: AgentIdentity,
+        lastEvent: String
+    ) -> String {
+        if isApprovalDescriptionCandidate(lastEvent, identity: identity) {
+            return lastEvent
+        }
+
+        let candidateLines = visibleText
+            .split(separator: "\n")
+            .map { String($0).trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+            .drop(while: TerminalScreenText.looksLikeTerminalInputChrome)
+
+        if let promptLine = candidateLines.first(where: { isApprovalPromptLine($0, identity: identity) }) {
+            return promptLine
+        }
+
+        return lastEvent
+    }
+
+    private func isApprovalDescriptionCandidate(_ text: String, identity: AgentIdentity) -> Bool {
+        guard !text.isEmpty else {
+            return false
+        }
+
+        if TerminalScreenText.looksLikeQuestion(text) {
+            return true
+        }
+
+        let lowered = text.lowercased()
+        if isApprovalTailLine(lowered, identity: identity) || TerminalScreenText.looksLikeTerminalInputChrome(lowered) {
+            return false
+        }
+
+        return true
+    }
+
+    private func isApprovalPromptLine(_ line: String, identity: AgentIdentity) -> Bool {
+        let lowered = line.lowercased()
+
+        switch identity {
+        case .kimi:
+            return lowered.contains("requesting approval")
+        case .codex:
+            return lowered.contains("permission required") ||
+                lowered.contains("requesting permission") ||
+                lowered.contains("needs your approval")
+        case .claudeCode:
+            return lowered.contains("needs approval") ||
+                lowered.contains("requesting approval") ||
+                lowered.contains("allow once")
+        case .none, .unknown:
+            return false
+        }
+    }
+
     private func normalizedNonEmptyLines(from visibleText: String) -> [String] {
         visibleText
             .split(separator: "\n")
@@ -254,6 +372,19 @@ struct AgentScreenInteractionDetector {
         }
 
         return line.contains(". ")
+    }
+
+    private func isBracketedOptionLine(_ line: String, markers: [String]) -> Bool {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        guard trimmed.hasPrefix("["),
+              let closingBracket = trimmed.firstIndex(of: "]") else {
+            return false
+        }
+
+        let label = trimmed[trimmed.index(after: closingBracket)...]
+            .trimmingCharacters(in: .whitespaces)
+            .lowercased()
+        return !label.isEmpty && containsAny(label, markers: markers)
     }
 
     private func looksLikeCodexApprovalPrompt(_ text: String) -> Bool {

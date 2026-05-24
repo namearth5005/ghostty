@@ -214,6 +214,75 @@ struct ForemanObservedContextBuilderTests {
     }
 
     @Test
+    func managedManualAndNewTabKimiApprovalPromptWithTrailingInputChromeSharesObservedContext() {
+        let visibleText = """
+        Shell is requesting approval to run command
+
+        1. Approve once
+        2. Approve for this session
+        3. Reject, tell the model what to do instead
+
+        ─ input ─────────────────────────────────────────────────────────
+
+        agent (Kimi-k2.6 ●)  ~/speed2  ctrl-x: toggle mode | shift-tab: plan mode
+        context: 5.4% (14.3k/262.1k)
+        """
+        let snapshots = [
+            TerminalSnapshot.makePreview(
+                terminalID: "kimi-approval-existing",
+                windowID: "win-1",
+                tabID: "tab-1",
+                title: "shell",
+                cwd: "/tmp/project",
+                isFocused: true,
+                visibleText: visibleText,
+                recentScrollbackLines: [],
+                lastInputPreview: nil,
+                foregroundProcessName: "kimi",
+                cursorIsAtPrompt: true,
+                usingAlternateScreen: true
+            ),
+            TerminalSnapshot.makePreview(
+                terminalID: "kimi-approval-new-tab",
+                windowID: "win-1",
+                tabID: "tab-2",
+                title: "nambouchara@Nams-MacBook-Pro:~",
+                cwd: "/tmp/project",
+                isFocused: false,
+                visibleText: visibleText,
+                recentScrollbackLines: [],
+                lastInputPreview: nil,
+                foregroundProcessName: "kimi",
+                cursorIsAtPrompt: true,
+                usingAlternateScreen: true
+            ),
+            TerminalSnapshot.makePreview(
+                terminalID: "kimi-approval-managed",
+                windowID: "win-1",
+                tabID: "tab-3",
+                title: "Kimi Code",
+                cwd: "/tmp/project",
+                isFocused: false,
+                visibleText: visibleText,
+                recentScrollbackLines: [],
+                lastInputPreview: nil,
+                foregroundProcessName: "kimi",
+                cursorIsAtPrompt: true,
+                usingAlternateScreen: true
+            ),
+        ]
+
+        let result = builder.build(snapshots: snapshots)
+        let signatures = result.context.understandings.map(signature)
+
+        #expect(signatures.count == 3)
+        #expect(signatures.dropFirst().allSatisfy { $0 == signatures.first })
+        #expect(signatures.first?.agentIdentity == .kimi)
+        #expect(signatures.first?.interactionState == .waitingApproval)
+        #expect(signatures.first?.interactionContext == .waitingApproval(description: "Shell is requesting approval to run command", tool: nil))
+    }
+
+    @Test
     func managedManualAndNewTabCodexRunningToPromptTransitionShareObservedContextAndRuntimeEntries() throws {
         let currentSnapshots = [
             TerminalSnapshot.makePreview(

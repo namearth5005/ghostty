@@ -7,19 +7,7 @@ enum PendingAgentAttentionFactory {
     ) -> PendingAgentAttention? {
         switch event.interactionState {
         case .waitingApproval:
-            let actions: [PendingAgentAction]
-            if event.agentIdentity == .kimi {
-                actions = [
-                    .init(id: "approve_once", title: "Approve once", payload: "1", style: .primary),
-                    .init(id: "approve_session", title: "Approve session", payload: "2", style: .secondary),
-                    .init(id: "reject", title: "Reject", payload: "3", style: .destructive),
-                ]
-            } else {
-                actions = [
-                    .init(id: "approve", title: "Approve", payload: "y", style: .primary),
-                    .init(id: "reject", title: "Reject", payload: "n", style: .destructive),
-                ]
-            }
+            let actions = approvalActions(for: event, understanding: understanding)
 
             return PendingAgentAttention(
                 terminalID: event.terminalID,
@@ -61,5 +49,137 @@ enum PendingAgentAttentionFactory {
         default:
             return nil
         }
+    }
+
+    private static func approvalActions(
+        for event: AgentNeedsAttentionEvent,
+        understanding: TerminalUnderstanding?
+    ) -> [PendingAgentAction] {
+        let promptText = [
+            event.deltaText,
+            understanding?.importantDetails.joined(separator: "\n"),
+            understanding?.agentInteractionContext.descriptionString,
+        ]
+            .compactMap { text in
+                guard let text else { return nil }
+                let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                return trimmed.isEmpty ? nil : trimmed
+            }
+            .joined(separator: "\n")
+
+        let parsedActions = parsedApprovalActions(from: promptText)
+        guard parsedActions.isEmpty else {
+            return parsedActions
+        }
+
+        switch event.agentIdentity {
+        case .kimi:
+            return [
+                .init(id: "approve_once", title: "Approve once", payload: "1", style: .primary),
+                .init(id: "approve_session", title: "Approve for session", payload: "2", style: .secondary),
+                .init(id: "reject", title: "Reject", payload: "3", style: .destructive),
+            ]
+
+        case .codex, .claudeCode:
+            return [
+                .init(id: "approve", title: "Approve", payload: "y", style: .primary),
+                .init(id: "reject", title: "Reject", payload: "n", style: .destructive),
+            ]
+
+        case .none, .unknown:
+            return []
+        }
+    }
+
+    private static func parsedApprovalActions(from text: String) -> [PendingAgentAction] {
+        let lines = text
+            .split(separator: "\n")
+            .map { String($0).trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+
+        var seenIDs = Set<String>()
+        var actions: [PendingAgentAction] = []
+
+        for line in lines {
+            guard let option = parseApprovalOptionLine(line) else { continue }
+            guard seenIDs.insert(option.id).inserted else { continue }
+            actions.append(option)
+        }
+
+        return actions
+    }
+
+    private static func parseApprovalOptionLine(_ line: String) -> PendingAgentAction? {
+        guard let option = optionPayloadAndLabel(from: line) else {
+            return nil
+        }
+
+        let loweredLabel = option.label.lowercased()
+
+        if containsAny(loweredLabel, markers: ["approve once", "accept once", "allow once"]) {
+            return .init(id: "approve_once", title: "Approve once", payload: option.payload, style: .primary)
+        }
+
+        if containsAny(
+            loweredLabel,
+            markers: ["approve for this session", "approve session", "accept for session", "allow for this session"]
+        ) {
+            return .init(id: "approve_session", title: "Approve for session", payload: option.payload, style: .secondary)
+        }
+
+        if containsAny(loweredLabel, markers: ["always allow", "allow always", "accept and add to policy"]) {
+            return .init(id: "approve_persistent", title: "Always allow", payload: option.payload, style: .secondary)
+        }
+
+        if loweredLabel.contains("reject, tell the model what to do instead") {
+            return .init(id: "reject_with_feedback", title: "Reject with feedback", payload: option.payload, style: .destructive)
+        }
+
+        if containsAny(loweredLabel, markers: ["reject", "decline", "deny"]) {
+            return .init(id: "reject", title: "Reject", payload: option.payload, style: .destructive)
+        }
+
+        if loweredLabel.contains("cancel turn") {
+            return .init(id: "cancel_turn", title: "Cancel turn", payload: option.payload, style: .secondary)
+        }
+
+        return nil
+    }
+
+    private static func optionPayloadAndLabel(from line: String) -> (payload: String, label: String)? {
+        var trimmed = line.trimmingCharacters(in: .whitespaces)
+        if trimmed.hasPrefix("❯ ") {
+            trimmed = String(trimmed.dropFirst(2)).trimmingCharacters(in: .whitespaces)
+        }
+
+        if trimmed.hasPrefix("["),
+           let closingBracket = trimmed.firstIndex(of: "]") {
+            let payload = String(trimmed[trimmed.index(after: trimmed.startIndex)..<closingBracket])
+            let label = String(trimmed[trimmed.index(after: closingBracket)...]).trimmingCharacters(in: .whitespaces)
+            return payload.isEmpty || label.isEmpty ? nil : (payload, label)
+        }
+
+        if let dotRange = trimmed.range(of: ". "),
+           dotRange.lowerBound != trimmed.startIndex {
+            let payload = String(trimmed[..<dotRange.lowerBound]).trimmingCharacters(in: .whitespaces)
+            let label = String(trimmed[dotRange.upperBound...]).trimmingCharacters(in: .whitespaces)
+            return payload.isEmpty || label.isEmpty ? nil : (payload, label)
+        }
+
+        if trimmed.count > 2 {
+            let firstCharacter = trimmed[trimmed.startIndex]
+            let secondIndex = trimmed.index(after: trimmed.startIndex)
+            if trimmed[secondIndex] == ")" {
+                let payload = String(firstCharacter)
+                let label = String(trimmed[trimmed.index(after: secondIndex)...]).trimmingCharacters(in: .whitespaces)
+                return label.isEmpty ? nil : (payload, label)
+            }
+        }
+
+        return nil
+    }
+
+    private static func containsAny(_ text: String, markers: [String]) -> Bool {
+        markers.contains(where: text.contains)
     }
 }

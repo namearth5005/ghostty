@@ -198,6 +198,7 @@ class AppDelegate: NSObject,
     private var aiForemanPreviousSnapshots: [String: TerminalSnapshot] = [:]
     private var aiForemanPreviousUnderstandings: [String: TerminalUnderstanding] = [:]
     private let agentStateMonitor = AgentStateMonitor()
+    private let foremanProjectGoalRuntime = ForemanProjectGoalRuntime()
     private var kimiWireMonitors: [String: KimiWireSessionMonitor] = [:]
     private var codexWireMonitors: [String: CodexSessionMonitor] = [:]
     private var claudeWireMonitors: [String: ClaudeSessionMonitor] = [:]
@@ -356,6 +357,8 @@ class AppDelegate: NSObject,
                     self.foremanAgent = ForemanAgent(
                         conversation: store.conversation,
                         foremanService: foremanService,
+                        goalRuntime: self.foremanProjectGoalRuntime,
+                        preferredTerminalID: event.terminalID,
                         onSendCommand: { [weak self] terminalID, command in
                             guard let self else { return false }
                             guard let controller = self.terminalController(for: terminalID) else { return false }
@@ -1515,6 +1518,8 @@ extension AppDelegate {
         let agent = ForemanAgent(
             conversation: conversation,
             foremanService: foremanService,
+            goalRuntime: foremanProjectGoalRuntime,
+            preferredTerminalID: store.selectedTerminalID,
             onSendCommand: { [weak self] terminalID, command in
                 guard let self else { return false }
                 guard let controller = self.terminalController(for: terminalID) else { return false }

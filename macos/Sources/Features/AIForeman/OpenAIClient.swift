@@ -133,7 +133,7 @@ struct OpenAIClient: ForemanLLMClient, Sendable {
         overview: TerminalOverview,
         lastOutcome: TerminalOutcomeReport?
     ) async throws -> AgentStepResponse {
-        let goal = await MainActor.run { conversation.goal ?? "" }
+        let goal = await MainActor.run { conversation.effectiveGoal ?? "" }
         let mode = await MainActor.run { conversation.mode.rawValue }
         let iterationCount = await MainActor.run { conversation.iterationCount }
         let messages = await MainActor.run { conversation.messages }
@@ -173,7 +173,7 @@ struct OpenAIClient: ForemanLLMClient, Sendable {
         overview: TerminalOverview,
         lastOutcome: TerminalOutcomeReport?
     ) async throws -> AgentReplyDraftResponse {
-        let goal = await MainActor.run { conversation.goal ?? "" }
+        let goal = await MainActor.run { conversation.effectiveGoal ?? "" }
         let messages = await MainActor.run { conversation.messages }
         let hiddenContext = await MainActor.run { conversation.hiddenContext }
 

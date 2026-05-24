@@ -235,6 +235,86 @@ struct AgentScreenInteractionDetectorTests {
     }
 
     @Test
+    func codexApprovalPromptWithSessionOptionDetectsWaitingApprovalSurface() throws {
+        let detection = try #require(
+            detector.detect(
+                identity: .codex,
+                visibleText: """
+                Permission required
+
+                [a] Accept once
+                [s] Accept for session
+                [d] Decline
+                """,
+                lastEvent: "Codex wants approval to run the suggested command."
+            )
+        )
+
+        #expect(detection.reason == .approvalPrompt)
+        #expect(
+            detection.context == .waitingApproval(
+                description: "Codex wants approval to run the suggested command.",
+                tool: nil
+            )
+        )
+    }
+
+    @Test
+    func claudeApprovalPromptDetectsWaitingApprovalSurface() throws {
+        let detection = try #require(
+            detector.detect(
+                identity: .claudeCode,
+                visibleText: """
+                Claude needs approval
+
+                [y] Allow once
+                [s] Always allow
+                [n] Deny
+                """,
+                lastEvent: "Claude wants approval to run the suggested command."
+            )
+        )
+
+        #expect(detection.reason == .approvalPrompt)
+        #expect(
+            detection.context == .waitingApproval(
+                description: "Claude wants approval to run the suggested command.",
+                tool: nil
+            )
+        )
+    }
+
+    @Test
+    func kimiApprovalPromptWithTrailingInputChromeDetectsWaitingApprovalSurface() throws {
+        let detection = try #require(
+            detector.detect(
+                identity: .kimi,
+                visibleText: """
+                Shell is requesting approval to run command
+
+                1. Approve once
+                2. Approve for this session
+                3. Reject, tell the model what to do instead
+
+                ─ input ─────────────────────────────────────────────────────────
+
+                agent (Kimi-k2.6 ●)  ~/speed2  ctrl-x: toggle mode | shift-tab: plan mode
+                context: 5.4% (14.3k/262.1k)
+                """,
+                lastEvent: "Shell is requesting approval to run command"
+            )
+        )
+
+        #expect(detection.reason == .approvalPrompt)
+        #expect(
+            detection.context == .waitingApproval(
+                description: "Shell is requesting approval to run command",
+                tool: nil
+            )
+        )
+    }
+
+    @Test
     func staleChoiceMenuHistoryDoesNotDetectWaitingChoiceSurface() {
         let detection = detector.detect(
             identity: .claudeCode,
