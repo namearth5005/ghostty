@@ -18,6 +18,8 @@ final class ForemanManagedLaunchUITests: GhosttyCustomConfigCase {
         // For live host-side checks outside XCTest, prefer the sibling
         // `foreman-managed-launch-manual.sh` launcher so the current build path
         // is used instead of whichever stale debug bundle Launch Services finds.
+        // `foreman-managed-launch-manual.sh --verify-launches` also exercises the
+        // three visible launch rows against the managed-launch capture suite.
 
         try updateConfig(
             """
