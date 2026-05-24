@@ -805,6 +805,194 @@ struct AgentRuntimeRefreshPlanTests {
     }
 
     @Test
+    func managedManualAndNewTabFreshExecutionTransitionsKeepRestartParityForCodex() throws {
+        let cases: [(terminalID: String, title: String, isFocused: Bool)] = [
+            ("codex-restart-existing", "shell", true),
+            ("codex-restart-new-tab", "nambouchara@host:~", false),
+            ("codex-restart-managed", "OpenAI Codex", false),
+        ]
+
+        var entries: [AgentRuntimeRefreshPlan.Entry] = []
+
+        for entry in cases {
+            let previous = TerminalSnapshot.makePreview(
+                terminalID: entry.terminalID,
+                windowID: "w1",
+                tabID: "tab-\(entry.terminalID)",
+                title: entry.title,
+                cwd: "/tmp/project",
+                isFocused: entry.isFocused,
+                visibleText: "OpenAI Codex\nWhat should I work on next?\n›",
+                recentScrollbackLines: [],
+                lastInputPreview: nil,
+                foregroundProcessID: 1001,
+                foregroundProcessName: "codex",
+                cursorIsAtPrompt: true,
+                usingAlternateScreen: true
+            )
+            let current = TerminalSnapshot.makePreview(
+                terminalID: entry.terminalID,
+                windowID: "w1",
+                tabID: "tab-\(entry.terminalID)",
+                title: entry.title,
+                cwd: "/tmp/project",
+                isFocused: entry.isFocused,
+                visibleText: "• Working (0s • esc to interrupt)",
+                recentScrollbackLines: [],
+                lastInputPreview: nil,
+                foregroundProcessID: 1001,
+                foregroundProcessName: "codex",
+                cursorIsAtPrompt: false,
+                usingAlternateScreen: true
+            )
+
+            let plan = AgentRuntimeRefreshPlan(
+                snapshots: [current],
+                previousSnapshotsByTerminalID: [current.terminalID: previous]
+            )
+            entries.append(try #require(plan.entry(for: current.terminalID)))
+        }
+
+        let first = try #require(entries.first)
+        #expect(entries.dropFirst().allSatisfy { $0.detection == first.detection })
+        #expect(entries.dropFirst().allSatisfy { $0.monitorTarget == first.monitorTarget })
+        #expect(entries.allSatisfy { $0.shouldRestartMonitor })
+        #expect(first.monitorTarget == .codex(workingDirectory: "/tmp/project"))
+        #expect(first.detection?.identity == .codex)
+        #expect(first.detection?.state == .working)
+    }
+
+    @Test
+    func managedManualAndNewTabResolvedInteractiveSurfaceTransitionsKeepAttachmentParityAcrossCodexAndClaude() throws {
+        let codexCases: [(terminalID: String, title: String, isFocused: Bool)] = [
+            ("codex-idle-existing", "shell", true),
+            ("codex-idle-new-tab", "nambouchara@host:~", false),
+            ("codex-idle-managed", "OpenAI Codex", false),
+        ]
+        let claudeCases: [(terminalID: String, title: String, isFocused: Bool, pid: Int)] = [
+            ("claude-idle-existing", "shell", true, 3101),
+            ("claude-idle-new-tab", "nambouchara@host:~", false, 3102),
+            ("claude-idle-managed", "Claude Code", false, 3103),
+        ]
+
+        var codexEntries: [AgentRuntimeRefreshPlan.Entry] = []
+        var claudeEntries: [AgentRuntimeRefreshPlan.Entry] = []
+
+        for entry in codexCases {
+            let previous = TerminalSnapshot.makePreview(
+                terminalID: entry.terminalID,
+                windowID: "w1",
+                tabID: "tab-\(entry.terminalID)",
+                title: entry.title,
+                cwd: "/tmp/project",
+                isFocused: entry.isFocused,
+                visibleText: """
+                • Hey. What do you need help with?
+
+                ›
+                """,
+                recentScrollbackLines: [],
+                lastInputPreview: nil,
+                foregroundProcessID: 2101,
+                foregroundProcessName: "codex",
+                cursorIsAtPrompt: true,
+                usingAlternateScreen: true
+            )
+            let current = TerminalSnapshot.makePreview(
+                terminalID: entry.terminalID,
+                windowID: "w1",
+                tabID: "tab-\(entry.terminalID)",
+                title: entry.title,
+                cwd: "/tmp/project",
+                isFocused: entry.isFocused,
+                visibleText: "nambouchara@host ghostty % ",
+                recentScrollbackLines: [],
+                lastInputPreview: nil,
+                foregroundProcessID: 2101,
+                foregroundProcessName: "codex",
+                cursorIsAtPrompt: true,
+                usingAlternateScreen: false
+            )
+
+            let plan = AgentRuntimeRefreshPlan(
+                snapshots: [current],
+                previousSnapshotsByTerminalID: [current.terminalID: previous]
+            )
+            codexEntries.append(try #require(plan.entry(for: current.terminalID)))
+        }
+
+        for entry in claudeCases {
+            let previous = TerminalSnapshot.makePreview(
+                terminalID: entry.terminalID,
+                windowID: "w2",
+                tabID: "tab-\(entry.terminalID)",
+                title: entry.title,
+                cwd: "/Users/nambouchara",
+                isFocused: entry.isFocused,
+                visibleText: """
+                Accessing workspace:
+
+                /Users/nambouchara
+
+                Quick safety check: Is this a project you created or one you trust?
+
+                Security guide
+
+                 ❯ 1. Yes, I trust this folder
+                   2. No, exit
+
+                 Enter to confirm · Esc to cancel
+                """,
+                recentScrollbackLines: [],
+                lastInputPreview: nil,
+                foregroundProcessID: entry.pid,
+                foregroundProcessName: "claude",
+                cursorIsAtPrompt: true,
+                usingAlternateScreen: true
+            )
+            let current = TerminalSnapshot.makePreview(
+                terminalID: entry.terminalID,
+                windowID: "w2",
+                tabID: "tab-\(entry.terminalID)",
+                title: entry.title,
+                cwd: "/Users/nambouchara",
+                isFocused: entry.isFocused,
+                visibleText: "nambouchara@host ghostty % ",
+                recentScrollbackLines: [],
+                lastInputPreview: nil,
+                foregroundProcessID: entry.pid,
+                foregroundProcessName: "claude",
+                cursorIsAtPrompt: true,
+                usingAlternateScreen: false
+            )
+
+            let plan = AgentRuntimeRefreshPlan(
+                snapshots: [current],
+                previousSnapshotsByTerminalID: [current.terminalID: previous]
+            )
+            claudeEntries.append(try #require(plan.entry(for: current.terminalID)))
+        }
+
+        let firstCodex = try #require(codexEntries.first)
+        let firstClaude = try #require(claudeEntries.first)
+        #expect(codexEntries.dropFirst().allSatisfy { $0.detection == firstCodex.detection })
+        #expect(codexEntries.dropFirst().allSatisfy { $0.monitorTarget == firstCodex.monitorTarget })
+        #expect(codexEntries.dropFirst().allSatisfy { $0.shouldRestartMonitor == firstCodex.shouldRestartMonitor })
+        #expect(firstCodex.detection?.identity == .codex)
+        #expect(firstCodex.detection?.state == .idle)
+        #expect(firstCodex.monitorTarget == .codex(workingDirectory: "/tmp/project"))
+        #expect(firstCodex.shouldRestartMonitor == false)
+
+        #expect(claudeEntries.dropFirst().allSatisfy { $0.detection == firstClaude.detection })
+        #expect(claudeEntries.dropFirst().allSatisfy { $0.monitorTarget == firstClaude.monitorTarget })
+        #expect(claudeEntries.dropFirst().allSatisfy { $0.shouldRestartMonitor == firstClaude.shouldRestartMonitor })
+        #expect(firstClaude.detection?.identity == .claudeCode)
+        #expect(firstClaude.detection?.state == .idle)
+        #expect(firstClaude.monitorTarget == .claude(pid: 3101, workingDirectory: "/Users/nambouchara"))
+        #expect(firstClaude.shouldRestartMonitor == false)
+    }
+
+    @Test
     func steadyWaitingStateDoesNotRestartMonitor() {
         let previous = TerminalSnapshot.makePreview(
             terminalID: "kimi-term",

@@ -607,6 +607,230 @@ struct AgentRuntimeDetectorTests {
     }
 
     @Test
+    func managedManualAndNewTabCodexRunningToPromptTransitionSharesRuntimeDetection() throws {
+        let cases: [(terminalID: String, title: String, isFocused: Bool)] = [
+            ("codex-transition-existing", "shell", true),
+            ("codex-transition-new-tab", "nambouchara@host:~", false),
+            ("codex-transition-managed", "OpenAI Codex", false),
+        ]
+
+        var detections: [AgentRuntimeDetector.Detection] = []
+
+        for entry in cases {
+            let previous = TerminalSnapshot.makePreview(
+                terminalID: entry.terminalID,
+                windowID: "win-1",
+                tabID: "tab-\(entry.terminalID)",
+                title: entry.title,
+                cwd: "/tmp/project",
+                isFocused: entry.isFocused,
+                visibleText: "• Working (0s • esc to interrupt)",
+                recentScrollbackLines: [],
+                lastInputPreview: nil,
+                foregroundProcessName: "codex",
+                cursorIsAtPrompt: false,
+                usingAlternateScreen: true
+            )
+            let current = TerminalSnapshot.makePreview(
+                terminalID: entry.terminalID,
+                windowID: "win-1",
+                tabID: "tab-\(entry.terminalID)",
+                title: entry.title,
+                cwd: "/tmp/project",
+                isFocused: entry.isFocused,
+                visibleText: """
+                • Hey. What do you need help with?
+
+                ›
+                """,
+                recentScrollbackLines: [],
+                lastInputPreview: nil,
+                foregroundProcessName: "codex",
+                cursorIsAtPrompt: true,
+                usingAlternateScreen: true
+            )
+
+            detections.append(try #require(detector.detect(current: current, previous: previous)))
+        }
+
+        let first = try #require(detections.first)
+        #expect(detections.dropFirst().allSatisfy { $0 == first })
+        #expect(first.identity == .codex)
+        #expect(first.state == .blocked)
+    }
+
+    @Test
+    func managedManualAndNewTabClaudeRunningToTrustPromptTransitionSharesRuntimeDetection() throws {
+        let cases: [(terminalID: String, title: String, isFocused: Bool)] = [
+            ("claude-transition-existing", "shell", true),
+            ("claude-transition-new-tab", "nambouchara@host:~", false),
+            ("claude-transition-managed", "Claude Code", false),
+        ]
+
+        var detections: [AgentRuntimeDetector.Detection] = []
+
+        for entry in cases {
+            let previous = TerminalSnapshot.makePreview(
+                terminalID: entry.terminalID,
+                windowID: "win-2",
+                tabID: "tab-\(entry.terminalID)",
+                title: entry.title,
+                cwd: "/Users/nambouchara",
+                isFocused: entry.isFocused,
+                visibleText: "Thinking...",
+                recentScrollbackLines: [],
+                lastInputPreview: nil,
+                foregroundProcessName: "claude",
+                cursorIsAtPrompt: false,
+                usingAlternateScreen: true
+            )
+            let current = TerminalSnapshot.makePreview(
+                terminalID: entry.terminalID,
+                windowID: "win-2",
+                tabID: "tab-\(entry.terminalID)",
+                title: entry.title,
+                cwd: "/Users/nambouchara",
+                isFocused: entry.isFocused,
+                visibleText: """
+                Accessing workspace:
+
+                /Users/nambouchara
+
+                Quick safety check: Is this a project you created or one you trust?
+
+                Security guide
+
+                 ❯ 1. Yes, I trust this folder
+                   2. No, exit
+
+                 Enter to confirm · Esc to cancel
+                """,
+                recentScrollbackLines: [],
+                lastInputPreview: nil,
+                foregroundProcessName: "claude",
+                cursorIsAtPrompt: true,
+                usingAlternateScreen: true
+            )
+
+            detections.append(try #require(detector.detect(current: current, previous: previous)))
+        }
+
+        let first = try #require(detections.first)
+        #expect(detections.dropFirst().allSatisfy { $0 == first })
+        #expect(first.identity == .claudeCode)
+        #expect(first.state == .blocked)
+    }
+
+    @Test
+    func managedManualAndNewTabResolvedInteractiveSurfaceTransitionSharesIdleRuntimeDetectionAcrossCodexAndClaude() throws {
+        let codexCases: [(terminalID: String, title: String, isFocused: Bool)] = [
+            ("codex-idle-existing", "shell", true),
+            ("codex-idle-new-tab", "nambouchara@host:~", false),
+            ("codex-idle-managed", "OpenAI Codex", false),
+        ]
+        let claudeCases: [(terminalID: String, title: String, isFocused: Bool)] = [
+            ("claude-idle-existing", "shell", true),
+            ("claude-idle-new-tab", "nambouchara@host:~", false),
+            ("claude-idle-managed", "Claude Code", false),
+        ]
+
+        var codexDetections: [AgentRuntimeDetector.Detection] = []
+        var claudeDetections: [AgentRuntimeDetector.Detection] = []
+
+        for entry in codexCases {
+            let previous = TerminalSnapshot.makePreview(
+                terminalID: entry.terminalID,
+                windowID: "win-1",
+                tabID: "tab-\(entry.terminalID)",
+                title: entry.title,
+                cwd: "/tmp/project",
+                isFocused: entry.isFocused,
+                visibleText: """
+                • Hey. What do you need help with?
+
+                ›
+                """,
+                recentScrollbackLines: [],
+                lastInputPreview: nil,
+                foregroundProcessName: "codex",
+                cursorIsAtPrompt: true,
+                usingAlternateScreen: true
+            )
+            let current = TerminalSnapshot.makePreview(
+                terminalID: entry.terminalID,
+                windowID: "win-1",
+                tabID: "tab-\(entry.terminalID)",
+                title: entry.title,
+                cwd: "/tmp/project",
+                isFocused: entry.isFocused,
+                visibleText: "nambouchara@host ghostty % ",
+                recentScrollbackLines: [],
+                lastInputPreview: nil,
+                foregroundProcessName: "codex",
+                cursorIsAtPrompt: true,
+                usingAlternateScreen: false
+            )
+
+            codexDetections.append(try #require(detector.detect(current: current, previous: previous)))
+        }
+
+        for entry in claudeCases {
+            let previous = TerminalSnapshot.makePreview(
+                terminalID: entry.terminalID,
+                windowID: "win-2",
+                tabID: "tab-\(entry.terminalID)",
+                title: entry.title,
+                cwd: "/Users/nambouchara",
+                isFocused: entry.isFocused,
+                visibleText: """
+                Accessing workspace:
+
+                /Users/nambouchara
+
+                Quick safety check: Is this a project you created or one you trust?
+
+                Security guide
+
+                 ❯ 1. Yes, I trust this folder
+                   2. No, exit
+
+                 Enter to confirm · Esc to cancel
+                """,
+                recentScrollbackLines: [],
+                lastInputPreview: nil,
+                foregroundProcessName: "claude",
+                cursorIsAtPrompt: true,
+                usingAlternateScreen: true
+            )
+            let current = TerminalSnapshot.makePreview(
+                terminalID: entry.terminalID,
+                windowID: "win-2",
+                tabID: "tab-\(entry.terminalID)",
+                title: entry.title,
+                cwd: "/Users/nambouchara",
+                isFocused: entry.isFocused,
+                visibleText: "nambouchara@host ghostty % ",
+                recentScrollbackLines: [],
+                lastInputPreview: nil,
+                foregroundProcessName: "claude",
+                cursorIsAtPrompt: true,
+                usingAlternateScreen: false
+            )
+
+            claudeDetections.append(try #require(detector.detect(current: current, previous: previous)))
+        }
+
+        let firstCodex = try #require(codexDetections.first)
+        let firstClaude = try #require(claudeDetections.first)
+        #expect(codexDetections.dropFirst().allSatisfy { $0 == firstCodex })
+        #expect(claudeDetections.dropFirst().allSatisfy { $0 == firstClaude })
+        #expect(firstCodex.identity == .codex)
+        #expect(firstCodex.state == .idle)
+        #expect(firstClaude.identity == .claudeCode)
+        #expect(firstClaude.state == .idle)
+    }
+
+    @Test
     func proseMentionsOfAgentNamesDoNotCreateRuntimeDetectionWithoutOtherEvidence() {
         let snapshots = [
             TerminalSnapshot.makePreview(
