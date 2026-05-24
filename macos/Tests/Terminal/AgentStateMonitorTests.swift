@@ -953,6 +953,46 @@ struct AgentStateMonitorTests {
         #expect(capturedEvents.allSatisfy { $0.interactionState == .waitingChoice })
         #expect(Set(capturedEvents.map(\.deltaText)) == [trustPrompt])
     }
+
+    @Test
+    func managedManualAndNewTabGenericCodexWireWaitingStatesDoNotFireAttentionEvents() {
+        let monitor = AgentStateMonitor()
+        var capturedEvents: [AgentNeedsAttentionEvent] = []
+        monitor.onEvent = { event in
+            capturedEvents.append(event)
+        }
+
+        let understandings = genericCodexWireUnderstandings()
+
+        #expect(understandings.count == 3)
+        #expect(understandings.allSatisfy { $0.agentIdentity == .codex })
+        #expect(understandings.allSatisfy { $0.agentInteractionState == .waitingText })
+        #expect(understandings.allSatisfy { $0.agentInteractionContext == .waitingText(question: nil) })
+
+        monitor.observe(understandings: understandings)
+
+        #expect(capturedEvents.isEmpty)
+    }
+
+    @Test
+    func managedManualAndNewTabGenericClaudeWireWaitingStatesDoNotFireAttentionEvents() {
+        let monitor = AgentStateMonitor()
+        var capturedEvents: [AgentNeedsAttentionEvent] = []
+        monitor.onEvent = { event in
+            capturedEvents.append(event)
+        }
+
+        let understandings = genericClaudeWireUnderstandings()
+
+        #expect(understandings.count == 3)
+        #expect(understandings.allSatisfy { $0.agentIdentity == .claudeCode })
+        #expect(understandings.allSatisfy { $0.agentInteractionState == .waitingText })
+        #expect(understandings.allSatisfy { $0.agentInteractionContext == .waitingText(question: nil) })
+
+        monitor.observe(understandings: understandings)
+
+        #expect(capturedEvents.isEmpty)
+    }
 }
 
 private func makeUnderstanding(
@@ -972,4 +1012,165 @@ private func makeUnderstanding(
         agentIdentity: identity,
         agentInteractionState: interactionState
     )
+}
+
+private func genericCodexWireUnderstandings() -> [TerminalUnderstanding] {
+    let snapshots = [
+        TerminalSnapshot.makePreview(
+            terminalID: "codex-wire-existing",
+            windowID: "win-1",
+            tabID: "tab-1",
+            title: "shell",
+            cwd: "/tmp/project",
+            isFocused: true,
+            visibleText: "codex",
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessName: nil,
+            cursorIsAtPrompt: true,
+            usingAlternateScreen: true
+        ),
+        TerminalSnapshot.makePreview(
+            terminalID: "codex-wire-new-tab",
+            windowID: "win-1",
+            tabID: "tab-2",
+            title: "nambouchara@Nams-MacBook-Pro:~",
+            cwd: "/tmp/project",
+            isFocused: false,
+            visibleText: "codex",
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessName: nil,
+            cursorIsAtPrompt: true,
+            usingAlternateScreen: true
+        ),
+        TerminalSnapshot.makePreview(
+            terminalID: "codex-wire-managed",
+            windowID: "win-1",
+            tabID: "tab-3",
+            title: "Codex",
+            cwd: "/tmp/project",
+            isFocused: false,
+            visibleText: "codex",
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessName: nil,
+            cursorIsAtPrompt: true,
+            usingAlternateScreen: true
+        ),
+    ]
+    let codexWireRecordsByTerminalID = Dictionary(
+        uniqueKeysWithValues: snapshots.map {
+            (
+                $0.terminalID,
+                [
+                    CodexWireRecord(
+                        timestamp: "2026-05-04T12:00:10Z",
+                        type: "event_msg",
+                        payload: CodexWirePayload(
+                            id: nil,
+                            cwd: "/tmp/project",
+                            originator: nil,
+                            cliVersion: nil,
+                            type: "task_complete",
+                            turnId: "turn-1",
+                            startedAt: nil,
+                            completedAt: 1714828810,
+                            durationMs: 9000,
+                            reason: nil,
+                            lastAgentMessage: nil,
+                            callId: nil,
+                            processId: nil,
+                            command: nil,
+                            status: nil,
+                            message: nil,
+                            phase: nil
+                        ),
+                    ),
+                ]
+            )
+        }
+    )
+
+    return ForemanObservedContextBuilder()
+        .build(
+            snapshots: snapshots,
+            codexWireRecordsByTerminalID: codexWireRecordsByTerminalID
+        )
+        .context
+        .understandings
+}
+
+private func genericClaudeWireUnderstandings() -> [TerminalUnderstanding] {
+    let snapshots = [
+        TerminalSnapshot.makePreview(
+            terminalID: "claude-wire-existing",
+            windowID: "win-1",
+            tabID: "tab-1",
+            title: "shell",
+            cwd: "/tmp/project",
+            isFocused: true,
+            visibleText: "claude",
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessName: nil,
+            cursorIsAtPrompt: true,
+            usingAlternateScreen: true
+        ),
+        TerminalSnapshot.makePreview(
+            terminalID: "claude-wire-new-tab",
+            windowID: "win-1",
+            tabID: "tab-2",
+            title: "nambouchara@Nams-MacBook-Pro:~",
+            cwd: "/tmp/project",
+            isFocused: false,
+            visibleText: "claude",
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessName: nil,
+            cursorIsAtPrompt: true,
+            usingAlternateScreen: true
+        ),
+        TerminalSnapshot.makePreview(
+            terminalID: "claude-wire-managed",
+            windowID: "win-1",
+            tabID: "tab-3",
+            title: "Claude",
+            cwd: "/tmp/project",
+            isFocused: false,
+            visibleText: "claude",
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessName: nil,
+            cursorIsAtPrompt: true,
+            usingAlternateScreen: true
+        ),
+    ]
+    let claudeWireRecordsByTerminalID = Dictionary(
+        uniqueKeysWithValues: snapshots.map {
+            (
+                $0.terminalID,
+                [
+                    ClaudeSessionState(
+                        pid: 12345,
+                        sessionId: "session-\($0.terminalID)",
+                        cwd: "/tmp/project",
+                        status: "idle",
+                        updatedAt: 1714828801000,
+                        startedAt: 1714828800000,
+                        version: "2.1.128",
+                        kind: "interactive"
+                    ),
+                ]
+            )
+        }
+    )
+
+    return ForemanObservedContextBuilder()
+        .build(
+            snapshots: snapshots,
+            claudeWireRecordsByTerminalID: claudeWireRecordsByTerminalID
+        )
+        .context
+        .understandings
 }
