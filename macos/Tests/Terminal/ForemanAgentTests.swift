@@ -365,6 +365,82 @@ struct ForemanAgentTests {
     }
 
     @Test
+    func genericCodexWireObservedContextKeepsStartParityAcrossLaunchPaths() async throws {
+        let cases: [(terminalID: String, title: String, isFocused: Bool)] = [
+            ("codex-wire-existing", "shell", true),
+            ("codex-wire-new-tab", "nambouchara@Nams-MacBook-Pro:~", false),
+            ("codex-wire-managed", "Codex", false),
+        ]
+
+        var forwardedUnderstandings: [UnderstandingSignature] = []
+
+        for entry in cases {
+            let result = try await startWithObservedContextCase(
+                snapshots: genericCodexWireSnapshots(
+                    terminalID: entry.terminalID,
+                    title: entry.title,
+                    isFocused: entry.isFocused
+                ),
+                observedContext: genericCodexWireObservedContext(
+                    terminalID: entry.terminalID,
+                    title: entry.title,
+                    isFocused: entry.isFocused
+                ),
+                response: try makeStepResponse(
+                    thought: "The structured Codex context is already available.",
+                    action: .respond(message: "Use the structured Codex context.")
+                )
+            )
+
+            forwardedUnderstandings.append(try #require(result.understanding))
+            #expect(result.messages.contains { $0.content == "Use the structured Codex context." })
+        }
+
+        #expect(forwardedUnderstandings.dropFirst().allSatisfy { $0 == forwardedUnderstandings.first })
+        #expect(forwardedUnderstandings.first?.agentIdentity == .codex)
+        #expect(forwardedUnderstandings.first?.interactionState == .waitingText)
+        #expect(forwardedUnderstandings.first?.interactionContext == .waitingText(question: nil))
+    }
+
+    @Test
+    func genericClaudeWireObservedContextKeepsStartParityAcrossLaunchPaths() async throws {
+        let cases: [(terminalID: String, title: String, isFocused: Bool)] = [
+            ("claude-wire-existing", "shell", true),
+            ("claude-wire-new-tab", "nambouchara@Nams-MacBook-Pro:~", false),
+            ("claude-wire-managed", "Claude", false),
+        ]
+
+        var forwardedUnderstandings: [UnderstandingSignature] = []
+
+        for entry in cases {
+            let result = try await startWithObservedContextCase(
+                snapshots: genericClaudeWireSnapshots(
+                    terminalID: entry.terminalID,
+                    title: entry.title,
+                    isFocused: entry.isFocused
+                ),
+                observedContext: genericClaudeWireObservedContext(
+                    terminalID: entry.terminalID,
+                    title: entry.title,
+                    isFocused: entry.isFocused
+                ),
+                response: try makeStepResponse(
+                    thought: "The structured Claude context is already available.",
+                    action: .respond(message: "Use the structured Claude context.")
+                )
+            )
+
+            forwardedUnderstandings.append(try #require(result.understanding))
+            #expect(result.messages.contains { $0.content == "Use the structured Claude context." })
+        }
+
+        #expect(forwardedUnderstandings.dropFirst().allSatisfy { $0 == forwardedUnderstandings.first })
+        #expect(forwardedUnderstandings.first?.agentIdentity == .claudeCode)
+        #expect(forwardedUnderstandings.first?.interactionState == .waitingText)
+        #expect(forwardedUnderstandings.first?.interactionContext == .waitingText(question: nil))
+    }
+
+    @Test
     func startingAndStoppingConversationClearsStructuredTerminalContext() async {
         let conversation = await MainActor.run { ForemanConversation() }
         let overview = TerminalOverview(
@@ -1463,6 +1539,46 @@ private func reactiveIterationCase(
     )
 }
 
+private func startWithObservedContextCase(
+    snapshots: [TerminalSnapshot],
+    observedContext: ForemanObservedTerminalContext,
+    response: AgentStepResponse
+) async throws -> (
+    understanding: ForemanAgentTests.UnderstandingSignature?,
+    messages: [ConversationMessage]
+) {
+    let conversation = await MainActor.run { ForemanConversation() }
+    let client = ScriptedForemanClient(responses: [response])
+    let commandRecorder = CommandRecorder()
+    let agent = makeAgent(
+        conversation: conversation,
+        client: client,
+        commandRecorder: commandRecorder
+    )
+
+    await agent.start(
+        goal: "use structured context",
+        mode: .interactive,
+        captureSnapshots: { snapshots },
+        captureObservedContext: { observedContext }
+    )
+
+    try await waitFor {
+        let payloads = await client.recordedUnderstandings()
+        return !payloads.isEmpty
+    }
+
+    let commands = await commandRecorder.recordedCommands()
+    #expect(commands.isEmpty)
+    let understandings = await client.recordedUnderstandings()
+    let messages = await MainActor.run { conversation.messages }
+
+    return (
+        understanding: understandingSignature(understandings.first?.first),
+        messages: messages
+    )
+}
+
 private actor ScriptedForemanClient: ForemanLLMClient {
     private var responses: [AgentStepResponse]
     private var replyDrafts: [AgentReplyDraftResponse]
@@ -1670,6 +1786,131 @@ private func codexReplySnapshots(
             usingAlternateScreen: true
         ),
     ]
+}
+
+private func genericCodexWireSnapshots(
+    terminalID: String,
+    title: String,
+    isFocused: Bool = false
+) -> [TerminalSnapshot] {
+    [
+        TerminalSnapshot.makePreview(
+            terminalID: terminalID,
+            windowID: "win-1",
+            tabID: "tab-1",
+            title: title,
+            cwd: "/tmp/project",
+            isFocused: isFocused,
+            visibleText: "codex",
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessName: nil,
+            cursorIsAtPrompt: true,
+            usingAlternateScreen: true
+        ),
+    ]
+}
+
+private func genericCodexWireObservedContext(
+    terminalID: String,
+    title: String,
+    isFocused: Bool = false
+) -> ForemanObservedTerminalContext {
+    let snapshots = genericCodexWireSnapshots(
+        terminalID: terminalID,
+        title: title,
+        isFocused: isFocused
+    )
+    let codexWireRecordsByTerminalID = [
+        terminalID: [
+            CodexWireRecord(
+                timestamp: "2026-05-04T12:00:10Z",
+                type: "event_msg",
+                payload: CodexWirePayload(
+                    id: nil,
+                    cwd: "/tmp/project",
+                    originator: nil,
+                    cliVersion: nil,
+                    type: "task_complete",
+                    turnId: "turn-1",
+                    startedAt: nil,
+                    completedAt: 1714828810,
+                    durationMs: 9000,
+                    reason: nil,
+                    lastAgentMessage: nil,
+                    callId: nil,
+                    processId: nil,
+                    command: nil,
+                    status: nil,
+                    message: nil,
+                    phase: nil
+                )
+            ),
+        ],
+    ]
+
+    return ForemanObservedContextBuilder()
+        .build(
+            snapshots: snapshots,
+            codexWireRecordsByTerminalID: codexWireRecordsByTerminalID
+        )
+        .context
+}
+
+private func genericClaudeWireSnapshots(
+    terminalID: String,
+    title: String,
+    isFocused: Bool = false
+) -> [TerminalSnapshot] {
+    [
+        TerminalSnapshot.makePreview(
+            terminalID: terminalID,
+            windowID: "win-1",
+            tabID: "tab-1",
+            title: title,
+            cwd: "/tmp/project",
+            isFocused: isFocused,
+            visibleText: "claude",
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessName: nil,
+            cursorIsAtPrompt: true,
+            usingAlternateScreen: true
+        ),
+    ]
+}
+
+private func genericClaudeWireObservedContext(
+    terminalID: String,
+    title: String,
+    isFocused: Bool = false
+) -> ForemanObservedTerminalContext {
+    let snapshots = genericClaudeWireSnapshots(
+        terminalID: terminalID,
+        title: title,
+        isFocused: isFocused
+    )
+    let claudeWireRecordsByTerminalID = [
+        terminalID: [
+            ClaudeSessionState(
+                pid: 12345,
+                sessionId: "session-\(terminalID)",
+                cwd: "/tmp/project",
+                status: "idle",
+                updatedAt: 1714828801000,
+                startedAt: 1714828800000,
+                version: "2.1.128",
+                kind: "interactive"
+            ),
+        ],
+    ]
+
+    return ForemanObservedContextBuilder()
+        .build(
+            snapshots: snapshots,
+            claudeWireRecordsByTerminalID: claudeWireRecordsByTerminalID
+        )
+        .context
 }
 
 private enum ScriptedForemanClientError: Error {
