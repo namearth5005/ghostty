@@ -253,18 +253,33 @@ enum ConversationUIPhase: Equatable {
     case processing
     case awaitingApproval(command: String)
     case awaitingReply
+    case choosingTarget(options: [ForemanTargetOption])
+    case goalCompleted
     case chatting
 
     static func resolve(
         goal: String?,
         isRunning: Bool,
         status: AgentStatus,
-        lastAction: AgentAction?
+        lastAction: AgentAction?,
+        resolvedTarget: ForemanSidebarTarget? = nil
     ) -> Self {
+        if case .completedGoal = resolvedTarget {
+            return .goalCompleted
+        }
+
+        if case .ambiguous(let options) = resolvedTarget {
+            return .choosingTarget(options: options)
+        }
+
         if status == .waitingForUser {
             if case .sendCommand(_, let command, _) = lastAction {
                 return .awaitingApproval(command: command)
             }
+            return .awaitingReply
+        }
+
+        if case .terminalReply = resolvedTarget {
             return .awaitingReply
         }
 
@@ -298,8 +313,12 @@ enum ConversationStatusDisplay: Equatable {
         switch phase {
         case .awaitingApproval:
             return .awaitingApproval
+        case .choosingTarget:
+            return .awaitingReply
         case .awaitingReply:
             return .awaitingReply
+        case .goalCompleted:
+            return .complete
         case .chatting:
             return .chatting
         case .readyToStart:

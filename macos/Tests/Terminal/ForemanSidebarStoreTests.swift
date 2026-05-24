@@ -127,6 +127,154 @@ struct ForemanSidebarStoreTests {
 
     @MainActor
     @Test
+    func visibleConversationMessagesFollowResolvedReplyTarget() {
+        let conversation = ForemanConversation()
+        conversation.addMessage(role: .user, content: "Coordinate these terminals.")
+        conversation.addMessage(role: .agent, content: "Codex is waiting.", terminalID: "term-1")
+        conversation.addMessage(role: .agent, content: "Build finished.", terminalID: "term-3")
+        let store = ForemanSidebarStore(
+            terminalRows: [
+                .init(
+                    terminalID: "term-1",
+                    title: "term-1",
+                    cwd: "/tmp/project",
+                    state: "waiting",
+                    summary: "Waiting for input.",
+                    agentIdentity: "codex",
+                    agentInteractionState: "waiting_text",
+                    supportLevel: "first_class",
+                    evidenceSummary: "wire_signal",
+                    isFocused: false,
+                    suggestedActions: [],
+                    pendingAttention: nil,
+                    agentContextType: "waitingText",
+                    agentContextTitle: "Needs a reply",
+                    agentContextDescription: "Answer the active prompt.",
+                    agentContextDetail: nil,
+                    agentContextOptions: nil
+                ),
+                .init(
+                    terminalID: "term-3",
+                    title: "term-3",
+                    cwd: "/tmp/project",
+                    state: "running",
+                    summary: "Healthy.",
+                    agentIdentity: nil,
+                    agentInteractionState: nil,
+                    supportLevel: nil,
+                    evidenceSummary: nil,
+                    isFocused: true,
+                    suggestedActions: [],
+                    pendingAttention: nil,
+                    agentContextType: nil,
+                    agentContextTitle: nil,
+                    agentContextDescription: nil,
+                    agentContextDetail: nil
+                ),
+            ],
+            selectedTerminalID: "term-3",
+            conversation: conversation
+        )
+        store.upsertPendingAttention(
+            makePendingAttention(terminalID: "term-1", fingerprint: "fp-1")
+        )
+
+        #expect(store.resolvedSidebarTarget == .terminalReply(terminalID: "term-1", fingerprint: "fp-1"))
+        #expect(store.visibleConversationMessages.map(\.content) == [
+            "Coordinate these terminals.",
+            "Codex is waiting.",
+        ])
+    }
+
+    @MainActor
+    @Test
+    func selectingProjectTargetOverridesAmbiguousWaitingThreads() {
+        let conversation = ForemanConversation()
+        conversation.addMessage(role: .user, content: "Coordinate these terminals.")
+        conversation.addMessage(role: .agent, content: "Codex is waiting.", terminalID: "term-1")
+        conversation.addMessage(role: .agent, content: "Claude is waiting.", terminalID: "term-2")
+        let store = ForemanSidebarStore(
+            terminalRows: [
+                .init(
+                    terminalID: "term-1",
+                    title: "term-1",
+                    cwd: "/tmp/project",
+                    state: "waiting",
+                    summary: "Waiting for input.",
+                    agentIdentity: "codex",
+                    agentInteractionState: "waiting_text",
+                    supportLevel: "first_class",
+                    evidenceSummary: "wire_signal",
+                    isFocused: false,
+                    suggestedActions: [],
+                    pendingAttention: nil,
+                    agentContextType: "waitingText",
+                    agentContextTitle: "Needs a reply",
+                    agentContextDescription: "Answer the active prompt.",
+                    agentContextDetail: nil,
+                    agentContextOptions: nil
+                ),
+                .init(
+                    terminalID: "term-2",
+                    title: "term-2",
+                    cwd: "/tmp/project",
+                    state: "waiting",
+                    summary: "Waiting for input.",
+                    agentIdentity: "claude_code",
+                    agentInteractionState: "waiting_choice",
+                    supportLevel: "first_class",
+                    evidenceSummary: "wire_signal",
+                    isFocused: false,
+                    suggestedActions: [],
+                    pendingAttention: nil,
+                    agentContextType: "waitingChoice",
+                    agentContextTitle: "Needs a choice",
+                    agentContextDescription: "Choose the next step.",
+                    agentContextDetail: nil,
+                    agentContextOptions: nil
+                ),
+                .init(
+                    terminalID: "term-3",
+                    title: "term-3",
+                    cwd: "/tmp/project",
+                    state: "running",
+                    summary: "Healthy.",
+                    agentIdentity: nil,
+                    agentInteractionState: nil,
+                    supportLevel: nil,
+                    evidenceSummary: nil,
+                    isFocused: true,
+                    suggestedActions: [],
+                    pendingAttention: nil,
+                    agentContextType: nil,
+                    agentContextTitle: nil,
+                    agentContextDescription: nil,
+                    agentContextDetail: nil
+                ),
+            ],
+            selectedTerminalID: "term-3",
+            conversation: conversation
+        )
+        store.upsertPendingAttention(
+            makePendingAttention(terminalID: "term-1", fingerprint: "fp-1")
+        )
+        store.upsertPendingAttention(
+            makePendingAttention(terminalID: "term-2", fingerprint: "fp-2")
+        )
+
+        #expect(store.selectedTerminalID == "term-3")
+        #expect(store.resolvedTargetOptions.count == 3)
+
+        store.selectSidebarTargetOption(.project(title: "Guide Foreman"))
+
+        #expect(store.resolvedSidebarTarget == .project(projectID: "/tmp/project"))
+        #expect(store.visibleConversationMessages.map(\.content) == [
+            "Coordinate these terminals.",
+        ])
+    }
+
+    @MainActor
+    @Test
     func applySnapshotsUsesStructuredUnderstandingStateAndExplanation() {
         let store = ForemanSidebarStore()
         let snapshots = [

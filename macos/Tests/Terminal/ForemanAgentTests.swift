@@ -835,6 +835,38 @@ struct ForemanAgentTests {
     }
 
     @Test
+    func uiPhaseTreatsAmbiguousSidebarTargetAsChoosingTarget() {
+        let phase = ConversationUIPhase.resolve(
+            goal: "Coordinate the waiting terminals",
+            isRunning: false,
+            status: .idle,
+            lastAction: nil,
+            resolvedTarget: .ambiguous(options: [
+                .terminalReply(terminalID: "term-1", fingerprint: "fp-1", title: "term-1"),
+                .project(title: "Guide Foreman"),
+            ])
+        )
+
+        #expect(phase == .choosingTarget(options: [
+            .terminalReply(terminalID: "term-1", fingerprint: "fp-1", title: "term-1"),
+            .project(title: "Guide Foreman"),
+        ]))
+    }
+
+    @Test
+    func uiPhaseTreatsCompletedSidebarGoalAsCompleted() {
+        let phase = ConversationUIPhase.resolve(
+            goal: "Ship the sidebar",
+            isRunning: false,
+            status: .idle,
+            lastAction: nil,
+            resolvedTarget: .completedGoal(projectID: "/tmp/ghostty")
+        )
+
+        #expect(phase == .goalCompleted)
+    }
+
+    @Test
     func statusDisplayTreatsPendingCommandAsApprovalNeeded() {
         let display = ConversationStatusDisplay.resolve(
             status: .waitingForUser,
@@ -852,6 +884,16 @@ struct ForemanAgentTests {
         )
 
         #expect(display == .chatting)
+    }
+
+    @Test
+    func statusDisplayTreatsCompletedGoalPhaseAsComplete() {
+        let display = ConversationStatusDisplay.resolve(
+            status: .idle,
+            phase: .goalCompleted
+        )
+
+        #expect(display == .complete)
     }
 
     // MARK: - Reactive Auto-Drive Tests

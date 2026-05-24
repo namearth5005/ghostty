@@ -153,6 +153,7 @@ final class ForemanSidebarStore: ObservableObject {
     @Published var dispatchQueue: [DispatchQueueItem]
     @Published var userInstruction: String
     @Published var selectedTerminalID: String?
+    @Published var preferredSidebarTarget: ForemanSidebarTargetPreference?
     @Published var isSidebarVisible: Bool
     @Published var planSummary: String?
     @Published var errorMessage: String?
@@ -186,6 +187,7 @@ final class ForemanSidebarStore: ObservableObject {
         dispatchQueue: [DispatchQueueItem] = [],
         userInstruction: String = "",
         selectedTerminalID: String? = nil,
+        preferredSidebarTarget: ForemanSidebarTargetPreference? = nil,
         isSidebarVisible: Bool = false,
         planSummary: String? = nil,
         errorMessage: String? = nil,
@@ -198,6 +200,7 @@ final class ForemanSidebarStore: ObservableObject {
         self.dispatchQueue = dispatchQueue
         self.userInstruction = userInstruction
         self.selectedTerminalID = selectedTerminalID
+        self.preferredSidebarTarget = preferredSidebarTarget
         self.isSidebarVisible = isSidebarVisible
         self.planSummary = planSummary
         self.errorMessage = errorMessage
@@ -327,7 +330,35 @@ final class ForemanSidebarStore: ObservableObject {
     }
 
     var visibleConversationMessages: [ConversationMessage] {
-        conversation.visibleMessages(selectedTerminalID: selectedTerminalID)
+        conversation.visibleMessages(selectedTerminalID: resolvedConversationTerminalID)
+    }
+
+    var resolvedSidebarTarget: ForemanSidebarTarget {
+        sidebarRouter.resolveTarget(from: routingState())
+    }
+
+    var resolvedConversationTerminalID: String? {
+        switch resolvedSidebarTarget {
+        case .terminalReply(let terminalID, _):
+            return terminalID
+
+        case .project:
+            if preferredSidebarTarget == .project {
+                return nil
+            }
+            return selectedTerminalID
+
+        case .ambiguous, .completedGoal:
+            return nil
+        }
+    }
+
+    var resolvedTargetOptions: [ForemanTargetOption] {
+        guard case .ambiguous(let options) = resolvedSidebarTarget else {
+            return []
+        }
+
+        return options
     }
 
     func stopAgent() {
@@ -380,11 +411,32 @@ final class ForemanSidebarStore: ObservableObject {
         onExecuteSuggestion?(terminalID, command)
     }
 
+    func selectTerminal(_ terminalID: String) {
+        selectedTerminalID = terminalID
+        if pendingAttentionByTerminalID[terminalID] != nil {
+            preferredSidebarTarget = .terminal(terminalID)
+        } else if case .terminal = preferredSidebarTarget {
+            preferredSidebarTarget = nil
+        }
+    }
+
+    func selectSidebarTargetOption(_ option: ForemanTargetOption) {
+        switch option {
+        case .project:
+            preferredSidebarTarget = .project
+        case .terminalReply(let terminalID, _, _):
+            selectedTerminalID = terminalID
+            preferredSidebarTarget = .terminal(terminalID)
+        }
+    }
+
     func upsertPendingAttention(_ attention: PendingAgentAttention) {
         DebugLogger.log("[ForemanSidebarStore] upsertPendingAttention terminal=\(attention.terminalID.prefix(8)) fingerprint='\(attention.fingerprint)' title='\(attention.title)' actions=\(attention.actions.count)")
         pendingAttentionByTerminalID[attention.terminalID] = attention
         updateTerminalRowPendingAttention(terminalID: attention.terminalID)
-        selectedTerminalID = attention.terminalID
+        if shouldAdoptPendingAttentionSelection(for: attention.terminalID) {
+            selectedTerminalID = attention.terminalID
+        }
         showSidebar()
         DebugLogger.log("[ForemanSidebarStore] upsertPendingAttention complete terminal=\(attention.terminalID.prefix(8)) selected=\(selectedTerminalID ?? "nil") visible=\(isSidebarVisible) rowHasAttention=\(terminalRows.first(where: { $0.terminalID == attention.terminalID })?.pendingAttention != nil)")
     }
@@ -409,6 +461,9 @@ final class ForemanSidebarStore: ObservableObject {
         }
 
         pendingAttentionByTerminalID.removeValue(forKey: terminalID)
+        if preferredSidebarTarget == .terminal(terminalID) {
+            preferredSidebarTarget = nil
+        }
         updateTerminalRowPendingAttention(terminalID: terminalID)
     }
 
@@ -554,6 +609,11 @@ final class ForemanSidebarStore: ObservableObject {
 
             return Self.pendingAttentionIsStillRelevant(attention, for: understanding)
         }
+
+        if case .terminal(let terminalID) = preferredSidebarTarget,
+           pendingAttentionByTerminalID[terminalID] == nil {
+            preferredSidebarTarget = nil
+        }
     }
 
     private static func pendingAttentionIsStillRelevant(
@@ -581,6 +641,7 @@ final class ForemanSidebarStore: ObservableObject {
             projectID: resolvedProjectID(),
             selectedTerminalID: selectedTerminalID,
             focusedTerminalID: terminalRows.first(where: \.isFocused)?.terminalID,
+            preferredTarget: preferredSidebarTarget,
             pendingAttentionByTerminalID: pendingAttentionByTerminalID,
             terminalRows: terminalRows,
             activeProjectGoal: conversation.activeProjectGoal
@@ -749,6 +810,22 @@ final class ForemanSidebarStore: ObservableObject {
         }
 
         terminalRows[index].pendingAttention = pendingAttentionByTerminalID[terminalID]
+    }
+
+    private func shouldAdoptPendingAttentionSelection(for terminalID: String) -> Bool {
+        guard let selectedTerminalID else {
+            return true
+        }
+
+        if selectedTerminalID == terminalID {
+            return true
+        }
+
+        if terminalRows.contains(where: { $0.terminalID == selectedTerminalID }) {
+            return false
+        }
+
+        return pendingAttentionByTerminalID[selectedTerminalID] == nil
     }
 
     private static func snapshotState(for snapshot: TerminalSnapshot) -> String {

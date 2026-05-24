@@ -10,9 +10,15 @@ struct ForemanChatView: View {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Foreman Agent")
                         .font(.system(size: 18, weight: .bold))
-                    Text("Autonomous terminal foreman")
+                    Text(contextTitle)
                         .font(.system(size: 12))
                         .foregroundStyle(.secondary)
+                    if let contextSubtitle {
+                        Text(contextSubtitle)
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary.opacity(0.85))
+                            .lineLimit(2)
+                    }
                 }
 
                 Spacer(minLength: 8)
@@ -77,6 +83,20 @@ struct ForemanChatView: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 8)
 
+            if !store.resolvedTargetOptions.isEmpty {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Choose where the next message goes")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.secondary)
+
+                    FlowingTargetOptions(options: store.resolvedTargetOptions) { option in
+                        store.selectSidebarTargetOption(option)
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.bottom, 10)
+            }
+
             Divider()
 
             // Terminal inspect surface
@@ -91,6 +111,10 @@ struct ForemanChatView: View {
                     ForEach(store.terminalRows) { row in
                         TerminalSummaryRow(
                             row: row,
+                            isSelected: store.selectedTerminalID == row.terminalID,
+                            onSelect: { terminalID in
+                                store.selectTerminal(terminalID)
+                            },
                             onExecuteSuggestion: { terminalID, action in
                                 store.executeSuggestion(terminalID: terminalID, action: action)
                             },
@@ -164,6 +188,55 @@ struct ForemanChatView: View {
                         .tint(.red)
                         .controlSize(.small)
                         Spacer()
+                    }
+
+                case .choosingTarget(let options):
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Select a waiting terminal or switch to project guidance before sending a reply.")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+
+                        FlowingTargetOptions(options: options) { option in
+                            store.selectSidebarTargetOption(option)
+                        }
+                    }
+
+                case .goalCompleted:
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("This project goal is marked complete. Reopen it, clear it, or save a follow-up goal before dispatching more work.")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+
+                        HStack(spacing: 8) {
+                            TextField("Set a new or extended goal", text: $store.chatInput)
+                                .textFieldStyle(.roundedBorder)
+                                .onSubmit {
+                                    saveGoalFromCompletedState()
+                                }
+
+                            Button("Save Goal") {
+                                saveGoalFromCompletedState()
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .controlSize(.small)
+                            .disabled(store.chatInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        }
+
+                        HStack(spacing: 8) {
+                            Button("Reopen Goal") {
+                                store.sendChatMessage("/goal reopen")
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+
+                            Button("Clear Goal") {
+                                store.sendChatMessage("/goal clear")
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                        }
                     }
 
                 case .awaitingReply, .chatting:
@@ -266,7 +339,8 @@ struct ForemanChatView: View {
             goal: store.conversation.goal,
             isRunning: store.conversation.isRunning,
             status: store.conversation.status,
-            lastAction: store.visibleConversationMessages.last?.action
+            lastAction: store.visibleConversationMessages.last?.action,
+            resolvedTarget: store.resolvedSidebarTarget
         )
     }
 
@@ -275,6 +349,98 @@ struct ForemanChatView: View {
             status: store.conversation.status,
             phase: inputPhase
         )
+    }
+
+    private var contextTitle: String {
+        switch store.resolvedSidebarTarget {
+        case .terminalReply(let terminalID, _):
+            return "Replying to \(terminalDisplayName(for: terminalID))"
+        case .project(let projectID):
+            return "Guiding Foreman for \(projectDisplayName(from: projectID))"
+        case .ambiguous:
+            return "Choose a terminal target"
+        case .completedGoal(let projectID):
+            return "Goal complete for \(projectDisplayName(from: projectID))"
+        }
+    }
+
+    private var contextSubtitle: String? {
+        switch store.resolvedSidebarTarget {
+        case .terminalReply(let terminalID, _):
+            return store.terminalRows.first(where: { $0.terminalID == terminalID })?.summary
+        case .project:
+            return store.conversation.activeProjectGoal?.objective
+        case .ambiguous:
+            return "Several terminals are waiting. Pick one or switch to project guidance."
+        case .completedGoal:
+            return store.conversation.activeProjectGoal?.objective
+        }
+    }
+
+    private func terminalDisplayName(for terminalID: String) -> String {
+        guard let row = store.terminalRows.first(where: { $0.terminalID == terminalID }) else {
+            return terminalID
+        }
+
+        let title = row.title.isEmpty ? terminalID : row.title
+        if let agentIdentity = row.agentIdentity, !agentIdentity.isEmpty {
+            return "\(displayAgentIdentity(agentIdentity)) · \(title)"
+        }
+        return title
+    }
+
+    private func projectDisplayName(from projectID: String?) -> String {
+        guard let projectID, !projectID.isEmpty else {
+            return "this project"
+        }
+
+        let name = URL(fileURLWithPath: projectID).lastPathComponent
+        return name.isEmpty ? projectID : name
+    }
+
+    private func displayAgentIdentity(_ rawValue: String) -> String {
+        switch rawValue {
+        case AgentIdentity.claudeCode.rawValue:
+            return "Claude Code"
+        case AgentIdentity.codex.rawValue:
+            return "Codex"
+        case AgentIdentity.kimi.rawValue:
+            return "Kimi"
+        default:
+            return rawValue.replacingOccurrences(of: "_", with: " ").capitalized
+        }
+    }
+
+    private func saveGoalFromCompletedState() {
+        let goal = store.chatInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !goal.isEmpty else { return }
+        store.sendChatMessage("/goal set \(goal)")
+    }
+}
+
+private struct FlowingTargetOptions: View {
+    let options: [ForemanTargetOption]
+    let onSelect: (ForemanTargetOption) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(Array(options.enumerated()), id: \.offset) { _, option in
+                Button(targetLabel(for: option)) {
+                    onSelect(option)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
+        }
+    }
+
+    private func targetLabel(for option: ForemanTargetOption) -> String {
+        switch option {
+        case .project(let title):
+            return title
+        case .terminalReply(_, _, let title):
+            return title
+        }
     }
 }
 

@@ -75,6 +75,10 @@ struct ForemanSidebarView: View {
                             ForEach(store.terminalRows) { row in
                                 TerminalSummaryRow(
                                     row: row,
+                                    isSelected: store.selectedTerminalID == row.terminalID,
+                                    onSelect: { terminalID in
+                                        store.selectTerminal(terminalID)
+                                    },
                                     onExecuteSuggestion: { terminalID, action in
                                         store.executeSuggestion(terminalID: terminalID, action: action)
                                     },

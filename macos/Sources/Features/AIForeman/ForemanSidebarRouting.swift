@@ -15,6 +15,11 @@ enum ForemanTargetOption: Equatable, Sendable {
     case project(title: String)
 }
 
+enum ForemanSidebarTargetPreference: Equatable, Sendable {
+    case project
+    case terminal(String)
+}
+
 enum ForemanSidebarTarget: Equatable, Sendable {
     case project(projectID: String?)
     case terminalReply(terminalID: String, fingerprint: String)
@@ -26,6 +31,7 @@ struct ForemanSidebarRoutingState: Equatable, Sendable {
     let projectID: String?
     let selectedTerminalID: String?
     let focusedTerminalID: String?
+    let preferredTarget: ForemanSidebarTargetPreference?
     let pendingAttentionByTerminalID: [String: PendingAgentAttention]
     let terminalRows: [TerminalSummaryRowModel]
     let activeProjectGoal: ForemanProjectGoal?
@@ -87,6 +93,22 @@ struct ForemanSidebarRouter {
     func resolveTarget(from state: ForemanSidebarRoutingState) -> ForemanSidebarTarget {
         if let goal = state.activeProjectGoal, goal.status == .completed {
             return .completedGoal(projectID: goal.projectID)
+        }
+
+        switch state.preferredTarget {
+        case .project:
+            return .project(projectID: state.projectID)
+
+        case .terminal(let terminalID):
+            if let attention = state.pendingAttentionByTerminalID[terminalID] {
+                return .terminalReply(
+                    terminalID: terminalID,
+                    fingerprint: attention.fingerprint
+                )
+            }
+
+        case nil:
+            break
         }
 
         if let selectedTerminalID = state.selectedTerminalID,

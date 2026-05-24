@@ -9,6 +9,7 @@ struct ForemanSidebarRoutingTests {
             projectID: "/tmp/ghostty",
             selectedTerminalID: "term-2",
             focusedTerminalID: "term-1",
+            preferredTarget: nil,
             pendingAttentionByTerminalID: [
                 "term-2": makeAttention(terminalID: "term-2", fingerprint: "fp-2"),
             ],
@@ -32,6 +33,7 @@ struct ForemanSidebarRoutingTests {
             projectID: "/tmp/ghostty",
             selectedTerminalID: "term-3",
             focusedTerminalID: "term-3",
+            preferredTarget: nil,
             pendingAttentionByTerminalID: [
                 "term-1": makeAttention(terminalID: "term-1", fingerprint: "fp-1"),
                 "term-2": makeAttention(terminalID: "term-2", fingerprint: "fp-2"),
@@ -60,6 +62,7 @@ struct ForemanSidebarRoutingTests {
             projectID: "/tmp/ghostty",
             selectedTerminalID: "term-1",
             focusedTerminalID: "term-1",
+            preferredTarget: nil,
             pendingAttentionByTerminalID: [:],
             terminalRows: [makeRow("term-1")],
             activeProjectGoal: ForemanProjectGoal(
@@ -92,6 +95,7 @@ struct ForemanSidebarRoutingTests {
             projectID: "/tmp/ghostty",
             selectedTerminalID: "term-1",
             focusedTerminalID: "term-1",
+            preferredTarget: nil,
             pendingAttentionByTerminalID: [
                 "term-1": makeAttention(terminalID: "term-1", fingerprint: "fresh-fp"),
             ],
@@ -118,6 +122,28 @@ struct ForemanSidebarRoutingTests {
                 draftToPreserve: "Yes, continue."
             )
         )
+    }
+
+    @Test
+    func preferredProjectTargetOverridesAmbiguousWaitingTargets() {
+        let router = ForemanSidebarRouter()
+        let state = ForemanSidebarRoutingState(
+            projectID: "/tmp/ghostty",
+            selectedTerminalID: "term-3",
+            focusedTerminalID: "term-3",
+            preferredTarget: .project,
+            pendingAttentionByTerminalID: [
+                "term-1": makeAttention(terminalID: "term-1", fingerprint: "fp-1"),
+                "term-2": makeAttention(terminalID: "term-2", fingerprint: "fp-2"),
+            ],
+            terminalRows: [makeRow("term-1"), makeRow("term-2"), makeRow("term-3")],
+            activeProjectGoal: ForemanProjectGoal(
+                projectID: "/tmp/ghostty",
+                objective: "Ship the sidebar fix"
+            )
+        )
+
+        #expect(router.resolveTarget(from: state) == .project(projectID: "/tmp/ghostty"))
     }
 
     private func makeAttention(terminalID: String, fingerprint: String) -> PendingAgentAttention {
