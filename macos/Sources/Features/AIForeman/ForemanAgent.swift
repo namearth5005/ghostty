@@ -14,6 +14,7 @@ actor ForemanAgent {
     private let onAction: @MainActor (AgentAction, String) -> Void
 
     private var currentTask: Task<Void, Never>?
+    private let observedContextBuilder = ForemanObservedContextBuilder()
     private var lastOutcome: TerminalOutcomeReport?
     private var pauseState: PauseState = .none
     private var captureSnapshots: (@MainActor () -> [TerminalSnapshot])?
@@ -690,17 +691,12 @@ actor ForemanAgent {
         }
 
         let terminals = await captureSnapshots()
-        let understandings = terminals.map { snapshot in
-            understandingEngine.understand(
-                current: snapshot,
-                previous: previousSnapshotsByTerminalID[snapshot.terminalID],
-                lastOutcome: lastOutcome
-            )
-        }
-        return ForemanObservedTerminalContext(
-            terminals: terminals,
-            understandings: understandings
-        )
+        let lastOutcomesByTerminalID = lastOutcome.map { [$0.terminalID: $0] } ?? [:]
+        return observedContextBuilder.build(
+            snapshots: terminals,
+            previousSnapshotsByTerminalID: previousSnapshotsByTerminalID,
+            lastOutcomesByTerminalID: lastOutcomesByTerminalID
+        ).context
     }
 
     private func storeObservedTerminals(_ observedTerminals: ForemanObservedTerminalContext) {

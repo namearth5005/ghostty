@@ -11,6 +11,7 @@ struct ForemanObservedContextBuilder {
     func build(
         snapshots: [TerminalSnapshot],
         previousSnapshotsByTerminalID: [String: TerminalSnapshot] = [:],
+        lastOutcomesByTerminalID: [String: TerminalOutcomeReport] = [:],
         attachmentHintsByTerminalID: [String: AgentRuntimeAttachmentHint] = [:],
         kimiWireRecordsByTerminalID: [String: [KimiWireRecord]] = [:],
         codexWireRecordsByTerminalID: [String: [CodexWireRecord]] = [:],
@@ -30,7 +31,7 @@ struct ForemanObservedContextBuilder {
             return understandingEngine.understand(
                 current: snapshot,
                 previous: previousSnapshotsByTerminalID[snapshot.terminalID],
-                lastOutcome: nil,
+                lastOutcome: lastOutcomesByTerminalID[snapshot.terminalID],
                 wireRecords: kimiWireRecordsByTerminalID[snapshot.terminalID] ?? [],
                 codexWireRecords: codexWireRecordsByTerminalID[snapshot.terminalID] ?? [],
                 claudeWireRecords: claudeWireRecordsByTerminalID[snapshot.terminalID] ?? [],

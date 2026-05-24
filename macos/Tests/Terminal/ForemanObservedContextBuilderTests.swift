@@ -166,6 +166,51 @@ struct ForemanObservedContextBuilderTests {
     }
 
     @Test
+    func managedManualAndNewTabFreshSuccessOutcomesShareObservedContext() {
+        let snapshots = [
+            outcomeSummarySnapshot(
+                terminalID: "success-existing",
+                title: "shell",
+                isFocused: true
+            ),
+            outcomeSummarySnapshot(
+                terminalID: "success-new-tab",
+                title: "nambouchara@Nams-MacBook-Pro:~"
+            ),
+            outcomeSummarySnapshot(
+                terminalID: "success-managed",
+                title: "OpenAI Codex"
+            ),
+        ]
+        let outcomesByTerminalID = Dictionary(
+            uniqueKeysWithValues: snapshots.map {
+                (
+                    $0.terminalID,
+                    TerminalOutcomeReport(
+                        terminalID: $0.terminalID,
+                        sentCommand: "npm test",
+                        outcome: .success,
+                        detectedAt: .now,
+                        summary: "Tests finished successfully."
+                    )
+                )
+            }
+        )
+
+        let result = builder.build(
+            snapshots: snapshots,
+            lastOutcomesByTerminalID: outcomesByTerminalID
+        )
+        let signatures = result.context.understandings.map(signature)
+
+        #expect(signatures.count == 3)
+        #expect(signatures.dropFirst().allSatisfy { $0 == signatures.first })
+        #expect(signatures.first?.state == .succeeded)
+        #expect(signatures.first?.lastMeaningfulEvent == "Tests finished successfully.")
+        #expect(signatures.first?.shortExplanation.contains("Tests finished successfully.") == true)
+    }
+
+    @Test
     func managedManualAndNewTabCodexWireCompletionsShareObservedContextWhenSurfaceIsGeneric() {
         let snapshots = [
             TerminalSnapshot.makePreview(
@@ -456,6 +501,29 @@ struct ForemanObservedContextBuilderTests {
             foregroundProcessName: "kimi",
             cursorIsAtPrompt: true,
             usingAlternateScreen: true
+        )
+    }
+
+    private func outcomeSummarySnapshot(
+        terminalID: String,
+        title: String,
+        isFocused: Bool = false
+    ) -> TerminalSnapshot {
+        TerminalSnapshot.makePreview(
+            terminalID: terminalID,
+            windowID: "win-1",
+            tabID: "tab-1",
+            title: title,
+            cwd: "/tmp/project",
+            isFocused: isFocused,
+            visibleText: "npm test\nuser@host %",
+            recentScrollbackLines: [
+                "npm test",
+                "user@host %",
+            ],
+            lastInputPreview: "npm test",
+            cursorIsAtPrompt: true,
+            usingAlternateScreen: false
         )
     }
 

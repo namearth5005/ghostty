@@ -194,6 +194,7 @@ class AppDelegate: NSObject,
     private let aiForemanObservedContextBuilder = ForemanObservedContextBuilder()
     private var aiForemanCurrentSnapshots: [TerminalSnapshot] = []
     private var aiForemanCurrentUnderstandings: [TerminalUnderstanding] = []
+    private var aiForemanLastOutcomesByTerminalID: [String: TerminalOutcomeReport] = [:]
     private var aiForemanPreviousSnapshots: [String: TerminalSnapshot] = [:]
     private var aiForemanPreviousUnderstandings: [String: TerminalUnderstanding] = [:]
     private let agentStateMonitor = AgentStateMonitor()
@@ -360,7 +361,7 @@ class AppDelegate: NSObject,
                             guard let controller = self.terminalController(for: terminalID) else { return false }
                             let item = DispatchQueueItem(terminalID: terminalID, message: command)
                             guard self.dispatchQueueCoordinator.send(item, through: controller) else { return false }
-                            self.terminalOutcomeEngine.register(terminalID: terminalID, sentCommand: command)
+                            self.registerTerminalOutcomeTracking(terminalID: terminalID, sentCommand: command)
                             return true
                         },
                         onStatusChange: { _ in },
@@ -1329,7 +1330,7 @@ extension AppDelegate {
         }
 
         store.errorMessage = nil
-        terminalOutcomeEngine.register(terminalID: item.terminalID, sentCommand: item.message)
+        registerTerminalOutcomeTracking(terminalID: item.terminalID, sentCommand: item.message)
 
         let nextTerminalID = store.sendAndAdvance(currentTerminalID: item.terminalID)
         if advance, let nextTerminalID, let nextController = terminalController(for: nextTerminalID) {
@@ -1341,6 +1342,8 @@ extension AppDelegate {
 
     @MainActor
     private func handleTerminalOutcome(_ report: TerminalOutcomeReport) {
+        aiForemanLastOutcomesByTerminalID[report.terminalID] = report
+
         for controller in TerminalController.all {
             let store = controller.foremanSidebarStore
             if let index = store.activityLog.firstIndex(where: {
@@ -1406,7 +1409,7 @@ extension AppDelegate {
             guard let controller = terminalController(for: item.terminalID) else { continue }
             guard dispatchQueueCoordinator.send(item, through: controller) else { continue }
 
-            terminalOutcomeEngine.register(terminalID: item.terminalID, sentCommand: item.message)
+            registerTerminalOutcomeTracking(terminalID: item.terminalID, sentCommand: item.message)
 
             if let index = store.dispatchQueue.firstIndex(where: { $0.id == item.id && $0.state == .pending }) {
                 store.dispatchQueue[index].state = .sent
@@ -1517,7 +1520,7 @@ extension AppDelegate {
                 guard let controller = self.terminalController(for: terminalID) else { return false }
                 let item = DispatchQueueItem(terminalID: terminalID, message: command)
                 guard self.dispatchQueueCoordinator.send(item, through: controller) else { return false }
-                self.terminalOutcomeEngine.register(terminalID: terminalID, sentCommand: command)
+                self.registerTerminalOutcomeTracking(terminalID: terminalID, sentCommand: command)
                 return true
             },
             onStatusChange: { status in
@@ -1598,7 +1601,7 @@ extension AppDelegate {
         guard let controller = terminalController(for: terminalID) else { return }
         let item = DispatchQueueItem(terminalID: terminalID, message: command)
         guard dispatchQueueCoordinator.send(item, through: controller) else { return }
-        terminalOutcomeEngine.register(terminalID: terminalID, sentCommand: command)
+        registerTerminalOutcomeTracking(terminalID: terminalID, sentCommand: command)
     }
 
     @MainActor
@@ -1631,7 +1634,7 @@ extension AppDelegate {
             return
         }
 
-        terminalOutcomeEngine.register(terminalID: attention.terminalID, sentCommand: action.payload)
+        registerTerminalOutcomeTracking(terminalID: attention.terminalID, sentCommand: action.payload)
         agentStateMonitor.resolve(
             terminalID: attention.terminalID,
             fingerprint: attention.fingerprint
@@ -1660,6 +1663,7 @@ extension AppDelegate {
         managedAgentAttachmentBootstraps = managedAgentAttachmentBootstraps.filter { terminalID, bootstrap in
             activeTerminalIDs.contains(terminalID) && bootstrap.expiresAt > now
         }
+        aiForemanLastOutcomesByTerminalID = aiForemanLastOutcomesByTerminalID.filter { activeTerminalIDs.contains($0.key) }
 
         for snapshot in allSnapshots {
             if let cwd = snapshot.cwd?.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -1809,6 +1813,7 @@ extension AppDelegate {
         let observedContext = aiForemanObservedContextBuilder.build(
             snapshots: allSnapshots,
             previousSnapshotsByTerminalID: aiForemanPreviousSnapshots,
+            lastOutcomesByTerminalID: aiForemanLastOutcomesByTerminalID,
             attachmentHintsByTerminalID: attachmentHintsByTerminalID,
             kimiWireRecordsByTerminalID: kimiWireRecordsByTerminalID,
             codexWireRecordsByTerminalID: codexWireRecordsByTerminalID,
@@ -1853,6 +1858,12 @@ extension AppDelegate {
                 understandingsByTerminalID: observation.understandingsByTerminalID
             )
         }
+    }
+
+    @MainActor
+    private func registerTerminalOutcomeTracking(terminalID: String, sentCommand: String) {
+        aiForemanLastOutcomesByTerminalID.removeValue(forKey: terminalID)
+        terminalOutcomeEngine.register(terminalID: terminalID, sentCommand: sentCommand)
     }
 
     @MainActor

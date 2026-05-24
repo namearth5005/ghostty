@@ -257,6 +257,47 @@ struct ForemanAgentTests {
     }
 
     @Test
+    func fallbackObservationPreservesFreshOutcomeSummary() async throws {
+        let conversation = await MainActor.run { ForemanConversation() }
+        let client = ScriptedForemanClient(
+            responses: [
+                try makeStepResponse(
+                    thought: "The outcome is already clear.",
+                    action: .respond(message: "The tests finished successfully.")
+                ),
+            ]
+        )
+        let commandRecorder = CommandRecorder()
+        let agent = makeAgent(
+            conversation: conversation,
+            client: client,
+            commandRecorder: commandRecorder
+        )
+        let snapshots = await successfulTestSnapshots()
+        let outcome = TerminalOutcomeReport(
+            terminalID: "term-1",
+            sentCommand: "npm test",
+            outcome: .success,
+            detectedAt: .now,
+            summary: "Tests finished successfully."
+        )
+
+        await agent.receiveOutcome(outcome)
+        await agent.start(goal: "what happened?", mode: .interactive, captureSnapshots: { snapshots })
+
+        try await waitFor {
+            let payloads = await client.recordedUnderstandings()
+            return !payloads.isEmpty
+        }
+
+        let payloads = await client.recordedUnderstandings()
+        let forwarded = try #require(payloads.first?.first)
+        #expect(forwarded.state == .succeeded)
+        #expect(forwarded.lastMeaningfulEvent == "Tests finished successfully.")
+        #expect(forwarded.shortExplanation.contains("Tests finished successfully."))
+    }
+
+    @Test
     func loopUsesSuppliedObservedContextDuringStart() async throws {
         let conversation = await MainActor.run { ForemanConversation() }
         let client = ScriptedForemanClient(
@@ -1480,6 +1521,26 @@ private func failedFindSnapshots() -> [TerminalSnapshot] {
                 "zsh: command not found: hfind",
             ],
             lastInputPreview: "hfind . -print"
+        ),
+    ]
+}
+
+@MainActor
+private func successfulTestSnapshots() -> [TerminalSnapshot] {
+    [
+        TerminalSnapshot.makePreview(
+            terminalID: "term-1",
+            windowID: "win-1",
+            tabID: "tab-1",
+            title: "shell",
+            cwd: "/tmp/project",
+            isFocused: true,
+            visibleText: "npm test\nuser@host %",
+            recentScrollbackLines: [
+                "npm test",
+                "user@host %",
+            ],
+            lastInputPreview: "npm test"
         ),
     ]
 }
