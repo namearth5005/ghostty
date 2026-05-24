@@ -136,6 +136,101 @@ struct AppDelegateGoalCommandTests {
         #expect(reopenedGoal?.status == .active)
         #expect(reopenedGoal?.lastEvidenceSnapshot == "Reopened from the Foreman sidebar.")
     }
+
+    @MainActor
+    @Test
+    func completedGoalRehydrationSuppressesRowActionsUntilReopen() async throws {
+        let appDelegate = try #require(NSApp.delegate as? AppDelegate)
+        let fileManager = FileManager.default
+        let root = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let dbURL = root.appendingPathComponent("foreman-memory.sqlite3")
+        let projectID = "/tmp/ghostty-goal-suppression-\(UUID().uuidString)"
+        let setupConversation = ForemanConversation()
+        let setupGoal = ForemanProjectGoal(projectID: projectID, objective: "Seed a completed goal.")
+        setupConversation.setActiveProjectGoal(setupGoal)
+        let setupStore = ForemanSidebarStore(conversation: setupConversation)
+        appDelegate.setForemanProjectGoalRuntimeForTests(makePersistedGoalRuntime(dbURL: dbURL))
+
+        defer {
+            setupConversation.setActiveProjectGoal(setupGoal)
+            appDelegate.setForemanProjectGoalRuntimeForTests(
+                ForemanProjectGoalRuntime(loadPersistedGoals: true)
+            )
+            try? fileManager.removeItem(at: root)
+        }
+
+        appDelegate.sendChatMessage("/goal set Verify completed-goal row suppression.", store: setupStore)
+        try await waitForGoalCommand {
+            await MainActor.run {
+                setupStore.conversation.activeProjectGoal?.goalText == "Verify completed-goal row suppression."
+            }
+        }
+
+        appDelegate.sendChatMessage("/goal complete", store: setupStore)
+        try await waitForGoalCommand {
+            await MainActor.run {
+                setupStore.conversation.activeProjectGoal?.status == .completed
+            }
+        }
+
+        let restoredGoal = try #require(await makePersistedGoalRuntime(dbURL: dbURL).goal(for: projectID))
+        let restoredConversation = ForemanConversation()
+        restoredConversation.setActiveProjectGoal(restoredGoal)
+        let restoredStore = ForemanSidebarStore(conversation: restoredConversation)
+
+        let snapshots = [
+            TerminalSnapshot.makePreview(
+                terminalID: "term-1",
+                windowID: "win-1",
+                tabID: "tab-1",
+                title: "tests",
+                cwd: projectID,
+                isFocused: true,
+                visibleText: "Tests failed.",
+                recentScrollbackLines: [],
+                lastInputPreview: "xcodebuild test"
+            ),
+        ]
+        let understandings = [
+            "term-1": TerminalUnderstanding.preview(
+                terminalID: "term-1",
+                state: .failed,
+                shortExplanation: "Tests failed.",
+                lastMeaningfulEvent: "Tests failed.",
+                importantDetails: ["Tests failed."],
+                suggestedNextActions: [
+                    .init(
+                        title: "Rerun tests",
+                        command: "xcodebuild test",
+                        reason: "Verify the fix.",
+                        isRecommended: true
+                    ),
+                ]
+            ),
+        ]
+
+        restoredStore.applySnapshots(
+            snapshots,
+            understandingsByTerminalID: understandings
+        )
+
+        #expect(restoredStore.terminalRows.count == 1)
+        #expect(restoredStore.terminalRows[0].suggestedActions.isEmpty)
+
+        appDelegate.sendChatMessage("/goal reopen", store: restoredStore)
+        try await waitForGoalCommand {
+            await MainActor.run {
+                restoredStore.conversation.activeProjectGoal?.status == .active
+            }
+        }
+
+        restoredStore.applySnapshots(
+            snapshots,
+            understandingsByTerminalID: understandings
+        )
+
+        #expect(restoredStore.terminalRows[0].suggestedActions.map(\.title) == ["Rerun tests"])
+    }
 }
 
 private func makePersistedGoalRuntime(dbURL: URL) -> ForemanProjectGoalRuntime {

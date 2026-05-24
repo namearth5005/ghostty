@@ -213,6 +213,11 @@ final class ForemanSidebarStore: ObservableObject {
         self.conversation.objectWillChange.sink { [weak self] _ in
             self?.objectWillChange.send()
         }.store(in: &cancellables)
+        self.conversation.$activeProjectGoal.sink { [weak self] _ in
+            self?.refreshTerminalRowsForGoalState()
+        }.store(in: &cancellables)
+
+        refreshTerminalRowsForGoalState()
     }
 
     static var preview: ForemanSidebarStore {
@@ -524,7 +529,7 @@ final class ForemanSidebarStore: ObservableObject {
                     supportLevel: understanding.supportLevel.rawValue,
                     evidenceSummary: understanding.evidence.first?.source.rawValue,
                     isFocused: snapshot.isFocused,
-                    suggestedActions: understanding.suggestedNextActions,
+                    suggestedActions: goalScopedSuggestedActions(understanding.suggestedNextActions),
                     pendingAttention: pendingAttentionByTerminalID[snapshot.terminalID],
                     agentContextType: context.typeString,
                     agentContextTitle: context.titleString,
@@ -810,6 +815,30 @@ final class ForemanSidebarStore: ObservableObject {
         }
 
         terminalRows[index].pendingAttention = pendingAttentionByTerminalID[terminalID]
+    }
+
+    private func refreshTerminalRowsForGoalState() {
+        guard shouldSuppressSuggestedActionsForCompletedGoal else {
+            return
+        }
+
+        for index in terminalRows.indices where !terminalRows[index].suggestedActions.isEmpty {
+            terminalRows[index].suggestedActions = []
+        }
+    }
+
+    private var shouldSuppressSuggestedActionsForCompletedGoal: Bool {
+        conversation.activeProjectGoal?.status == .completed
+    }
+
+    private func goalScopedSuggestedActions(
+        _ actions: [TerminalSuggestedAction]
+    ) -> [TerminalSuggestedAction] {
+        guard shouldSuppressSuggestedActionsForCompletedGoal else {
+            return actions
+        }
+
+        return []
     }
 
     private func shouldAdoptPendingAttentionSelection(for terminalID: String) -> Bool {
