@@ -211,6 +211,328 @@ struct ForemanObservedContextBuilderTests {
     }
 
     @Test
+    func managedManualAndNewTabCodexRunningToPromptTransitionShareObservedContextAndRuntimeEntries() throws {
+        let currentSnapshots = [
+            TerminalSnapshot.makePreview(
+                terminalID: "codex-transition-existing",
+                windowID: "win-1",
+                tabID: "tab-1",
+                title: "shell",
+                cwd: "/tmp/project",
+                isFocused: true,
+                visibleText: """
+                • Hey. What do you need help with?
+
+                ›
+                """,
+                recentScrollbackLines: [],
+                lastInputPreview: nil,
+                foregroundProcessID: 101,
+                foregroundProcessName: "codex",
+                cursorIsAtPrompt: true,
+                usingAlternateScreen: true
+            ),
+            TerminalSnapshot.makePreview(
+                terminalID: "codex-transition-new-tab",
+                windowID: "win-1",
+                tabID: "tab-2",
+                title: "nambouchara@Nams-MacBook-Pro:~",
+                cwd: "/tmp/project",
+                isFocused: false,
+                visibleText: """
+                • Hey. What do you need help with?
+
+                ›
+                """,
+                recentScrollbackLines: [],
+                lastInputPreview: nil,
+                foregroundProcessID: 202,
+                foregroundProcessName: "codex",
+                cursorIsAtPrompt: true,
+                usingAlternateScreen: true
+            ),
+            TerminalSnapshot.makePreview(
+                terminalID: "codex-transition-managed",
+                windowID: "win-1",
+                tabID: "tab-3",
+                title: "OpenAI Codex",
+                cwd: "/tmp/project",
+                isFocused: false,
+                visibleText: """
+                • Hey. What do you need help with?
+
+                ›
+                """,
+                recentScrollbackLines: [],
+                lastInputPreview: nil,
+                foregroundProcessID: 303,
+                foregroundProcessName: "codex",
+                cursorIsAtPrompt: true,
+                usingAlternateScreen: true
+            ),
+        ]
+        let previousSnapshotsByTerminalID = Dictionary(
+            uniqueKeysWithValues: currentSnapshots.map {
+                (
+                    $0.terminalID,
+                    TerminalSnapshot.makePreview(
+                        terminalID: $0.terminalID,
+                        windowID: $0.windowID,
+                        tabID: $0.tabID,
+                        title: $0.title,
+                        cwd: $0.cwd,
+                        isFocused: $0.isFocused,
+                        visibleText: "• Working (0s • esc to interrupt)",
+                        recentScrollbackLines: [],
+                        lastInputPreview: nil,
+                        foregroundProcessID: $0.runtime.foregroundProcessID,
+                        foregroundProcessName: "codex",
+                        cursorIsAtPrompt: false,
+                        usingAlternateScreen: true
+                    )
+                )
+            }
+        )
+
+        let result = builder.build(
+            snapshots: currentSnapshots,
+            previousSnapshotsByTerminalID: previousSnapshotsByTerminalID
+        )
+        let signatures = result.context.understandings.map(signature)
+        let entries = try currentSnapshots.map { try #require(result.runtimeEntriesByTerminalID[$0.terminalID]) }
+
+        let firstSignature = try #require(signatures.first)
+        let firstEntry = try #require(entries.first)
+        #expect(signatures.dropFirst().allSatisfy { $0 == firstSignature })
+        #expect(entries.dropFirst().allSatisfy { $0.detection == firstEntry.detection })
+        #expect(entries.dropFirst().allSatisfy { $0.monitorTarget == firstEntry.monitorTarget })
+        #expect(entries.dropFirst().allSatisfy { $0.shouldRestartMonitor == firstEntry.shouldRestartMonitor })
+        #expect(firstSignature.agentIdentity == .codex)
+        #expect(firstSignature.interactionState == .waitingText)
+        #expect(firstSignature.interactionContext == .waitingText(question: "• Hey. What do you need help with?"))
+        #expect(firstEntry.detection?.identity == .codex)
+        #expect(firstEntry.detection?.state == .blocked)
+        #expect(firstEntry.monitorTarget == .codex(workingDirectory: "/tmp/project"))
+        #expect(firstEntry.shouldRestartMonitor == false)
+    }
+
+    @Test
+    func managedManualAndNewTabKimiWelcomeToWireQuestionTransitionShareObservedContextAndRuntimeEntries() throws {
+        let question = "What should I do here?"
+        let currentSnapshots = [
+            kimiInputSnapshot(
+                terminalID: "kimi-transition-existing",
+                title: "shell",
+                isFocused: true
+            ),
+            kimiInputSnapshot(
+                terminalID: "kimi-transition-new-tab",
+                title: "nambouchara@Nams-MacBook-Pro:~"
+            ),
+            kimiInputSnapshot(
+                terminalID: "kimi-transition-managed",
+                title: "Kimi Code"
+            ),
+        ]
+        let previousSnapshotsByTerminalID = Dictionary(
+            uniqueKeysWithValues: currentSnapshots.map {
+                (
+                    $0.terminalID,
+                    TerminalSnapshot.makePreview(
+                        terminalID: $0.terminalID,
+                        windowID: $0.windowID,
+                        tabID: $0.tabID,
+                        title: $0.title,
+                        cwd: $0.cwd,
+                        isFocused: $0.isFocused,
+                        visibleText: """
+                        Welcome to Kimi Code CLI!
+                        Send /help for help information.
+
+                        Directory: /Users/nambouchara/speed2
+                        Session: abc123
+                        Model: Kimi-k2.6
+
+                        ── input ──────────────────────────────────────────────
+                        agent (Kimi-k2.6 ●)  /Users/nambouchara/speed2
+                        """,
+                        recentScrollbackLines: [],
+                        lastInputPreview: nil,
+                        foregroundProcessID: $0.runtime.foregroundProcessID,
+                        foregroundProcessName: "kimi",
+                        cursorIsAtPrompt: true,
+                        usingAlternateScreen: true
+                    )
+                )
+            }
+        )
+        let wireRecordsByTerminalID = Dictionary(
+            uniqueKeysWithValues: currentSnapshots.map { ($0.terminalID, [kimiQuestionRecord(question: question)]) }
+        )
+
+        let result = builder.build(
+            snapshots: currentSnapshots,
+            previousSnapshotsByTerminalID: previousSnapshotsByTerminalID,
+            kimiWireRecordsByTerminalID: wireRecordsByTerminalID
+        )
+        let signatures = result.context.understandings.map(signature)
+        let entries = try currentSnapshots.map { try #require(result.runtimeEntriesByTerminalID[$0.terminalID]) }
+
+        let firstSignature = try #require(signatures.first)
+        let firstEntry = try #require(entries.first)
+        #expect(signatures.dropFirst().allSatisfy { $0 == firstSignature })
+        #expect(entries.dropFirst().allSatisfy { $0.detection == firstEntry.detection })
+        #expect(entries.dropFirst().allSatisfy { $0.monitorTarget == firstEntry.monitorTarget })
+        #expect(entries.dropFirst().allSatisfy { $0.shouldRestartMonitor == firstEntry.shouldRestartMonitor })
+        #expect(firstSignature.agentIdentity == .kimi)
+        #expect(firstSignature.interactionState == .waitingText)
+        #expect(firstSignature.lastMeaningfulEvent == question)
+        #expect(firstSignature.interactionContext == .waitingText(question: question))
+        #expect(firstEntry.detection?.identity == .kimi)
+        #expect(firstEntry.detection?.state == .blocked)
+        #expect(firstEntry.monitorTarget == .kimi(workingDirectory: "/Users/nambouchara/speed2"))
+        #expect(firstEntry.shouldRestartMonitor == false)
+    }
+
+    @Test
+    func managedManualAndNewTabClaudeRunningToTrustPromptTransitionShareObservedContextAndRuntimeEntries() throws {
+        let currentSnapshots = [
+            TerminalSnapshot.makePreview(
+                terminalID: "claude-transition-existing",
+                windowID: "win-1",
+                tabID: "tab-1",
+                title: "shell",
+                cwd: "/Users/nambouchara",
+                isFocused: true,
+                visibleText: """
+                Accessing workspace:
+
+                /Users/nambouchara
+
+                Quick safety check: Is this a project you created or one you trust?
+
+                Security guide
+
+                 ❯ 1. Yes, I trust this folder
+                   2. No, exit
+
+                 Enter to confirm · Esc to cancel
+                """,
+                recentScrollbackLines: [],
+                lastInputPreview: nil,
+                foregroundProcessID: 404,
+                foregroundProcessName: "claude",
+                cursorIsAtPrompt: true,
+                usingAlternateScreen: true
+            ),
+            TerminalSnapshot.makePreview(
+                terminalID: "claude-transition-new-tab",
+                windowID: "win-1",
+                tabID: "tab-2",
+                title: "nambouchara@Nams-MacBook-Pro:~",
+                cwd: "/Users/nambouchara",
+                isFocused: false,
+                visibleText: """
+                Accessing workspace:
+
+                /Users/nambouchara
+
+                Quick safety check: Is this a project you created or one you trust?
+
+                Security guide
+
+                 ❯ 1. Yes, I trust this folder
+                   2. No, exit
+
+                 Enter to confirm · Esc to cancel
+                """,
+                recentScrollbackLines: [],
+                lastInputPreview: nil,
+                foregroundProcessID: 505,
+                foregroundProcessName: "claude",
+                cursorIsAtPrompt: true,
+                usingAlternateScreen: true
+            ),
+            TerminalSnapshot.makePreview(
+                terminalID: "claude-transition-managed",
+                windowID: "win-1",
+                tabID: "tab-3",
+                title: "Claude Code",
+                cwd: "/Users/nambouchara",
+                isFocused: false,
+                visibleText: """
+                Accessing workspace:
+
+                /Users/nambouchara
+
+                Quick safety check: Is this a project you created or one you trust?
+
+                Security guide
+
+                 ❯ 1. Yes, I trust this folder
+                   2. No, exit
+
+                 Enter to confirm · Esc to cancel
+                """,
+                recentScrollbackLines: [],
+                lastInputPreview: nil,
+                foregroundProcessID: 606,
+                foregroundProcessName: "claude",
+                cursorIsAtPrompt: true,
+                usingAlternateScreen: true
+            ),
+        ]
+        let previousSnapshotsByTerminalID = Dictionary(
+            uniqueKeysWithValues: currentSnapshots.map {
+                (
+                    $0.terminalID,
+                    TerminalSnapshot.makePreview(
+                        terminalID: $0.terminalID,
+                        windowID: $0.windowID,
+                        tabID: $0.tabID,
+                        title: $0.title,
+                        cwd: $0.cwd,
+                        isFocused: $0.isFocused,
+                        visibleText: "Thinking...",
+                        recentScrollbackLines: [],
+                        lastInputPreview: nil,
+                        foregroundProcessID: $0.runtime.foregroundProcessID,
+                        foregroundProcessName: "claude",
+                        cursorIsAtPrompt: false,
+                        usingAlternateScreen: true
+                    )
+                )
+            }
+        )
+
+        let result = builder.build(
+            snapshots: currentSnapshots,
+            previousSnapshotsByTerminalID: previousSnapshotsByTerminalID
+        )
+        let signatures = result.context.understandings.map(signature)
+        let entries = try currentSnapshots.map { try #require(result.runtimeEntriesByTerminalID[$0.terminalID]) }
+
+        let firstSignature = try #require(signatures.first)
+        let firstEntry = try #require(entries.first)
+        #expect(signatures.dropFirst().allSatisfy { $0 == firstSignature })
+        #expect(entries.dropFirst().allSatisfy { $0.detection == firstEntry.detection })
+        #expect(entries.dropFirst().allSatisfy { $0.monitorTarget == firstEntry.monitorTarget })
+        #expect(entries.dropFirst().allSatisfy { $0.shouldRestartMonitor == firstEntry.shouldRestartMonitor })
+        #expect(firstSignature.agentIdentity == .claudeCode)
+        #expect(firstSignature.interactionState == .waitingChoice)
+        #expect(firstSignature.lastMeaningfulEvent == "Quick safety check: Is this a project you created or one you trust?")
+        let expected: AgentInteractionContext = .waitingChoice(
+            question: "Quick safety check: Is this a project you created or one you trust?",
+            options: ["Yes, I trust this folder", "No, exit"]
+        )
+        #expect(firstSignature.interactionContext == expected)
+        #expect(firstEntry.detection?.identity == .claudeCode)
+        #expect(firstEntry.detection?.state == .blocked)
+        #expect(firstEntry.monitorTarget == .claude(pid: 404, workingDirectory: "/Users/nambouchara"))
+        #expect(firstEntry.shouldRestartMonitor == false)
+    }
+
+    @Test
     func managedManualAndNewTabGenericCodexWireStateShareRuntimeEntriesThroughBuilder() {
         let snapshots = [
             TerminalSnapshot.makePreview(

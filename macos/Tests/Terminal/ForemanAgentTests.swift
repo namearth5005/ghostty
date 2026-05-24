@@ -482,6 +482,230 @@ struct ForemanAgentTests {
     }
 
     @Test
+    func codexTransitionObservedContextKeepsStartParityAcrossLaunchPaths() async throws {
+        let builder = ForemanObservedContextBuilder()
+        let cases: [(terminalID: String, title: String, isFocused: Bool)] = [
+            ("codex-transition-existing", "shell", true),
+            ("codex-transition-new-tab", "nambouchara@Nams-MacBook-Pro:~", false),
+            ("codex-transition-managed", "OpenAI Codex", false),
+        ]
+
+        var forwardedUnderstandings: [UnderstandingSignature] = []
+
+        for entry in cases {
+            let current = TerminalSnapshot.makePreview(
+                terminalID: entry.terminalID,
+                windowID: "win-1",
+                tabID: "tab-\(entry.terminalID)",
+                title: entry.title,
+                cwd: "/tmp/project",
+                isFocused: entry.isFocused,
+                visibleText: """
+                • Hey. What do you need help with?
+
+                ›
+                """,
+                recentScrollbackLines: [],
+                lastInputPreview: nil,
+                foregroundProcessID: 1001,
+                foregroundProcessName: "codex",
+                cursorIsAtPrompt: true,
+                usingAlternateScreen: true
+            )
+            let previous = TerminalSnapshot.makePreview(
+                terminalID: entry.terminalID,
+                windowID: "win-1",
+                tabID: "tab-\(entry.terminalID)",
+                title: entry.title,
+                cwd: "/tmp/project",
+                isFocused: entry.isFocused,
+                visibleText: "• Working (0s • esc to interrupt)",
+                recentScrollbackLines: [],
+                lastInputPreview: nil,
+                foregroundProcessID: 1001,
+                foregroundProcessName: "codex",
+                cursorIsAtPrompt: false,
+                usingAlternateScreen: true
+            )
+            let observedContext = builder.build(
+                snapshots: [current],
+                previousSnapshotsByTerminalID: [entry.terminalID: previous]
+            ).context
+
+            let result = try await startWithObservedContextCase(
+                snapshots: [current],
+                observedContext: observedContext,
+                response: try makeStepResponse(
+                    thought: "The Codex question is already clear.",
+                    action: .respond(message: "Use the structured Codex question.")
+                )
+            )
+
+            forwardedUnderstandings.append(try #require(result.understanding))
+            #expect(result.messages.contains { $0.content == "Use the structured Codex question." })
+        }
+
+        let first = try #require(forwardedUnderstandings.first)
+        #expect(forwardedUnderstandings.dropFirst().allSatisfy { $0 == first })
+        #expect(first.agentIdentity == .codex)
+        #expect(first.interactionState == .waitingText)
+        #expect(first.interactionContext == .waitingText(question: "• Hey. What do you need help with?"))
+    }
+
+    @Test
+    func kimiTransitionObservedContextKeepsStartParityAcrossLaunchPaths() async throws {
+        let builder = ForemanObservedContextBuilder()
+        let question = "What should I do here?"
+        let cases: [(terminalID: String, title: String, isFocused: Bool)] = [
+            ("kimi-transition-existing", "shell", true),
+            ("kimi-transition-new-tab", "nambouchara@Nams-MacBook-Pro:~", false),
+            ("kimi-transition-managed", "Kimi Code", false),
+        ]
+
+        var forwardedUnderstandings: [UnderstandingSignature] = []
+
+        for entry in cases {
+            let current = kimiInputChromeSnapshots(
+                terminalID: entry.terminalID,
+                title: entry.title,
+                isFocused: entry.isFocused
+            ).first!
+            let previous = TerminalSnapshot.makePreview(
+                terminalID: entry.terminalID,
+                windowID: current.windowID,
+                tabID: current.tabID,
+                title: entry.title,
+                cwd: current.cwd,
+                isFocused: entry.isFocused,
+                visibleText: """
+                Welcome to Kimi Code CLI!
+                Send /help for help information.
+
+                Directory: /Users/nambouchara/speed2
+                Session: abc123
+                Model: Kimi-k2.6
+
+                ── input ──────────────────────────────────────────────
+                agent (Kimi-k2.6 ●)  /Users/nambouchara/speed2
+                """,
+                recentScrollbackLines: [],
+                lastInputPreview: nil,
+                foregroundProcessID: current.runtime.foregroundProcessID,
+                foregroundProcessName: "kimi",
+                cursorIsAtPrompt: true,
+                usingAlternateScreen: true
+            )
+            let observedContext = builder.build(
+                snapshots: [current],
+                previousSnapshotsByTerminalID: [entry.terminalID: previous],
+                kimiWireRecordsByTerminalID: [entry.terminalID: [kimiQuestionRecord(question: question)]]
+            ).context
+
+            let result = try await startWithObservedContextCase(
+                snapshots: [current],
+                observedContext: observedContext,
+                response: try makeStepResponse(
+                    thought: "The Kimi question is already clear.",
+                    action: .respond(message: "Use the structured Kimi question.")
+                )
+            )
+
+            forwardedUnderstandings.append(try #require(result.understanding))
+            #expect(result.messages.contains { $0.content == "Use the structured Kimi question." })
+        }
+
+        let first = try #require(forwardedUnderstandings.first)
+        #expect(forwardedUnderstandings.dropFirst().allSatisfy { $0 == first })
+        #expect(first.agentIdentity == .kimi)
+        #expect(first.interactionState == .waitingText)
+        #expect(first.interactionContext == .waitingText(question: question))
+    }
+
+    @Test
+    func claudeTransitionObservedContextKeepsStartParityAcrossLaunchPaths() async throws {
+        let builder = ForemanObservedContextBuilder()
+        let expectedContext: AgentInteractionContext = .waitingChoice(
+            question: "Quick safety check: Is this a project you created or one you trust?",
+            options: ["Yes, I trust this folder", "No, exit"]
+        )
+        let cases: [(terminalID: String, title: String, isFocused: Bool, pid: Int)] = [
+            ("claude-transition-existing", "shell", true, 2101),
+            ("claude-transition-new-tab", "nambouchara@Nams-MacBook-Pro:~", false, 2102),
+            ("claude-transition-managed", "Claude Code", false, 2103),
+        ]
+
+        var forwardedUnderstandings: [UnderstandingSignature] = []
+
+        for entry in cases {
+            let current = TerminalSnapshot.makePreview(
+                terminalID: entry.terminalID,
+                windowID: "win-1",
+                tabID: "tab-\(entry.terminalID)",
+                title: entry.title,
+                cwd: "/Users/nambouchara",
+                isFocused: entry.isFocused,
+                visibleText: """
+                Accessing workspace:
+
+                /Users/nambouchara
+
+                Quick safety check: Is this a project you created or one you trust?
+
+                Security guide
+
+                 ❯ 1. Yes, I trust this folder
+                   2. No, exit
+
+                 Enter to confirm · Esc to cancel
+                """,
+                recentScrollbackLines: [],
+                lastInputPreview: nil,
+                foregroundProcessID: entry.pid,
+                foregroundProcessName: "claude",
+                cursorIsAtPrompt: true,
+                usingAlternateScreen: true
+            )
+            let previous = TerminalSnapshot.makePreview(
+                terminalID: entry.terminalID,
+                windowID: "win-1",
+                tabID: "tab-\(entry.terminalID)",
+                title: entry.title,
+                cwd: "/Users/nambouchara",
+                isFocused: entry.isFocused,
+                visibleText: "Thinking...",
+                recentScrollbackLines: [],
+                lastInputPreview: nil,
+                foregroundProcessID: entry.pid,
+                foregroundProcessName: "claude",
+                cursorIsAtPrompt: false,
+                usingAlternateScreen: true
+            )
+            let observedContext = builder.build(
+                snapshots: [current],
+                previousSnapshotsByTerminalID: [entry.terminalID: previous]
+            ).context
+
+            let result = try await startWithObservedContextCase(
+                snapshots: [current],
+                observedContext: observedContext,
+                response: try makeStepResponse(
+                    thought: "The Claude trust prompt is already clear.",
+                    action: .respond(message: "Use the structured Claude options.")
+                )
+            )
+
+            forwardedUnderstandings.append(try #require(result.understanding))
+            #expect(result.messages.contains { $0.content == "Use the structured Claude options." })
+        }
+
+        let first = try #require(forwardedUnderstandings.first)
+        #expect(forwardedUnderstandings.dropFirst().allSatisfy { $0 == first })
+        #expect(first.agentIdentity == .claudeCode)
+        #expect(first.interactionState == .waitingChoice)
+        #expect(first.interactionContext == expectedContext)
+    }
+
+    @Test
     func startingAndStoppingConversationClearsStructuredTerminalContext() async {
         let conversation = await MainActor.run { ForemanConversation() }
         let overview = TerminalOverview(
@@ -2076,6 +2300,25 @@ private func genericClaudeWireObservedContext(
             claudeWireRecordsByTerminalID: claudeWireRecordsByTerminalID
         )
         .context
+}
+
+private func kimiQuestionRecord(question: String) -> KimiWireRecord {
+    KimiWireRecord(
+        timestamp: 1,
+        message: KimiWireMessage(
+            type: "QuestionRequest",
+            payload: KimiWirePayload(
+                questions: [
+                    QuestionItem(
+                        question: question,
+                        header: nil,
+                        options: nil,
+                        multi_select: nil
+                    ),
+                ]
+            )
+        )
+    )
 }
 
 private enum ScriptedForemanClientError: Error {
