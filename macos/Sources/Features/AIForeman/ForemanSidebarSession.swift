@@ -61,7 +61,23 @@ final class ForemanSidebarSession: ForemanSidebarSessionControlling {
     }
 
     func receiveUserMessage(_ text: String) {
-        guard let agent else { return }
+        guard let agent else {
+            let agent = ensureAgent(preferredTerminalID: preferredTerminalID())
+            let initialGoal = conversation.effectiveGoal ?? text
+            Task {
+                await agent.start(
+                    goal: initialGoal,
+                    mode: .interactive,
+                    captureSnapshots: captureSnapshots,
+                    captureObservedContext: captureObservedContext
+                )
+                if initialGoal != text {
+                    await agent.receiveUserMessage(text)
+                }
+            }
+            return
+        }
+
         Task {
             await agent.receiveUserMessage(text)
         }

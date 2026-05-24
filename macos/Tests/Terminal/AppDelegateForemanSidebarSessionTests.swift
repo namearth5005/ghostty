@@ -42,6 +42,20 @@ struct AppDelegateForemanSidebarSessionTests {
         #expect(firstSpy.startedGoals == ["first goal"])
         #expect(secondSpy.startedGoals == ["second goal"])
     }
+
+    @MainActor
+    @Test
+    func dispatchingGuideForemanIntentUsesTheStoreOwnedSession() {
+        let appDelegate = try! #require(NSApp.delegate as? AppDelegate)
+        let store = ForemanSidebarStore(conversation: ForemanConversation())
+        let spy = SidebarSessionSpy()
+
+        store.attachSidebarSession(spy)
+
+        appDelegate.dispatchForemanSidebarIntent(.guideForeman("Summarize the active options."), store: store)
+
+        #expect(spy.recordedMessages == ["Summarize the active options."])
+    }
 }
 
 @MainActor

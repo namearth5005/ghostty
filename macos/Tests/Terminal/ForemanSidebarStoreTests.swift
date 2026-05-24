@@ -724,6 +724,106 @@ struct ForemanSidebarStoreTests {
         #expect(forwardedAction == nil)
     }
 
+    @MainActor
+    @Test
+    func sendChatMessageRoutesTerminalRepliesThroughUnifiedIntent() {
+        let store = ForemanSidebarStore(selectedTerminalID: "term-1")
+        store.applySnapshots([
+            TerminalSnapshot.makePreview(
+                terminalID: "term-1",
+                windowID: "win-1",
+                tabID: "tab-1",
+                title: "Codex",
+                cwd: "/tmp/project",
+                isFocused: true,
+                visibleText: "What should I do here?",
+                recentScrollbackLines: [],
+                lastInputPreview: nil,
+                foregroundProcessName: "codex"
+            ),
+        ])
+        store.upsertPendingAttention(
+            makePendingAttention(terminalID: "term-1", fingerprint: "fp-1")
+        )
+
+        var dispatchedIntent: ForemanSidebarIntent?
+        store.onDispatchSidebarIntent = { intent in
+            dispatchedIntent = intent
+        }
+
+        store.sendChatMessage("Continue with the current plan.")
+
+        #expect(
+            dispatchedIntent ==
+            .sendTerminalReply(
+                terminalID: "term-1",
+                fingerprint: "fp-1",
+                message: "Continue with the current plan."
+            )
+        )
+    }
+
+    @MainActor
+    @Test
+    func executeSuggestionRoutesInformationalActionsThroughUnifiedIntent() {
+        let store = ForemanSidebarStore()
+        var dispatchedIntent: ForemanSidebarIntent?
+        store.onDispatchSidebarIntent = { intent in
+            dispatchedIntent = intent
+        }
+
+        store.executeSuggestion(
+            terminalID: "term-1",
+            action: .init(
+                title: "Ask Foreman to summarize the options",
+                command: nil,
+                reason: "Useful when the menu is noisy.",
+                isRecommended: false
+            )
+        )
+
+        #expect(
+            dispatchedIntent ==
+            .guideForeman(
+                "Ask Foreman to summarize the options for terminal term-1. Useful when the menu is noisy."
+            )
+        )
+    }
+
+    @MainActor
+    @Test
+    func executePendingAttentionActionRoutesThroughUnifiedIntentWhenConfigured() {
+        let store = ForemanSidebarStore()
+        let action = PendingAgentAction(
+            id: "continue",
+            title: "Continue",
+            payload: "1",
+            style: .primary
+        )
+        let attention = makePendingAttention(
+            terminalID: "term-1",
+            fingerprint: "fp-1",
+            actions: [action]
+        )
+        store.upsertPendingAttention(attention)
+
+        var dispatchedIntent: ForemanSidebarIntent?
+        store.onDispatchSidebarIntent = { intent in
+            dispatchedIntent = intent
+        }
+
+        store.executePendingAttentionAction(terminalID: "term-1", actionID: "continue")
+
+        #expect(
+            dispatchedIntent ==
+            .sendPendingAttentionAction(
+                terminalID: "term-1",
+                fingerprint: "fp-1",
+                payload: "1"
+            )
+        )
+    }
+
     private func makePendingAttention(
         terminalID: String,
         fingerprint: String = "fp-1",

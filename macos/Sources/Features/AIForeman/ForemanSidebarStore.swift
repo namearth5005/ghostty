@@ -167,12 +167,14 @@ final class ForemanSidebarStore: ObservableObject {
     @Published var isAgentRunning: Bool = false
     @Published var agentReadiness: [(AgentIdentity, AgentReadinessState)] = []
     private(set) var sidebarSession: ForemanSidebarSessionControlling?
+    private let sidebarRouter = ForemanSidebarRouter()
     var onStartAgent: ((String, AgentMode) -> Void)?
     var onSendChatMessage: ((String) -> Void)?
     var onStopAgent: (() -> Void)?
     var onApproveAction: (() -> Void)?
     var onSkipAction: (() -> Void)?
     var onLaunchAgent: ((AgentIdentity) -> Void)?
+    var onDispatchSidebarIntent: ((ForemanSidebarIntent) -> Void)?
     var onExecuteSuggestion: ((String, String) -> Void)?
     var onExecutePendingAttentionAction: ((PendingAgentAttention, PendingAgentAction) -> Void)?
 
@@ -305,6 +307,21 @@ final class ForemanSidebarStore: ObservableObject {
     }
 
     func sendChatMessage(_ text: String) {
+        if ForemanProjectGoalCommand.parse(text) != nil {
+            chatInput = ""
+            onSendChatMessage?(text)
+            return
+        }
+
+        if let onDispatchSidebarIntent {
+            let routeResult = sidebarRouter.resolveChatInput(text, state: routingState())
+            applyRouteResult(routeResult, defaultDraft: text)
+            if case .dispatch(let intent) = routeResult.outcome {
+                onDispatchSidebarIntent(intent)
+            }
+            return
+        }
+
         chatInput = ""
         onSendChatMessage?(text)
     }
@@ -331,6 +348,35 @@ final class ForemanSidebarStore: ObservableObject {
     }
 
     func executeSuggestion(terminalID: String, command: String) {
+        executeSuggestion(
+            terminalID: terminalID,
+            action: .init(
+                title: command,
+                command: command,
+                reason: "",
+                isRecommended: false
+            )
+        )
+    }
+
+    func executeSuggestion(terminalID: String, action: TerminalSuggestedAction) {
+        if let onDispatchSidebarIntent {
+            let routeResult = sidebarRouter.resolveSuggestion(
+                action,
+                terminalID: terminalID,
+                state: routingState()
+            )
+            applyRouteResult(routeResult)
+            if case .dispatch(let intent) = routeResult.outcome {
+                onDispatchSidebarIntent(intent)
+            }
+            return
+        }
+
+        guard let command = action.command else {
+            return
+        }
+
         onExecuteSuggestion?(terminalID, command)
     }
 
@@ -377,6 +423,22 @@ final class ForemanSidebarStore: ObservableObject {
 
     func executePendingAttentionAction(_ attention: PendingAgentAttention, action: PendingAgentAction) {
         guard pendingAttentionByTerminalID[attention.terminalID] == attention else {
+            return
+        }
+
+        if let onDispatchSidebarIntent {
+            let routeResult = sidebarRouter.resolveExplicitIntent(
+                .sendPendingAttentionAction(
+                    terminalID: attention.terminalID,
+                    fingerprint: attention.fingerprint,
+                    payload: action.payload
+                ),
+                state: routingState()
+            )
+            applyRouteResult(routeResult)
+            if case .dispatch(let intent) = routeResult.outcome {
+                onDispatchSidebarIntent(intent)
+            }
             return
         }
 
@@ -511,6 +573,63 @@ final class ForemanSidebarStore: ObservableObject {
             return true
         case .unknown, .running, .completed:
             return false
+        }
+    }
+
+    private func routingState() -> ForemanSidebarRoutingState {
+        ForemanSidebarRoutingState(
+            projectID: resolvedProjectID(),
+            selectedTerminalID: selectedTerminalID,
+            focusedTerminalID: terminalRows.first(where: \.isFocused)?.terminalID,
+            pendingAttentionByTerminalID: pendingAttentionByTerminalID,
+            terminalRows: terminalRows,
+            activeProjectGoal: conversation.activeProjectGoal
+        )
+    }
+
+    private func resolvedProjectID() -> String? {
+        if let projectID = conversation.activeProjectGoal?.projectID {
+            return projectID
+        }
+
+        if let selectedTerminalID,
+           let row = terminalRows.first(where: { $0.terminalID == selectedTerminalID }),
+           let projectID = ForemanProjectPathResolver.projectPath(from: row.cwd) {
+            return projectID
+        }
+
+        if let focusedRow = terminalRows.first(where: \.isFocused),
+           let projectID = ForemanProjectPathResolver.projectPath(from: focusedRow.cwd) {
+            return projectID
+        }
+
+        return terminalRows.lazy.compactMap { row in
+            ForemanProjectPathResolver.projectPath(from: row.cwd)
+        }.first
+    }
+
+    private func applyRouteResult(
+        _ routeResult: ForemanSidebarRouteResult,
+        defaultDraft: String? = nil
+    ) {
+        switch routeResult.outcome {
+        case .dispatch:
+            errorMessage = nil
+            if defaultDraft != nil {
+                chatInput = ""
+            }
+
+        case .blocked(let message, let draftToPreserve):
+            errorMessage = message
+            if let draft = draftToPreserve ?? defaultDraft {
+                chatInput = draft
+            }
+
+        case .suppressed(let message):
+            errorMessage = message
+            if let defaultDraft {
+                chatInput = defaultDraft
+            }
         }
     }
 

@@ -43,6 +43,47 @@ struct ForemanSidebarRouteResult: Equatable, Sendable {
 }
 
 struct ForemanSidebarRouter {
+    func resolveChatInput(
+        _ text: String,
+        state: ForemanSidebarRoutingState
+    ) -> ForemanSidebarRouteResult {
+        let target = resolveTarget(from: state)
+
+        switch target {
+        case .completedGoal:
+            return .init(
+                target: target,
+                outcome: .suppressed(
+                    message: "The saved project goal is complete. Reopen or extend it before dispatching more work."
+                )
+            )
+
+        case .terminalReply(let terminalID, let fingerprint):
+            return .init(
+                target: target,
+                outcome: .dispatch(
+                    .sendTerminalReply(
+                        terminalID: terminalID,
+                        fingerprint: fingerprint,
+                        message: text
+                    )
+                )
+            )
+
+        case .ambiguous:
+            return .init(
+                target: target,
+                outcome: .blocked(
+                    message: "Choose a terminal before sending a reply.",
+                    draftToPreserve: text
+                )
+            )
+
+        case .project:
+            return .init(target: target, outcome: .dispatch(.guideForeman(text)))
+        }
+    }
+
     func resolveTarget(from state: ForemanSidebarRoutingState) -> ForemanSidebarTarget {
         if let goal = state.activeProjectGoal, goal.status == .completed {
             return .completedGoal(projectID: goal.projectID)

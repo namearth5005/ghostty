@@ -163,6 +163,13 @@ class BaseTerminalController: NSWindowController,
             guard let self else { return }
             (NSApp.delegate as? AppDelegate)?.sendChatMessage(text, store: self.foremanSidebarStore)
         }
+        foremanSidebarStore.onDispatchSidebarIntent = { [weak self] intent in
+            guard let self else { return }
+            (NSApp.delegate as? AppDelegate)?.dispatchForemanSidebarIntent(
+                intent,
+                store: self.foremanSidebarStore
+            )
+        }
         foremanSidebarStore.onStopAgent = { [weak self] in
             guard let self else { return }
             (NSApp.delegate as? AppDelegate)?.stopForemanAgent(store: self.foremanSidebarStore)
@@ -182,12 +189,6 @@ class BaseTerminalController: NSWindowController,
                 (NSApp.delegate as? AppDelegate)?.launchManagedAgent(request)
             }
         )
-        foremanSidebarStore.onExecuteSuggestion = { terminalID, command in
-            (NSApp.delegate as? AppDelegate)?.executeSuggestedAction(
-                terminalID: terminalID,
-                command: command
-            )
-        }
         foremanSidebarStore.onExecutePendingAttentionAction = { [weak self] attention, action in
             guard let self else { return }
             (NSApp.delegate as? AppDelegate)?.executePendingAttentionAction(

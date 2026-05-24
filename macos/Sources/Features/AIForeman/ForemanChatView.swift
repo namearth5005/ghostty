@@ -91,8 +91,8 @@ struct ForemanChatView: View {
                     ForEach(store.terminalRows) { row in
                         TerminalSummaryRow(
                             row: row,
-                            onExecuteSuggestion: { terminalID, command in
-                                store.executeSuggestion(terminalID: terminalID, command: command)
+                            onExecuteSuggestion: { terminalID, action in
+                                store.executeSuggestion(terminalID: terminalID, action: action)
                             },
                             onExecutePendingAttentionAction: { attention, action in
                                 store.executePendingAttentionAction(attention, action: action)

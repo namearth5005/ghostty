@@ -2,7 +2,7 @@ import SwiftUI
 
 struct TerminalSummaryRow: View {
     let row: TerminalSummaryRowModel
-    var onExecuteSuggestion: ((String, String) -> Void)?
+    var onExecuteSuggestion: ((String, TerminalSuggestedAction) -> Void)?
     var onExecutePendingAttentionAction: ((PendingAgentAttention, PendingAgentAction) -> Void)?
 
     var body: some View {
@@ -133,30 +133,19 @@ struct TerminalSummaryRow: View {
             if !row.suggestedActions.isEmpty {
                 VStack(alignment: .leading, spacing: 6) {
                     ForEach(row.suggestedActions.prefix(2), id: \.title) { action in
-                        if let command = action.command {
-                            Button(action: {
-                                onExecuteSuggestion?(row.terminalID, command)
-                            }) {
-                                HStack(spacing: 4) {
-                                    Image(systemName: action.isRecommended ? "star.fill" : "bolt.fill")
-                                        .font(.system(size: 8))
-                                    Text(action.title)
-                                        .font(.system(size: 11, weight: .medium))
-                                }
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 4)
-                            }
-                            .buttonStyle(SuggestedActionButtonStyle(isRecommended: action.isRecommended))
-                        } else {
+                        Button(action: {
+                            onExecuteSuggestion?(row.terminalID, action)
+                        }) {
                             HStack(spacing: 4) {
-                                Image(systemName: action.isRecommended ? "star.fill" : "circle")
+                                Image(systemName: suggestionIcon(for: action))
                                     .font(.system(size: 8))
-                                    .foregroundStyle(action.isRecommended ? .yellow : .secondary)
                                 Text(action.title)
                                     .font(.system(size: 11, weight: .medium))
-                                    .foregroundStyle(.secondary)
                             }
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
                         }
+                        .buttonStyle(SuggestedActionButtonStyle(isRecommended: action.isRecommended))
                     }
                 }
                 .padding(.top, 4)
@@ -213,6 +202,14 @@ struct TerminalSummaryRow: View {
         }
         return 1
     }
+}
+
+private func suggestionIcon(for action: TerminalSuggestedAction) -> String {
+    if action.isRecommended {
+        return "star.fill"
+    }
+
+    return action.command == nil ? "bubble.left.and.bubble.right" : "bolt.fill"
 }
 
 // MARK: - Context type helpers
