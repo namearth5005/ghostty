@@ -1673,16 +1673,28 @@ extension AppDelegate {
         }
 
         let attachmentHintsByTerminalID = managedAgentAttachmentBootstraps.mapValues(\.hint)
-        let monitorPlan = AgentRuntimeRefreshPlan(
+        let planningKimiWireRecordsByTerminalID = Dictionary(
+            uniqueKeysWithValues: allSnapshots.map { ($0.terminalID, kimiWireMonitors[$0.terminalID]?.records() ?? []) }
+        )
+        let planningCodexWireRecordsByTerminalID = Dictionary(
+            uniqueKeysWithValues: allSnapshots.map { ($0.terminalID, codexWireMonitors[$0.terminalID]?.records() ?? []) }
+        )
+        let planningClaudeWireRecordsByTerminalID = Dictionary(
+            uniqueKeysWithValues: allSnapshots.map { ($0.terminalID, claudeWireMonitors[$0.terminalID]?.records() ?? []) }
+        )
+        let planningContext = aiForemanObservedContextBuilder.build(
             snapshots: allSnapshots,
-            attachmentHintsByTerminalID: attachmentHintsByTerminalID
+            previousSnapshotsByTerminalID: aiForemanPreviousSnapshots,
+            lastOutcomesByTerminalID: aiForemanObservedOutcomeTracker.reportsByTerminalID,
+            attachmentHintsByTerminalID: attachmentHintsByTerminalID,
+            kimiWireRecordsByTerminalID: planningKimiWireRecordsByTerminalID,
+            codexWireRecordsByTerminalID: planningCodexWireRecordsByTerminalID,
+            claudeWireRecordsByTerminalID: planningClaudeWireRecordsByTerminalID
         )
-        let monitorEntriesByTerminalID = Dictionary(
-            uniqueKeysWithValues: monitorPlan.entries.map { ($0.snapshot.terminalID, $0) }
-        )
+        let monitorEntriesByTerminalID = planningContext.runtimeEntriesByTerminalID
 
         let kimiTargets: [String: String] = Dictionary(
-            uniqueKeysWithValues: monitorPlan.entries.compactMap { entry in
+            uniqueKeysWithValues: monitorEntriesByTerminalID.values.compactMap { entry in
                 guard case let .kimi(workingDirectory) = entry.monitorTarget else {
                     return nil
                 }
@@ -1690,7 +1702,7 @@ extension AppDelegate {
             }
         )
         let codexTargets: [String: String] = Dictionary(
-            uniqueKeysWithValues: monitorPlan.entries.compactMap { entry in
+            uniqueKeysWithValues: monitorEntriesByTerminalID.values.compactMap { entry in
                 guard case let .codex(workingDirectory) = entry.monitorTarget else {
                     return nil
                 }
@@ -1698,7 +1710,7 @@ extension AppDelegate {
             }
         )
         let claudeTargets: [String: (pid: Int?, workingDirectory: String?)] = Dictionary(
-            uniqueKeysWithValues: monitorPlan.entries.compactMap { entry in
+            uniqueKeysWithValues: monitorEntriesByTerminalID.values.compactMap { entry in
                 switch entry.monitorTarget {
                 case let .claude(pid, workingDirectory):
                     return (entry.snapshot.terminalID, (pid, workingDirectory))

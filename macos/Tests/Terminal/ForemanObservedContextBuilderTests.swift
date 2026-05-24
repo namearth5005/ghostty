@@ -211,6 +211,204 @@ struct ForemanObservedContextBuilderTests {
     }
 
     @Test
+    func managedManualAndNewTabGenericCodexWireStateShareRuntimeEntriesThroughBuilder() {
+        let snapshots = [
+            TerminalSnapshot.makePreview(
+                terminalID: "codex-wire-existing",
+                windowID: "w1",
+                tabID: "t1",
+                title: "shell",
+                cwd: "/tmp/project",
+                isFocused: true,
+                visibleText: "codex",
+                recentScrollbackLines: [],
+                lastInputPreview: nil,
+                foregroundProcessName: nil,
+                cursorIsAtPrompt: true,
+                usingAlternateScreen: true
+            ),
+            TerminalSnapshot.makePreview(
+                terminalID: "codex-wire-new-tab",
+                windowID: "w1",
+                tabID: "t2",
+                title: "nambouchara@host:~",
+                cwd: "/tmp/project",
+                isFocused: false,
+                visibleText: "codex",
+                recentScrollbackLines: [],
+                lastInputPreview: nil,
+                foregroundProcessName: nil,
+                cursorIsAtPrompt: true,
+                usingAlternateScreen: true
+            ),
+            TerminalSnapshot.makePreview(
+                terminalID: "codex-wire-managed",
+                windowID: "w1",
+                tabID: "t3",
+                title: "Codex",
+                cwd: "/tmp/project",
+                isFocused: false,
+                visibleText: "codex",
+                recentScrollbackLines: [],
+                lastInputPreview: nil,
+                foregroundProcessName: nil,
+                cursorIsAtPrompt: true,
+                usingAlternateScreen: true
+            ),
+        ]
+        let wireRecord = try! JSONDecoder().decode(
+            CodexWireRecord.self,
+            from: Data("""
+            {
+              "timestamp": "2026-05-23T00:00:00Z",
+              "type": "event_msg",
+              "payload": {
+                "type": "task_complete",
+                "turn_id": "turn-1",
+                "completed_at": 1714828810,
+                "duration_ms": 9000
+              }
+            }
+            """.utf8)
+        )
+        let codexWireRecordsByTerminalID = Dictionary(
+            uniqueKeysWithValues: snapshots.map { ($0.terminalID, [wireRecord]) }
+        )
+
+        let result = builder.build(
+            snapshots: snapshots,
+            codexWireRecordsByTerminalID: codexWireRecordsByTerminalID
+        )
+        let entries = snapshots.map { try! #require(result.runtimeEntriesByTerminalID[$0.terminalID]) }
+
+        #expect(entries.dropFirst().allSatisfy { $0.detection == entries.first?.detection })
+        #expect(entries.dropFirst().allSatisfy { $0.monitorTarget == entries.first?.monitorTarget })
+        #expect(entries.first?.detection?.identity == .codex)
+        #expect(entries.first?.detection?.state == .blocked)
+        #expect(entries.first?.monitorTarget == .codex(workingDirectory: "/tmp/project"))
+    }
+
+    @Test
+    func builderCarriesRestartFlagsFromPreviousSnapshots() {
+        let previous = TerminalSnapshot.makePreview(
+            terminalID: "codex-turn",
+            windowID: "w1",
+            tabID: "t1",
+            title: "OpenAI Codex",
+            cwd: "/tmp/project",
+            isFocused: true,
+            visibleText: "OpenAI Codex\nWhat should I work on next?\n›",
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessID: 777,
+            foregroundProcessName: "codex",
+            cursorIsAtPrompt: true,
+            usingAlternateScreen: true
+        )
+        let current = TerminalSnapshot.makePreview(
+            terminalID: "codex-turn",
+            windowID: "w1",
+            tabID: "t1",
+            title: "OpenAI Codex",
+            cwd: "/tmp/project",
+            isFocused: true,
+            visibleText: "Working through the request...\nAnalyzing files",
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessID: 777,
+            foregroundProcessName: "codex",
+            cursorIsAtPrompt: false,
+            usingAlternateScreen: true
+        )
+
+        let result = builder.build(
+            snapshots: [current],
+            previousSnapshotsByTerminalID: [current.terminalID: previous]
+        )
+
+        #expect(result.runtimeEntriesByTerminalID[current.terminalID]?.shouldRestartMonitor == true)
+    }
+
+    @Test
+    func managedManualAndNewTabGenericClaudeIdleStateShareRuntimeEntriesThroughBuilder() {
+        let snapshots = [
+            TerminalSnapshot.makePreview(
+                terminalID: "claude-wire-existing",
+                windowID: "w1",
+                tabID: "t1",
+                title: "shell",
+                cwd: "/tmp/project",
+                isFocused: true,
+                visibleText: "claude",
+                recentScrollbackLines: [],
+                lastInputPreview: nil,
+                foregroundProcessName: nil,
+                cursorIsAtPrompt: true,
+                usingAlternateScreen: true
+            ),
+            TerminalSnapshot.makePreview(
+                terminalID: "claude-wire-new-tab",
+                windowID: "w1",
+                tabID: "t2",
+                title: "nambouchara@host:~",
+                cwd: "/tmp/project",
+                isFocused: false,
+                visibleText: "claude",
+                recentScrollbackLines: [],
+                lastInputPreview: nil,
+                foregroundProcessName: nil,
+                cursorIsAtPrompt: true,
+                usingAlternateScreen: true
+            ),
+            TerminalSnapshot.makePreview(
+                terminalID: "claude-wire-managed",
+                windowID: "w1",
+                tabID: "t3",
+                title: "Claude",
+                cwd: "/tmp/project",
+                isFocused: false,
+                visibleText: "claude",
+                recentScrollbackLines: [],
+                lastInputPreview: nil,
+                foregroundProcessName: nil,
+                cursorIsAtPrompt: true,
+                usingAlternateScreen: true
+            ),
+        ]
+        let claudeWireRecordsByTerminalID = Dictionary(
+            uniqueKeysWithValues: snapshots.map {
+                (
+                    $0.terminalID,
+                    [
+                        ClaudeSessionState(
+                            pid: 12345,
+                            sessionId: "session-\($0.terminalID)",
+                            cwd: "/tmp/project",
+                            status: "idle",
+                            updatedAt: 1714828801000,
+                            startedAt: 1714828800000,
+                            version: "2.1.128",
+                            kind: "interactive"
+                        ),
+                    ]
+                )
+            }
+        )
+
+        let result = builder.build(
+            snapshots: snapshots,
+            claudeWireRecordsByTerminalID: claudeWireRecordsByTerminalID
+        )
+        let entries = snapshots.map { try! #require(result.runtimeEntriesByTerminalID[$0.terminalID]) }
+
+        #expect(entries.dropFirst().allSatisfy { $0.detection == entries.first?.detection })
+        #expect(entries.dropFirst().allSatisfy { $0.monitorTarget == entries.first?.monitorTarget })
+        #expect(entries.first?.detection?.identity == .claudeCode)
+        #expect(entries.first?.detection?.state == .blocked)
+        #expect(entries.first?.monitorTarget == .claudeWorkingDirectory("/tmp/project"))
+    }
+
+    @Test
     func managedManualAndNewTabCodexWireCompletionsShareObservedContextWhenSurfaceIsGeneric() {
         let snapshots = [
             TerminalSnapshot.makePreview(

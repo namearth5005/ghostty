@@ -4,6 +4,7 @@ struct ForemanObservedContextBuilder {
     struct Result: Equatable, Sendable {
         let context: ForemanObservedTerminalContext
         let understandingsByTerminalID: [String: TerminalUnderstanding]
+        let runtimeEntriesByTerminalID: [String: AgentRuntimeRefreshPlan.Entry]
     }
 
     private let understandingEngine = TerminalUnderstandingEngine()
@@ -41,13 +42,17 @@ struct ForemanObservedContextBuilder {
         let understandingsByTerminalID = Dictionary(
             uniqueKeysWithValues: understandings.map { ($0.terminalID, $0) }
         )
+        let runtimeEntriesByTerminalID = Dictionary(
+            uniqueKeysWithValues: runtimePlan.entries.map { ($0.snapshot.terminalID, $0) }
+        )
 
         return Result(
             context: ForemanObservedTerminalContext(
                 terminals: snapshots,
                 understandings: understandings
             ),
-            understandingsByTerminalID: understandingsByTerminalID
+            understandingsByTerminalID: understandingsByTerminalID,
+            runtimeEntriesByTerminalID: runtimeEntriesByTerminalID
         )
     }
 }
