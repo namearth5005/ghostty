@@ -47,6 +47,25 @@ struct TerminalUnderstandingTests {
         )
     }
 
+    private func kimiQuestionRecord(question: String) -> KimiWireRecord {
+        KimiWireRecord(
+            timestamp: 1,
+            message: KimiWireMessage(
+                type: "QuestionRequest",
+                payload: KimiWirePayload(
+                    questions: [
+                        QuestionItem(
+                            question: question,
+                            header: nil,
+                            options: nil,
+                            multi_select: nil
+                        ),
+                    ]
+                )
+            )
+        )
+    }
+
     @Test
     func engineKeepsKimiIdentityWhenOutputMentionsClaudeCode() {
         let engine = TerminalUnderstandingEngine()
@@ -856,6 +875,253 @@ struct TerminalUnderstandingTests {
             "Let Foreman explain the requested action",
         ])
         #expect(existingUnderstanding.suggestedNextActions.map(\.isRecommended) == [true, false])
+    }
+
+    @Test
+    func managedManualAndNewTabCodexRunningToReplyTransitionSharesUnderstandingAndSuggestions() {
+        let engine = TerminalUnderstandingEngine()
+        let cases: [(terminalID: String, title: String, isFocused: Bool, processID: Int)] = [
+            ("codex-transition-existing", "shell", true, 1_901),
+            ("codex-transition-new-tab", "nambouchara@Nams-MacBook-Pro:~", false, 1_902),
+            ("codex-transition-managed", "OpenAI Codex", false, 1_903),
+        ]
+
+        var previousUnderstandings: [InteractiveParitySignature] = []
+        var currentUnderstandings: [InteractiveParitySignature] = []
+
+        for entry in cases {
+            let previous = TerminalSnapshot.makePreview(
+                terminalID: entry.terminalID,
+                windowID: "win-1",
+                tabID: "tab-\(entry.processID)",
+                title: entry.title,
+                cwd: "/tmp/project",
+                isFocused: entry.isFocused,
+                visibleText: "• Working (0s • esc to interrupt)",
+                recentScrollbackLines: [],
+                lastInputPreview: nil,
+                foregroundProcessID: entry.processID,
+                foregroundProcessName: "codex",
+                cursorIsAtPrompt: false,
+                usingAlternateScreen: true
+            )
+            let current = TerminalSnapshot.makePreview(
+                terminalID: entry.terminalID,
+                windowID: "win-1",
+                tabID: "tab-\(entry.processID)",
+                title: entry.title,
+                cwd: "/tmp/project",
+                isFocused: entry.isFocused,
+                visibleText: """
+                • Hey. What do you need help with?
+
+                ›
+                """,
+                recentScrollbackLines: [],
+                lastInputPreview: nil,
+                foregroundProcessID: entry.processID,
+                foregroundProcessName: "codex",
+                cursorIsAtPrompt: true,
+                usingAlternateScreen: true
+            )
+
+            let previousUnderstanding = engine.understand(current: previous, previous: nil, lastOutcome: nil)
+            let currentUnderstanding = engine.understand(current: current, previous: previous, lastOutcome: nil)
+
+            previousUnderstandings.append(interactiveParitySignature(previousUnderstanding))
+            currentUnderstandings.append(interactiveParitySignature(currentUnderstanding))
+        }
+
+        #expect(previousUnderstandings.dropFirst().allSatisfy { $0 == previousUnderstandings.first })
+        #expect(currentUnderstandings.dropFirst().allSatisfy { $0 == currentUnderstandings.first })
+        #expect(previousUnderstandings.first?.state == .running)
+        #expect(previousUnderstandings.first?.interactionState == .running)
+        #expect(currentUnderstandings.first?.state == .waiting)
+        #expect(currentUnderstandings.first?.interactionState == .waitingText)
+        #expect(currentUnderstandings.first?.interactionContext == .waitingText(question: "• Hey. What do you need help with?"))
+        #expect(currentUnderstandings.first?.suggestedNextActions == [
+            .init(
+                title: "Reply to the agent",
+                command: nil,
+                reason: "• Hey. What do you need help with?",
+                isRecommended: true
+            )
+        ])
+    }
+
+    @Test
+    func managedManualAndNewTabKimiWelcomeToWireQuestionTransitionSharesUnderstandingAndSuggestions() {
+        let engine = TerminalUnderstandingEngine()
+        let question = "What should I do here?"
+        let cases: [(terminalID: String, title: String, isFocused: Bool, processID: Int)] = [
+            ("kimi-transition-existing", "shell", true, 2_001),
+            ("kimi-transition-new-tab", "nambouchara@Nams-MacBook-Pro:~", false, 2_002),
+            ("kimi-transition-managed", "Kimi Code", false, 2_003),
+        ]
+
+        var previousUnderstandings: [InteractiveParitySignature] = []
+        var currentUnderstandings: [InteractiveParitySignature] = []
+
+        for entry in cases {
+            let previous = TerminalSnapshot.makePreview(
+                terminalID: entry.terminalID,
+                windowID: "win-2",
+                tabID: "tab-\(entry.processID)",
+                title: entry.title,
+                cwd: "/tmp/project",
+                isFocused: entry.isFocused,
+                visibleText: """
+                Welcome to Kimi Code CLI!
+                Send /help for help information.
+
+                Directory: /tmp/project
+                Session: abc123
+                Model: Kimi-k2.6
+
+                ── input ──────────────────────────────────────────────
+                agent (Kimi-k2.6 ●)  /tmp/project
+                """,
+                recentScrollbackLines: [],
+                lastInputPreview: nil,
+                foregroundProcessID: entry.processID,
+                foregroundProcessName: "kimi",
+                cursorIsAtPrompt: true,
+                usingAlternateScreen: true
+            )
+            let current = TerminalSnapshot.makePreview(
+                terminalID: entry.terminalID,
+                windowID: "win-2",
+                tabID: "tab-\(entry.processID)",
+                title: entry.title,
+                cwd: "/tmp/project",
+                isFocused: entry.isFocused,
+                visibleText: """
+                ─ input ─────────────────────────────────────────────────────────
+
+                agent (Kimi-k2.6 ●)  ~/speed2  ctrl-x: toggle mode | shift-tab: plan mode
+                context: 5.4% (14.3k/262.1k)
+                """,
+                recentScrollbackLines: [],
+                lastInputPreview: nil,
+                foregroundProcessID: entry.processID,
+                foregroundProcessName: "kimi",
+                cursorIsAtPrompt: true,
+                usingAlternateScreen: true
+            )
+
+            let previousUnderstanding = engine.understand(current: previous, previous: nil, lastOutcome: nil)
+            let currentUnderstanding = engine.understand(
+                current: current,
+                previous: previous,
+                lastOutcome: nil,
+                wireRecords: [kimiQuestionRecord(question: question)]
+            )
+
+            previousUnderstandings.append(interactiveParitySignature(previousUnderstanding))
+            currentUnderstandings.append(interactiveParitySignature(currentUnderstanding))
+        }
+
+        #expect(previousUnderstandings.dropFirst().allSatisfy { $0 == previousUnderstandings.first })
+        #expect(currentUnderstandings.dropFirst().allSatisfy { $0 == currentUnderstandings.first })
+        #expect(previousUnderstandings.first?.state == .waiting)
+        #expect(previousUnderstandings.first?.interactionState == .waitingText)
+        #expect(previousUnderstandings.first?.interactionContext == .waitingText(question: nil))
+        #expect(currentUnderstandings.first?.state == .waiting)
+        #expect(currentUnderstandings.first?.interactionState == .waitingText)
+        #expect(currentUnderstandings.first?.lastMeaningfulEvent == question)
+        #expect(currentUnderstandings.first?.interactionContext == .waitingText(question: question))
+        #expect(currentUnderstandings.first?.suggestedNextActions == [
+            .init(
+                title: "Reply to the agent",
+                command: nil,
+                reason: question,
+                isRecommended: true
+            )
+        ])
+    }
+
+    @Test
+    func managedManualAndNewTabClaudeRunningToTrustPromptTransitionSharesUnderstandingAndSuggestions() {
+        let engine = TerminalUnderstandingEngine()
+        let trustPrompt = "Quick safety check: Is this a project you created or one you trust?"
+        let expectedContext: AgentInteractionContext = .waitingChoice(
+            question: trustPrompt,
+            options: ["Yes, I trust this folder", "No, exit"]
+        )
+        let cases: [(terminalID: String, title: String, isFocused: Bool, processID: Int)] = [
+            ("claude-transition-existing", "shell", true, 3_001),
+            ("claude-transition-new-tab", "nambouchara@Nams-MacBook-Pro:~", false, 3_002),
+            ("claude-transition-managed", "Claude Code", false, 3_003),
+        ]
+
+        var previousUnderstandings: [InteractiveParitySignature] = []
+        var currentUnderstandings: [InteractiveParitySignature] = []
+
+        for entry in cases {
+            let previous = TerminalSnapshot.makePreview(
+                terminalID: entry.terminalID,
+                windowID: "win-3",
+                tabID: "tab-\(entry.processID)",
+                title: entry.title,
+                cwd: "/Users/nambouchara",
+                isFocused: entry.isFocused,
+                visibleText: "Thinking...",
+                recentScrollbackLines: [],
+                lastInputPreview: nil,
+                foregroundProcessID: entry.processID,
+                foregroundProcessName: "claude",
+                cursorIsAtPrompt: false,
+                usingAlternateScreen: true
+            )
+            let current = TerminalSnapshot.makePreview(
+                terminalID: entry.terminalID,
+                windowID: "win-3",
+                tabID: "tab-\(entry.processID)",
+                title: entry.title,
+                cwd: "/Users/nambouchara",
+                isFocused: entry.isFocused,
+                visibleText: """
+                Accessing workspace:
+
+                /Users/nambouchara
+
+                Quick safety check: Is this a project you created or one you trust?
+
+                Security guide
+
+                 ❯ 1. Yes, I trust this folder
+                   2. No, exit
+
+                 Enter to confirm · Esc to cancel
+                """,
+                recentScrollbackLines: [],
+                lastInputPreview: nil,
+                foregroundProcessID: entry.processID,
+                foregroundProcessName: "claude",
+                cursorIsAtPrompt: true,
+                usingAlternateScreen: true
+            )
+
+            let previousUnderstanding = engine.understand(current: previous, previous: nil, lastOutcome: nil)
+            let currentUnderstanding = engine.understand(current: current, previous: previous, lastOutcome: nil)
+
+            previousUnderstandings.append(interactiveParitySignature(previousUnderstanding))
+            currentUnderstandings.append(interactiveParitySignature(currentUnderstanding))
+        }
+
+        #expect(previousUnderstandings.dropFirst().allSatisfy { $0 == previousUnderstandings.first })
+        #expect(currentUnderstandings.dropFirst().allSatisfy { $0 == currentUnderstandings.first })
+        #expect(previousUnderstandings.first?.state == .running)
+        #expect(previousUnderstandings.first?.interactionState == .running)
+        #expect(currentUnderstandings.first?.state == .waiting)
+        #expect(currentUnderstandings.first?.interactionState == .waitingChoice)
+        #expect(currentUnderstandings.first?.lastMeaningfulEvent == trustPrompt)
+        #expect(currentUnderstandings.first?.interactionContext == expectedContext)
+        #expect(currentUnderstandings.first?.suggestedNextActions.map(\.title) == [
+            "Choose one of the agent's options",
+            "Let Foreman explain the options",
+        ])
+        #expect(currentUnderstandings.first?.suggestedNextActions.map(\.isRecommended) == [true, false])
     }
 
     @Test
