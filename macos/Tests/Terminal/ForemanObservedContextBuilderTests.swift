@@ -166,7 +166,7 @@ struct ForemanObservedContextBuilderTests {
     }
 
     @Test
-    func managedManualAndNewTabFreshSuccessOutcomesShareObservedContext() {
+    func freshSuccessOutcomesPreserveSummaryAcrossLaunchPaths() {
         let snapshots = [
             outcomeSummarySnapshot(
                 terminalID: "success-existing",
@@ -201,13 +201,16 @@ struct ForemanObservedContextBuilderTests {
             snapshots: snapshots,
             lastOutcomesByTerminalID: outcomesByTerminalID
         )
-        let signatures = result.context.understandings.map(signature)
+        let understandings = result.context.understandings
 
-        #expect(signatures.count == 3)
-        #expect(signatures.dropFirst().allSatisfy { $0 == signatures.first })
-        #expect(signatures.first?.state == .succeeded)
-        #expect(signatures.first?.lastMeaningfulEvent == "Tests finished successfully.")
-        #expect(signatures.first?.shortExplanation.contains("Tests finished successfully.") == true)
+        #expect(understandings.count == 3)
+        #expect(understandings.allSatisfy { $0.state == .succeeded })
+        #expect(understandings.allSatisfy { $0.lastMeaningfulEvent == "Tests finished successfully." })
+        #expect(understandings.allSatisfy { $0.shortExplanation.contains("Tests finished successfully.") })
+        #expect(result.understandingsByTerminalID["success-existing"]?.agentIdentity == AgentIdentity.none)
+        #expect(result.understandingsByTerminalID["success-new-tab"]?.agentIdentity == AgentIdentity.none)
+        #expect(result.understandingsByTerminalID["success-managed"]?.agentIdentity == .codex)
+        #expect(result.understandingsByTerminalID["success-managed"]?.agentInteractionState == .completed)
     }
 
     @Test
@@ -516,8 +519,18 @@ struct ForemanObservedContextBuilderTests {
         let firstEntry = try #require(entries.first)
         #expect(signatures.dropFirst().allSatisfy { $0 == firstSignature })
         #expect(entries.dropFirst().allSatisfy { $0.detection == firstEntry.detection })
-        #expect(entries.dropFirst().allSatisfy { $0.monitorTarget == firstEntry.monitorTarget })
         #expect(entries.dropFirst().allSatisfy { $0.shouldRestartMonitor == firstEntry.shouldRestartMonitor })
+        #expect(
+            entries.allSatisfy { entry in
+                guard let pid = entry.snapshot.runtime.foregroundProcessID else {
+                    return false
+                }
+                return entry.monitorTarget == .claude(
+                    pid: pid,
+                    workingDirectory: "/Users/nambouchara"
+                )
+            }
+        )
         #expect(firstSignature.agentIdentity == .claudeCode)
         #expect(firstSignature.interactionState == .waitingChoice)
         #expect(firstSignature.lastMeaningfulEvent == "Quick safety check: Is this a project you created or one you trust?")

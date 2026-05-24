@@ -203,6 +203,43 @@ struct AgentRuntimeDetectorTests {
     }
 
     @Test
+    func attachedWireContextDoesNotOverrideKnownShellForeground() {
+        let snapshot = TerminalSnapshot.makePreview(
+            terminalID: "kimi-shell",
+            windowID: "win-1",
+            tabID: "tab-1",
+            title: "shell",
+            cwd: "/tmp/project",
+            isFocused: true,
+            visibleText: "git push origin main",
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessName: "bash",
+            cursorIsAtPrompt: true,
+            usingAlternateScreen: false
+        )
+        let wireRecord = KimiWireRecord(
+            timestamp: 1,
+            message: KimiWireMessage(
+                type: "ApprovalRequest",
+                payload: KimiWirePayload(
+                    id: "req-1",
+                    sender: "shell",
+                    action: "execute",
+                    description: "Run shell command: git push origin main"
+                )
+            )
+        )
+
+        #expect(
+            detector.detect(
+                current: snapshot,
+                kimiWireRecords: [wireRecord]
+            ) == nil
+        )
+    }
+
+    @Test
     func codexQuestionPromptMapsToBlocked() {
         let snapshot = TerminalSnapshot.makePreview(
             terminalID: "term-1",

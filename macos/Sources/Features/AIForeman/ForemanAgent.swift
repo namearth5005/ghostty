@@ -45,7 +45,6 @@ actor ForemanAgent {
     ) {
         self.captureSnapshots = captureSnapshots
         self.captureObservedContext = captureObservedContext
-        lastOutcome = nil
         pauseState = .none
         previousSnapshotsByTerminalID = [:]
         previousUnderstandings = []

@@ -28,12 +28,16 @@ struct AgentRuntimeDetector {
         codexWireRecords: [CodexWireRecord] = [],
         claudeWireRecords: [ClaudeSessionState] = []
     ) -> Detection? {
-        guard let identity = identityDetector.identity(for: current) ??
-            inferredIdentityFromAttachedContext(
+        let snapshotIdentity = identityDetector.identity(for: current)
+        let attachedContextIdentity = current.runtime.foregroundProcessName == nil
+            ? inferredIdentityFromAttachedContext(
                 kimiWireRecords: kimiWireRecords,
                 codexWireRecords: codexWireRecords,
                 claudeWireRecords: claudeWireRecords
-            ) else {
+            )
+            : nil
+
+        guard let identity = snapshotIdentity ?? attachedContextIdentity else {
             return nil
         }
 

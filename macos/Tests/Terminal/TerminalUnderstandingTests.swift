@@ -1118,8 +1118,8 @@ struct TerminalUnderstandingTests {
         #expect(currentUnderstandings.first?.lastMeaningfulEvent == trustPrompt)
         #expect(currentUnderstandings.first?.interactionContext == expectedContext)
         #expect(currentUnderstandings.first?.suggestedNextActions.map(\.title) == [
-            "Choose one of the agent's options",
-            "Let Foreman explain the options",
+            "Inspect the available choices",
+            "Ask Foreman to summarize the options",
         ])
         #expect(currentUnderstandings.first?.suggestedNextActions.map(\.isRecommended) == [true, false])
     }

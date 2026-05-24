@@ -984,8 +984,15 @@ struct AgentRuntimeRefreshPlanTests {
         #expect(firstCodex.shouldRestartMonitor == false)
 
         #expect(claudeEntries.dropFirst().allSatisfy { $0.detection == firstClaude.detection })
-        #expect(claudeEntries.dropFirst().allSatisfy { $0.monitorTarget == firstClaude.monitorTarget })
         #expect(claudeEntries.dropFirst().allSatisfy { $0.shouldRestartMonitor == firstClaude.shouldRestartMonitor })
+        #expect(
+            zip(claudeEntries, claudeCases).allSatisfy { entry, testCase in
+                entry.monitorTarget == .claude(
+                    pid: testCase.pid,
+                    workingDirectory: "/Users/nambouchara"
+                )
+            }
+        )
         #expect(firstClaude.detection?.identity == .claudeCode)
         #expect(firstClaude.detection?.state == .idle)
         #expect(firstClaude.monitorTarget == .claude(pid: 3101, workingDirectory: "/Users/nambouchara"))
