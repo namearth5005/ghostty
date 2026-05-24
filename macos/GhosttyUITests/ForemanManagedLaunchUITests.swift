@@ -15,6 +15,9 @@ final class ForemanManagedLaunchUITests: GhosttyCustomConfigCase {
             ProcessInfo.processInfo.environment["GHOSTTY_RUN_FOREMAN_MANAGED_LAUNCH_UI_TESTS"] == "1",
             "Managed-launch UI harness is opt-in because native macOS UI automation is flaky in CI-like runs."
         )
+        // For live host-side checks outside XCTest, prefer the sibling
+        // `foreman-managed-launch-manual.sh` launcher so the current build path
+        // is used instead of whichever stale debug bundle Launch Services finds.
 
         try updateConfig(
             """
