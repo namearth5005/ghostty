@@ -167,25 +167,20 @@ class BaseTerminalController: NSWindowController,
             guard let self else { return }
             (NSApp.delegate as? AppDelegate)?.stopForemanAgent(store: self.foremanSidebarStore)
         }
-        foremanSidebarStore.onApproveAction = { [weak self] in
-            guard let self else { return }
+        foremanSidebarStore.onApproveAction = {
             (NSApp.delegate as? AppDelegate)?.approveForemanAction()
         }
-        foremanSidebarStore.onSkipAction = { [weak self] in
-            guard let self else { return }
+        foremanSidebarStore.onSkipAction = {
             (NSApp.delegate as? AppDelegate)?.skipForemanAction()
         }
-        foremanSidebarStore.onLaunchAgent = { [weak self] identity in
-            guard let self else { return }
-            let request = Self.makeManagedAgentLaunchRequest(
-                identity: identity,
-                workingDirectory: self.focusedSurface?.pwd,
-                sourceWindowNumber: self.window?.windowNumber
-            )
-            _ = (NSApp.delegate as? AppDelegate)?.launchManagedAgent(request)
-        }
-        foremanSidebarStore.onExecuteSuggestion = { [weak self] terminalID, command in
-            guard let self else { return }
+        foremanSidebarStore.onLaunchAgent = Self.makeManagedAgentLaunchHandler(
+            currentWorkingDirectory: { [weak self] in self?.focusedSurface?.pwd },
+            currentSourceWindowNumber: { [weak self] in self?.window?.windowNumber },
+            launchManagedAgent: { request in
+                (NSApp.delegate as? AppDelegate)?.launchManagedAgent(request)
+            }
+        )
+        foremanSidebarStore.onExecuteSuggestion = { terminalID, command in
             (NSApp.delegate as? AppDelegate)?.executeSuggestedAction(
                 terminalID: terminalID,
                 command: command
@@ -320,6 +315,21 @@ class BaseTerminalController: NSWindowController,
             initialPrompt: initialPrompt,
             location: location
         )
+    }
+
+    static func makeManagedAgentLaunchHandler(
+        currentWorkingDirectory: @escaping () -> String?,
+        currentSourceWindowNumber: @escaping () -> Int?,
+        launchManagedAgent: @escaping (ManagedAgentLaunchRequest) -> String?
+    ) -> (AgentIdentity) -> Void {
+        { identity in
+            let request = Self.makeManagedAgentLaunchRequest(
+                identity: identity,
+                workingDirectory: currentWorkingDirectory(),
+                sourceWindowNumber: currentSourceWindowNumber()
+            )
+            _ = launchManagedAgent(request)
+        }
     }
 
     // MARK: Methods

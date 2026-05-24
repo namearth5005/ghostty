@@ -61,4 +61,40 @@ struct BaseTerminalControllerTests {
         #expect(request.initialPrompt == "review this branch")
         #expect(request.location == .window)
     }
+
+    @Test
+    func managedAgentLaunchHandlerUsesCurrentContextWhenInvoked() {
+        var currentWorkingDirectory: String? = "/tmp/project-one"
+        var currentWindowNumber: Int? = 42
+        var capturedRequests: [ManagedAgentLaunchRequest] = []
+
+        let handler = BaseTerminalController.makeManagedAgentLaunchHandler(
+            currentWorkingDirectory: { currentWorkingDirectory },
+            currentSourceWindowNumber: { currentWindowNumber },
+            launchManagedAgent: { request in
+                capturedRequests.append(request)
+                return "captured-\(request.identity.rawValue)"
+            }
+        )
+
+        handler(.codex)
+
+        currentWorkingDirectory = "/tmp/project-two"
+        currentWindowNumber = 43
+
+        handler(.kimi)
+
+        #expect(capturedRequests == [
+            ManagedAgentLaunchRequest(
+                identity: .codex,
+                workingDirectory: "/tmp/project-one",
+                sourceWindowNumber: 42
+            ),
+            ManagedAgentLaunchRequest(
+                identity: .kimi,
+                workingDirectory: "/tmp/project-two",
+                sourceWindowNumber: 43
+            ),
+        ])
+    }
 }
