@@ -284,4 +284,150 @@ struct AgentMeaningDetectorTests {
         #expect(existingDetection?.interactionState == .waitingChoice)
         #expect(existingDetection?.runtimeState == .blocked)
     }
+
+    @Test
+    func codexPromptAppearingAfterWorkingTransitionsFromRunningToWaitingText() {
+        let previous = TerminalSnapshot.makePreview(
+            terminalID: "codex-transition",
+            windowID: "win-1",
+            tabID: "tab-1",
+            title: "OpenAI Codex",
+            cwd: "/tmp/project",
+            isFocused: true,
+            visibleText: "• Working (0s • esc to interrupt)",
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessName: "codex",
+            cursorIsAtPrompt: false,
+            usingAlternateScreen: true
+        )
+        let current = TerminalSnapshot.makePreview(
+            terminalID: "codex-transition",
+            windowID: "win-1",
+            tabID: "tab-1",
+            title: "OpenAI Codex",
+            cwd: "/tmp/project",
+            isFocused: true,
+            visibleText: """
+            • Hello. What do you want to work on in ghostty?
+
+            ›
+            """,
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessName: "codex",
+            cursorIsAtPrompt: true,
+            usingAlternateScreen: true
+        )
+
+        let detection = detector.detect(
+            current: current,
+            previous: previous,
+            lastOutcome: nil,
+            lastEvent: "• Hello. What do you want to work on in ghostty?"
+        )
+
+        #expect(detection?.identity == .codex)
+        #expect(detection?.interactionState == .waitingText)
+        #expect(detection?.runtimeState == .blocked)
+        #expect(detection?.context == .waitingText(question: "• Hello. What do you want to work on in ghostty?"))
+    }
+
+    @Test
+    func resolvedInteractiveSurfacesTransitionBackToIdleMeaningAcrossCodexAndClaude() {
+        let codexPrevious = TerminalSnapshot.makePreview(
+            terminalID: "codex-idle-transition",
+            windowID: "win-1",
+            tabID: "tab-1",
+            title: "OpenAI Codex",
+            cwd: "/tmp/project",
+            isFocused: true,
+            visibleText: """
+            • Hello. What do you want to work on in ghostty?
+
+            ›
+            """,
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessName: "codex",
+            cursorIsAtPrompt: true,
+            usingAlternateScreen: true
+        )
+        let codexCurrent = TerminalSnapshot.makePreview(
+            terminalID: "codex-idle-transition",
+            windowID: "win-1",
+            tabID: "tab-1",
+            title: "OpenAI Codex",
+            cwd: "/tmp/project",
+            isFocused: true,
+            visibleText: "nambouchara@host ghostty % ",
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessName: "codex",
+            cursorIsAtPrompt: true,
+            usingAlternateScreen: false
+        )
+        let claudePrevious = TerminalSnapshot.makePreview(
+            terminalID: "claude-idle-transition",
+            windowID: "win-2",
+            tabID: "tab-2",
+            title: "Claude Code",
+            cwd: "/Users/nambouchara",
+            isFocused: true,
+            visibleText: """
+            Accessing workspace:
+
+            /Users/nambouchara
+
+            Quick safety check: Is this a project you created or one you trust?
+
+             ❯ 1. Yes, I trust this folder
+               2. No, exit
+
+             Enter to confirm · Esc to cancel
+            """,
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessName: "claude",
+            cursorIsAtPrompt: true,
+            usingAlternateScreen: true
+        )
+        let claudeCurrent = TerminalSnapshot.makePreview(
+            terminalID: "claude-idle-transition",
+            windowID: "win-2",
+            tabID: "tab-2",
+            title: "Claude Code",
+            cwd: "/Users/nambouchara",
+            isFocused: true,
+            visibleText: "nambouchara@host ghostty % ",
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessName: "claude",
+            cursorIsAtPrompt: true,
+            usingAlternateScreen: false
+        )
+
+        let codexDetection = detector.detect(
+            current: codexCurrent,
+            previous: codexPrevious,
+            lastOutcome: nil,
+            lastEvent: "nambouchara@host ghostty % "
+        )
+        let claudeDetection = detector.detect(
+            current: claudeCurrent,
+            previous: claudePrevious,
+            lastOutcome: nil,
+            lastEvent: "nambouchara@host ghostty % "
+        )
+
+        #expect(codexDetection?.identity == .codex)
+        #expect(codexDetection?.interactionState == .unknown)
+        #expect(codexDetection?.runtimeState == .idle)
+        #expect(codexDetection?.context == AgentInteractionContext.none)
+
+        #expect(claudeDetection?.identity == .claudeCode)
+        #expect(claudeDetection?.interactionState == .unknown)
+        #expect(claudeDetection?.runtimeState == .idle)
+        #expect(claudeDetection?.context == AgentInteractionContext.none)
+    }
 }
