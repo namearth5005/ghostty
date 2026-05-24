@@ -166,6 +166,177 @@ struct ForemanObservedContextBuilderTests {
     }
 
     @Test
+    func managedManualAndNewTabCodexWireCompletionsShareObservedContextWhenSurfaceIsGeneric() {
+        let snapshots = [
+            TerminalSnapshot.makePreview(
+                terminalID: "codex-wire-existing",
+                windowID: "win-1",
+                tabID: "tab-1",
+                title: "shell",
+                cwd: "/tmp/project",
+                isFocused: true,
+                visibleText: "codex",
+                recentScrollbackLines: [],
+                lastInputPreview: nil,
+                foregroundProcessName: nil,
+                cursorIsAtPrompt: true,
+                usingAlternateScreen: true
+            ),
+            TerminalSnapshot.makePreview(
+                terminalID: "codex-wire-new-tab",
+                windowID: "win-1",
+                tabID: "tab-2",
+                title: "nambouchara@Nams-MacBook-Pro:~",
+                cwd: "/tmp/project",
+                isFocused: false,
+                visibleText: "codex",
+                recentScrollbackLines: [],
+                lastInputPreview: nil,
+                foregroundProcessName: nil,
+                cursorIsAtPrompt: true,
+                usingAlternateScreen: true
+            ),
+            TerminalSnapshot.makePreview(
+                terminalID: "codex-wire-managed",
+                windowID: "win-1",
+                tabID: "tab-3",
+                title: "Codex",
+                cwd: "/tmp/project",
+                isFocused: false,
+                visibleText: "codex",
+                recentScrollbackLines: [],
+                lastInputPreview: nil,
+                foregroundProcessName: nil,
+                cursorIsAtPrompt: true,
+                usingAlternateScreen: true
+            ),
+        ]
+        let codexWireRecordsByTerminalID = Dictionary(
+            uniqueKeysWithValues: snapshots.map {
+                (
+                    $0.terminalID,
+                    [
+                        CodexWireRecord(
+                            timestamp: "2026-05-04T12:00:10Z",
+                            type: "event_msg",
+                            payload: CodexWirePayload(
+                                id: nil,
+                                cwd: "/tmp/project",
+                                originator: nil,
+                                cliVersion: nil,
+                                type: "task_complete",
+                                turnId: "turn-1",
+                                startedAt: nil,
+                                completedAt: 1714828810,
+                                durationMs: 9000,
+                                reason: nil,
+                                lastAgentMessage: nil,
+                                callId: nil,
+                                processId: nil,
+                                command: nil,
+                                status: nil,
+                                message: nil,
+                                phase: nil
+                            ),
+                        ),
+                    ]
+                )
+            }
+        )
+
+        let result = builder.build(
+            snapshots: snapshots,
+            codexWireRecordsByTerminalID: codexWireRecordsByTerminalID
+        )
+        let signatures = result.context.understandings.map(signature)
+
+        #expect(signatures.count == 3)
+        #expect(signatures.dropFirst().allSatisfy { $0 == signatures.first })
+        #expect(signatures.first?.agentIdentity == .codex)
+        #expect(signatures.first?.interactionState == .waitingText)
+        #expect(signatures.first?.interactionContext == .waitingText(question: nil))
+    }
+
+    @Test
+    func managedManualAndNewTabClaudeIdleSessionsShareObservedContextWhenSurfaceIsGeneric() {
+        let snapshots = [
+            TerminalSnapshot.makePreview(
+                terminalID: "claude-wire-existing",
+                windowID: "win-1",
+                tabID: "tab-1",
+                title: "shell",
+                cwd: "/tmp/project",
+                isFocused: true,
+                visibleText: "claude",
+                recentScrollbackLines: [],
+                lastInputPreview: nil,
+                foregroundProcessName: nil,
+                cursorIsAtPrompt: true,
+                usingAlternateScreen: true
+            ),
+            TerminalSnapshot.makePreview(
+                terminalID: "claude-wire-new-tab",
+                windowID: "win-1",
+                tabID: "tab-2",
+                title: "nambouchara@Nams-MacBook-Pro:~",
+                cwd: "/tmp/project",
+                isFocused: false,
+                visibleText: "claude",
+                recentScrollbackLines: [],
+                lastInputPreview: nil,
+                foregroundProcessName: nil,
+                cursorIsAtPrompt: true,
+                usingAlternateScreen: true
+            ),
+            TerminalSnapshot.makePreview(
+                terminalID: "claude-wire-managed",
+                windowID: "win-1",
+                tabID: "tab-3",
+                title: "Claude",
+                cwd: "/tmp/project",
+                isFocused: false,
+                visibleText: "claude",
+                recentScrollbackLines: [],
+                lastInputPreview: nil,
+                foregroundProcessName: nil,
+                cursorIsAtPrompt: true,
+                usingAlternateScreen: true
+            ),
+        ]
+        let claudeWireRecordsByTerminalID = Dictionary(
+            uniqueKeysWithValues: snapshots.map {
+                (
+                    $0.terminalID,
+                    [
+                        ClaudeSessionState(
+                            pid: 12345,
+                            sessionId: "session-\($0.terminalID)",
+                            cwd: "/tmp/project",
+                            status: "idle",
+                            updatedAt: 1714828801000,
+                            startedAt: 1714828800000,
+                            version: "2.1.128",
+                            kind: "interactive"
+                        ),
+                    ]
+                )
+            }
+        )
+
+        let result = builder.build(
+            snapshots: snapshots,
+            claudeWireRecordsByTerminalID: claudeWireRecordsByTerminalID
+        )
+        let signatures = result.context.understandings.map(signature)
+
+        #expect(signatures.count == 3)
+        #expect(signatures.dropFirst().allSatisfy { $0 == signatures.first })
+        #expect(signatures.first?.agentIdentity == .claudeCode)
+        #expect(signatures.first?.interactionState == .waitingText)
+        #expect(signatures.first?.interactionContext == .waitingText(question: nil))
+    }
+
+    @Test
     func managedManualAndNewTabClaudeApprovalStatusesShareObservedContext() {
         let snapshots = [
             TerminalSnapshot.makePreview(
