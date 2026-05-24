@@ -751,6 +751,95 @@ struct AgentStateMonitorTests {
     }
 
     @Test
+    func managedManualAndNewTabCodexRunningToReplyTransitionFiresEquivalentAttentionEvents() {
+        let monitor = AgentStateMonitor()
+        var capturedEvents: [AgentNeedsAttentionEvent] = []
+        monitor.onEvent = { event in
+            capturedEvents.append(event)
+        }
+
+        let runningStates = [
+            TerminalUnderstanding.preview(
+                terminalID: "codex-transition-manual",
+                state: .running,
+                shortExplanation: "Codex is working.",
+                lastMeaningfulEvent: "Working on the next step",
+                importantDetails: ["Working on the next step"],
+                suggestedNextActions: [],
+                agentIdentity: .codex,
+                agentInteractionState: .running,
+                agentInteractionContext: .running(stepDescription: "Working on the next step")
+            ),
+            TerminalUnderstanding.preview(
+                terminalID: "codex-transition-new-tab",
+                state: .running,
+                shortExplanation: "Codex is working.",
+                lastMeaningfulEvent: "Working on the next step",
+                importantDetails: ["Working on the next step"],
+                suggestedNextActions: [],
+                agentIdentity: .codex,
+                agentInteractionState: .running,
+                agentInteractionContext: .running(stepDescription: "Working on the next step")
+            ),
+            TerminalUnderstanding.preview(
+                terminalID: "codex-transition-managed",
+                state: .running,
+                shortExplanation: "Codex is working.",
+                lastMeaningfulEvent: "Working on the next step",
+                importantDetails: ["Working on the next step"],
+                suggestedNextActions: [],
+                agentIdentity: .codex,
+                agentInteractionState: .running,
+                agentInteractionContext: .running(stepDescription: "Working on the next step")
+            ),
+        ]
+        monitor.observe(understandings: runningStates)
+        #expect(capturedEvents.isEmpty)
+
+        let waitingStates = [
+            TerminalUnderstanding.preview(
+                terminalID: "codex-transition-manual",
+                state: .waiting,
+                shortExplanation: "Codex is waiting for your response.",
+                lastMeaningfulEvent: "What should I work on next?",
+                importantDetails: ["What should I work on next?"],
+                suggestedNextActions: [],
+                agentIdentity: .codex,
+                agentInteractionState: .waitingText,
+                agentInteractionContext: .waitingText(question: "What should I work on next?")
+            ),
+            TerminalUnderstanding.preview(
+                terminalID: "codex-transition-new-tab",
+                state: .waiting,
+                shortExplanation: "Codex is waiting for your response.",
+                lastMeaningfulEvent: "What should I work on next?",
+                importantDetails: ["What should I work on next?"],
+                suggestedNextActions: [],
+                agentIdentity: .codex,
+                agentInteractionState: .waitingText,
+                agentInteractionContext: .waitingText(question: "What should I work on next?")
+            ),
+            TerminalUnderstanding.preview(
+                terminalID: "codex-transition-managed",
+                state: .waiting,
+                shortExplanation: "Codex is waiting for your response.",
+                lastMeaningfulEvent: "What should I work on next?",
+                importantDetails: ["What should I work on next?"],
+                suggestedNextActions: [],
+                agentIdentity: .codex,
+                agentInteractionState: .waitingText,
+                agentInteractionContext: .waitingText(question: "What should I work on next?")
+            ),
+        ]
+        monitor.observe(understandings: waitingStates)
+
+        #expect(capturedEvents.count == 3)
+        #expect(capturedEvents.allSatisfy { $0.agentIdentity == .codex })
+        #expect(capturedEvents.allSatisfy { $0.interactionState == .waitingText })
+        #expect(Set(capturedEvents.map(\.deltaText)) == ["What should I work on next?"])
+    }
+
+    @Test
     func managedManualAndNewTabKimiApprovalPromptsFireEquivalentAttentionEvents() {
         let monitor = AgentStateMonitor()
         var capturedEvents: [AgentNeedsAttentionEvent] = []
