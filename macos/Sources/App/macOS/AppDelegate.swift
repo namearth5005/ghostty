@@ -135,8 +135,6 @@ class AppDelegate: NSObject,
 
         return nil
     }()
-    var foremanAgent: ForemanAgent?
-    private weak var foremanAgentStore: ForemanSidebarStore?
     lazy var dispatchQueueCoordinator = DispatchQueueCoordinator()
     let storeManager = StoreManager.shared
     let foremanNotifier = ForemanNotifier.shared
@@ -346,51 +344,20 @@ class AppDelegate: NSObject,
                     return
                 }
 
-                let needsAgentForStore = self.foremanAgentStore.map { $0 !== store } ?? true
-
-                // Ensure an agent exists for this sidebar store — create one on demand if needed.
-                if self.foremanAgent == nil || needsAgentForStore {
-                    guard let foremanService = self.foremanService else { return }
-                    if self.foremanAgent != nil {
-                        await self.foremanAgent?.stop()
-                    }
-                    self.foremanAgent = ForemanAgent(
-                        conversation: store.conversation,
-                        foremanService: foremanService,
-                        goalRuntime: self.foremanProjectGoalRuntime,
-                        preferredTerminalID: event.terminalID,
-                        onSendCommand: { [weak self] terminalID, command in
-                            guard let self else { return false }
-                            guard let controller = self.terminalController(for: terminalID) else { return false }
-                            let item = DispatchQueueItem(terminalID: terminalID, message: command)
-                            guard self.dispatchQueueCoordinator.send(item, through: controller) else { return false }
-                            self.registerTerminalOutcomeTracking(terminalID: terminalID, sentCommand: command)
-                            return true
-                        },
-                        onStatusChange: { _ in },
-                        onAction: { _, _ in }
-                    )
-                    self.foremanAgentStore = store
+                guard self.bindForemanSidebarSessionIfNeeded(to: store),
+                      let session = store.sidebarSession else {
+                    return
                 }
 
                 // Notify monitor that Foreman is about to react, preventing spam loops
                 self.agentStateMonitor.notifyForemanReacted(terminalID: event.terminalID, state: event.interactionState)
 
-                let snapshotProvider: @MainActor () -> [TerminalSnapshot] = {
-                    var allSnapshots: [TerminalSnapshot] = []
-                    for controller in TerminalController.all {
-                        allSnapshots.append(contentsOf: controller.captureTerminalSnapshots())
-                    }
-                    return allSnapshots
-                }
-
                 if case .draftWaitingText = initialDecision {
                     do {
                         DebugLogger.log("[AppDelegate] drafting waitingText attention terminal=\(event.terminalID.prefix(8)) fingerprint='\(event.fingerprint)'")
-                        let draftedAttention = try await self.foremanAgent?.draftPendingAttention(
+                        let draftedAttention = try await session.draftPendingAttention(
                             for: event,
-                            observedContext: observedContext,
-                            captureSnapshots: snapshotProvider
+                            observedContext: observedContext
                         )
 
                         switch ForemanReactiveEventRouter.decisionAfterDraft(
@@ -417,10 +384,9 @@ class AppDelegate: NSObject,
 
                 }
 
-                await self.foremanAgent?.react(
+                await session.react(
                     to: event,
-                    observedContext: observedContext,
-                    captureSnapshots: snapshotProvider
+                    observedContext: observedContext
                 )
             }
         }
@@ -1364,10 +1330,11 @@ extension AppDelegate {
             }
         }
 
-        // Forward to agent if running
-        Task {
-            await foremanAgent?.receiveOutcome(report)
-        }
+        // Forward to the sidebar session that owns this terminal.
+        terminalController(for: report.terminalID)?
+            .foremanSidebarStore
+            .sidebarSession?
+            .receiveOutcome(report)
 
         // Notify user of outcome change
         foremanNotifier.observe(report: report)
@@ -1495,8 +1462,57 @@ extension AppDelegate {
     }
 
     @MainActor
-    func startForemanAgent(goal: String, mode: AgentMode, store: ForemanSidebarStore) {
+    private func captureAllTerminalSnapshots() -> [TerminalSnapshot] {
+        var allSnapshots: [TerminalSnapshot] = []
+        for controller in TerminalController.all {
+            allSnapshots.append(contentsOf: controller.captureTerminalSnapshots())
+        }
+        return allSnapshots
+    }
+
+    @MainActor
+    private func sendForemanCommandToTerminal(terminalID: String, command: String) -> Bool {
+        guard let controller = terminalController(for: terminalID) else { return false }
+        let item = DispatchQueueItem(terminalID: terminalID, message: command)
+        guard dispatchQueueCoordinator.send(item, through: controller) else { return false }
+        registerTerminalOutcomeTracking(terminalID: terminalID, sentCommand: command)
+        return true
+    }
+
+    @MainActor
+    private func bindForemanSidebarSessionIfNeeded(to store: ForemanSidebarStore) -> Bool {
+        if store.sidebarSession != nil {
+            return true
+        }
+
         guard let foremanService else {
+            return false
+        }
+
+        let session = ForemanSidebarSession(
+            conversation: store.conversation,
+            foremanService: foremanService,
+            goalRuntime: foremanProjectGoalRuntime,
+            preferredTerminalID: { [weak store] in
+                store?.selectedTerminalID
+            },
+            captureSnapshots: { [weak self] in
+                self?.captureAllTerminalSnapshots() ?? []
+            },
+            captureObservedContext: { [weak self] in
+                self?.captureAIForemanObservedContext().context
+            },
+            onSendCommand: { [weak self] terminalID, command in
+                self?.sendForemanCommandToTerminal(terminalID: terminalID, command: command) ?? false
+            }
+        )
+        store.attachSidebarSession(session)
+        return true
+    }
+
+    @MainActor
+    func startForemanAgent(goal: String, mode: AgentMode, store: ForemanSidebarStore) {
+        guard store.sidebarSession != nil || bindForemanSidebarSessionIfNeeded(to: store) else {
             store.conversation.errorMessage = missingForemanAPIKeyMessage
             return
         }
@@ -1508,54 +1524,7 @@ extension AppDelegate {
         }
         FeatureGate.recordBasicAIUsage()
 
-        // Cancel any existing agent.
-        let previousAgent = foremanAgent
-        Task {
-            await previousAgent?.stop()
-        }
-
-        let conversation = store.conversation
-        let agent = ForemanAgent(
-            conversation: conversation,
-            foremanService: foremanService,
-            goalRuntime: foremanProjectGoalRuntime,
-            preferredTerminalID: store.selectedTerminalID,
-            onSendCommand: { [weak self] terminalID, command in
-                guard let self else { return false }
-                guard let controller = self.terminalController(for: terminalID) else { return false }
-                let item = DispatchQueueItem(terminalID: terminalID, message: command)
-                guard self.dispatchQueueCoordinator.send(item, through: controller) else { return false }
-                self.registerTerminalOutcomeTracking(terminalID: terminalID, sentCommand: command)
-                return true
-            },
-            onStatusChange: { status in
-                // Status is published through conversation
-            },
-            onAction: { action, thought in
-                // Action is added to conversation by agent
-            }
-        )
-
-        self.foremanAgent = agent
-        self.foremanAgentStore = store
-
-        Task {
-            await agent.start(
-                goal: goal,
-                mode: mode,
-                captureSnapshots: {
-                    var allSnapshots: [TerminalSnapshot] = []
-                    for controller in TerminalController.all {
-                        allSnapshots.append(contentsOf: controller.captureTerminalSnapshots())
-                    }
-                    return allSnapshots
-                },
-                captureObservedContext: { [weak self] in
-                    guard let self else { return nil }
-                    return self.captureAIForemanObservedContext().context
-                }
-            )
-        }
+        store.sidebarSession?.start(goal: goal, mode: mode)
     }
 
     @MainActor
@@ -1565,18 +1534,17 @@ extension AppDelegate {
             return
         }
 
-        Task {
-            await foremanAgent?.receiveUserMessage(text)
+        guard store.sidebarSession != nil || bindForemanSidebarSessionIfNeeded(to: store) else {
+            store.conversation.errorMessage = missingForemanAPIKeyMessage
+            return
         }
+
+        store.sidebarSession?.receiveUserMessage(text)
     }
 
     @MainActor
     func stopForemanAgent(store: ForemanSidebarStore) {
-        Task { [weak self] in
-            await self?.foremanAgent?.stop()
-            self?.foremanAgent = nil
-            self?.foremanAgentStore = nil
-        }
+        store.sidebarSession?.stop()
     }
 
     @MainActor
@@ -1644,30 +1612,13 @@ extension AppDelegate {
     }
 
     @MainActor
-    func approveForemanAction() {
-        Task { [weak self] in
-            guard let self else { return }
-            await self.foremanAgent?.approvePendingAction(
-                captureSnapshots: {
-                    var allSnapshots: [TerminalSnapshot] = []
-                    for controller in TerminalController.all {
-                        allSnapshots.append(contentsOf: controller.captureTerminalSnapshots())
-                    }
-                    return allSnapshots
-                },
-                captureObservedContext: { [weak self] in
-                    guard let self else { return nil }
-                    return self.captureAIForemanObservedContext().context
-                }
-            )
-        }
+    func approveForemanAction(store: ForemanSidebarStore) {
+        store.sidebarSession?.approvePendingAction()
     }
 
     @MainActor
-    func skipForemanAction() {
-        Task { [weak self] in
-            await self?.foremanAgent?.skipPendingAction()
-        }
+    func skipForemanAction(store: ForemanSidebarStore) {
+        store.sidebarSession?.skipPendingAction()
     }
 
     @MainActor

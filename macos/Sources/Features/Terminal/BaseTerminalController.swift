@@ -167,11 +167,13 @@ class BaseTerminalController: NSWindowController,
             guard let self else { return }
             (NSApp.delegate as? AppDelegate)?.stopForemanAgent(store: self.foremanSidebarStore)
         }
-        foremanSidebarStore.onApproveAction = {
-            (NSApp.delegate as? AppDelegate)?.approveForemanAction()
+        foremanSidebarStore.onApproveAction = { [weak self] in
+            guard let self else { return }
+            (NSApp.delegate as? AppDelegate)?.approveForemanAction(store: self.foremanSidebarStore)
         }
-        foremanSidebarStore.onSkipAction = {
-            (NSApp.delegate as? AppDelegate)?.skipForemanAction()
+        foremanSidebarStore.onSkipAction = { [weak self] in
+            guard let self else { return }
+            (NSApp.delegate as? AppDelegate)?.skipForemanAction(store: self.foremanSidebarStore)
         }
         foremanSidebarStore.onLaunchAgent = Self.makeManagedAgentLaunchHandler(
             currentWorkingDirectory: { [weak self] in self?.focusedSurface?.pwd },

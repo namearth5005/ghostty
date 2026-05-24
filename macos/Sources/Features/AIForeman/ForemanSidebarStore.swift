@@ -166,6 +166,7 @@ final class ForemanSidebarStore: ObservableObject {
     @Published var chatInput: String = ""
     @Published var isAgentRunning: Bool = false
     @Published var agentReadiness: [(AgentIdentity, AgentReadinessState)] = []
+    private(set) var sidebarSession: ForemanSidebarSessionControlling?
     var onStartAgent: ((String, AgentMode) -> Void)?
     var onSendChatMessage: ((String) -> Void)?
     var onStopAgent: (() -> Void)?
@@ -315,6 +316,10 @@ final class ForemanSidebarStore: ObservableObject {
     func stopAgent() {
         isAgentRunning = false
         onStopAgent?()
+    }
+
+    func attachSidebarSession(_ session: ForemanSidebarSessionControlling) {
+        sidebarSession = session
     }
 
     func approveAction() {
