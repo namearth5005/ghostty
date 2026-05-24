@@ -1144,6 +1144,93 @@ struct AgentStateMonitorTests {
     }
 
     @Test
+    func managedManualAndNewTabClaudeRunningToTrustPromptTransitionFiresEquivalentAttentionEvents() {
+        let monitor = AgentStateMonitor()
+        var capturedEvents: [AgentNeedsAttentionEvent] = []
+        monitor.onEvent = { event in
+            capturedEvents.append(event)
+        }
+
+        let runningStates = [
+            TerminalUnderstanding.preview(
+                terminalID: "claude-transition-existing",
+                state: .running,
+                shortExplanation: "Claude Code is working.",
+                lastMeaningfulEvent: "Thinking...",
+                importantDetails: ["Thinking..."],
+                suggestedNextActions: [],
+                agentIdentity: .claudeCode,
+                agentInteractionState: .running,
+                agentInteractionContext: .running(stepDescription: "Thinking...")
+            ),
+            TerminalUnderstanding.preview(
+                terminalID: "claude-transition-new-tab",
+                state: .running,
+                shortExplanation: "Claude Code is working.",
+                lastMeaningfulEvent: "Thinking...",
+                importantDetails: ["Thinking..."],
+                suggestedNextActions: [],
+                agentIdentity: .claudeCode,
+                agentInteractionState: .running,
+                agentInteractionContext: .running(stepDescription: "Thinking...")
+            ),
+            TerminalUnderstanding.preview(
+                terminalID: "claude-transition-managed",
+                state: .running,
+                shortExplanation: "Claude Code is working.",
+                lastMeaningfulEvent: "Thinking...",
+                importantDetails: ["Thinking..."],
+                suggestedNextActions: [],
+                agentIdentity: .claudeCode,
+                agentInteractionState: .running,
+                agentInteractionContext: .running(stepDescription: "Thinking...")
+            ),
+        ]
+        monitor.observe(understandings: runningStates)
+        #expect(capturedEvents.isEmpty)
+
+        let trustPrompt = "Do you trust the files in this folder?"
+        let waitingStates = [
+            TerminalUnderstanding.preview(
+                terminalID: "claude-transition-existing",
+                state: .waiting,
+                shortExplanation: "Claude Code is waiting for your selection.",
+                lastMeaningfulEvent: trustPrompt,
+                importantDetails: [trustPrompt],
+                suggestedNextActions: [],
+                agentIdentity: .claudeCode,
+                agentInteractionState: .waitingChoice
+            ),
+            TerminalUnderstanding.preview(
+                terminalID: "claude-transition-new-tab",
+                state: .waiting,
+                shortExplanation: "Claude Code is waiting for your selection.",
+                lastMeaningfulEvent: trustPrompt,
+                importantDetails: [trustPrompt],
+                suggestedNextActions: [],
+                agentIdentity: .claudeCode,
+                agentInteractionState: .waitingChoice
+            ),
+            TerminalUnderstanding.preview(
+                terminalID: "claude-transition-managed",
+                state: .waiting,
+                shortExplanation: "Claude Code is waiting for your selection.",
+                lastMeaningfulEvent: trustPrompt,
+                importantDetails: [trustPrompt],
+                suggestedNextActions: [],
+                agentIdentity: .claudeCode,
+                agentInteractionState: .waitingChoice
+            ),
+        ]
+        monitor.observe(understandings: waitingStates)
+
+        #expect(capturedEvents.count == 3)
+        #expect(capturedEvents.allSatisfy { $0.agentIdentity == .claudeCode })
+        #expect(capturedEvents.allSatisfy { $0.interactionState == .waitingChoice })
+        #expect(Set(capturedEvents.map(\.deltaText)) == [trustPrompt])
+    }
+
+    @Test
     func managedManualAndNewTabGenericCodexWireWaitingStatesDoNotFireAttentionEvents() {
         let monitor = AgentStateMonitor()
         var capturedEvents: [AgentNeedsAttentionEvent] = []
