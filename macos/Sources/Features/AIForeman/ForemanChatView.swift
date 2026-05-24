@@ -304,7 +304,7 @@ struct ForemanChatView: View {
                     }
                 }
 
-                if let errorMessage = store.conversation.errorMessage, !errorMessage.isEmpty {
+                if let errorMessage = displayedErrorMessage, !errorMessage.isEmpty {
                     Text(errorMessage)
                         .font(.system(size: 11))
                         .foregroundStyle(.red)
@@ -375,6 +375,20 @@ struct ForemanChatView: View {
         case .completedGoal:
             return store.conversation.activeProjectGoal?.objective
         }
+    }
+
+    private var displayedErrorMessage: String? {
+        let routingError = store.errorMessage?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let routingError, !routingError.isEmpty {
+            return routingError
+        }
+
+        let conversationError = store.conversation.errorMessage?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let conversationError, !conversationError.isEmpty {
+            return conversationError
+        }
+
+        return nil
     }
 
     private func terminalDisplayName(for terminalID: String) -> String {

@@ -89,6 +89,70 @@ struct ForemanSidebarRoutingTests {
     }
 
     @Test
+    func completedGoalSuppressesPendingAttentionAction() {
+        let router = ForemanSidebarRouter()
+        let state = ForemanSidebarRoutingState(
+            projectID: "/tmp/ghostty",
+            selectedTerminalID: "term-1",
+            focusedTerminalID: "term-1",
+            preferredTarget: nil,
+            pendingAttentionByTerminalID: [
+                "term-1": makeAttention(terminalID: "term-1", fingerprint: "fp-1"),
+            ],
+            terminalRows: [makeRow("term-1")],
+            activeProjectGoal: ForemanProjectGoal(
+                projectID: "/tmp/ghostty",
+                objective: "Ship the sidebar fix",
+                status: .completed
+            )
+        )
+
+        let result = router.resolveExplicitIntent(
+            .sendPendingAttentionAction(
+                terminalID: "term-1",
+                fingerprint: "fp-1",
+                payload: "1"
+            ),
+            state: state
+        )
+
+        #expect(
+            result.outcome ==
+            .suppressed(
+                message: "The saved project goal is complete. Reopen or extend it before dispatching more work."
+            )
+        )
+    }
+
+    @Test
+    func completedGoalAllowsExplicitGoalManagement() {
+        let router = ForemanSidebarRouter()
+        let state = ForemanSidebarRoutingState(
+            projectID: "/tmp/ghostty",
+            selectedTerminalID: "term-1",
+            focusedTerminalID: "term-1",
+            preferredTarget: nil,
+            pendingAttentionByTerminalID: [:],
+            terminalRows: [makeRow("term-1")],
+            activeProjectGoal: ForemanProjectGoal(
+                projectID: "/tmp/ghostty",
+                objective: "Ship the sidebar fix",
+                status: .completed
+            )
+        )
+
+        let result = router.resolveExplicitIntent(
+            .clearGoal(projectID: "/tmp/ghostty"),
+            state: state
+        )
+
+        #expect(
+            result.outcome ==
+            .dispatch(.clearGoal(projectID: "/tmp/ghostty"))
+        )
+    }
+
+    @Test
     func staleFingerprintBlocksReplyAndPreservesDraft() {
         let router = ForemanSidebarRouter()
         let state = ForemanSidebarRoutingState(

@@ -49,6 +49,9 @@ struct ForemanSidebarRouteResult: Equatable, Sendable {
 }
 
 struct ForemanSidebarRouter {
+    private let completedGoalSuppressionMessage =
+        "The saved project goal is complete. Reopen or extend it before dispatching more work."
+
     func resolveChatInput(
         _ text: String,
         state: ForemanSidebarRoutingState
@@ -59,9 +62,7 @@ struct ForemanSidebarRouter {
         case .completedGoal:
             return .init(
                 target: target,
-                outcome: .suppressed(
-                    message: "The saved project goal is complete. Reopen or extend it before dispatching more work."
-                )
+                outcome: .suppressed(message: completedGoalSuppressionMessage)
             )
 
         case .terminalReply(let terminalID, let fingerprint):
@@ -165,9 +166,7 @@ struct ForemanSidebarRouter {
         if case .completedGoal = target {
             return .init(
                 target: target,
-                outcome: .suppressed(
-                    message: "The saved project goal is complete. Reopen or extend it before dispatching more work."
-                )
+                outcome: .suppressed(message: completedGoalSuppressionMessage)
             )
         }
 
@@ -189,6 +188,18 @@ struct ForemanSidebarRouter {
         state: ForemanSidebarRoutingState
     ) -> ForemanSidebarRouteResult {
         let target = resolveTarget(from: state)
+
+        if case .completedGoal = target {
+            switch intent {
+            case .reopenCompletedGoal, .extendGoal, .clearGoal:
+                break
+            case .guideForeman, .sendTerminalReply, .sendTerminalCommand, .sendPendingAttentionAction:
+                return .init(
+                    target: target,
+                    outcome: .suppressed(message: completedGoalSuppressionMessage)
+                )
+            }
+        }
 
         switch intent {
         case .sendTerminalReply(let terminalID, let fingerprint, let message):

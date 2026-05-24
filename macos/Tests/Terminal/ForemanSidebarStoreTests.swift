@@ -972,6 +972,45 @@ struct ForemanSidebarStoreTests {
         )
     }
 
+    @MainActor
+    @Test
+    func completedGoalSuppressesPendingAttentionActionRouting() {
+        let conversation = ForemanConversation()
+        conversation.setActiveProjectGoal(
+            ForemanProjectGoal(
+                projectID: "/tmp/project",
+                objective: "Ship the sidebar fix",
+                status: .completed
+            )
+        )
+        let store = ForemanSidebarStore(conversation: conversation)
+        let action = PendingAgentAction(
+            id: "continue",
+            title: "Continue",
+            payload: "1",
+            style: .primary
+        )
+        let attention = makePendingAttention(
+            terminalID: "term-1",
+            fingerprint: "fp-1",
+            actions: [action]
+        )
+
+        var dispatchedIntent: ForemanSidebarIntent?
+        store.onDispatchSidebarIntent = { intent in
+            dispatchedIntent = intent
+        }
+        store.upsertPendingAttention(attention)
+
+        store.executePendingAttentionAction(terminalID: "term-1", actionID: "continue")
+
+        #expect(dispatchedIntent == nil)
+        #expect(
+            store.errorMessage ==
+            "The saved project goal is complete. Reopen or extend it before dispatching more work."
+        )
+    }
+
     private func makePendingAttention(
         terminalID: String,
         fingerprint: String = "fp-1",
