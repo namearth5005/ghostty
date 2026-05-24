@@ -969,6 +969,110 @@ struct ForemanAgentTests {
     }
 
     @Test
+    func draftPendingAttentionForGenericCodexWireContextReturnsNilAcrossLaunchPaths() async throws {
+        let cases: [(terminalID: String, title: String, isFocused: Bool)] = [
+            ("codex-wire-existing", "shell", true),
+            ("codex-wire-new-tab", "nambouchara@Nams-MacBook-Pro:~", false),
+            ("codex-wire-managed", "Codex", false),
+        ]
+
+        var forwardedUnderstandings: [UnderstandingSignature] = []
+
+        for entry in cases {
+            let snapshots = genericCodexWireSnapshots(
+                terminalID: entry.terminalID,
+                title: entry.title,
+                isFocused: entry.isFocused
+            )
+            let observedContext = genericCodexWireObservedContext(
+                terminalID: entry.terminalID,
+                title: entry.title,
+                isFocused: entry.isFocused
+            )
+            let deltaText = observedContext.understandings.first?.lastMeaningfulEvent ?? "codex"
+            let result = try await draftPendingAttentionCase(
+                snapshots: snapshots,
+                observedContext: observedContext,
+                event: AgentNeedsAttentionEvent(
+                    terminalID: entry.terminalID,
+                    agentIdentity: .codex,
+                    interactionState: .waitingText,
+                    deltaText: deltaText,
+                    timestamp: Date(timeIntervalSince1970: 1),
+                    fingerprint: "\(entry.terminalID)|codex|waitingText|wire-generic"
+                ),
+                replyDraft: try makeReplyDraftResponse(
+                    thought: "This Codex waiting state has no actionable question yet.",
+                    suggestion: .noAction(
+                        reason: "Codex has not asked a concrete question.",
+                        confidence: 1.0
+                    )
+                )
+            )
+
+            #expect(result.signature == nil)
+            forwardedUnderstandings.append(try #require(result.understanding))
+        }
+
+        #expect(forwardedUnderstandings.dropFirst().allSatisfy { $0 == forwardedUnderstandings.first })
+        #expect(forwardedUnderstandings.first?.agentIdentity == .codex)
+        #expect(forwardedUnderstandings.first?.interactionState == .waitingText)
+        #expect(forwardedUnderstandings.first?.interactionContext == .waitingText(question: nil))
+    }
+
+    @Test
+    func draftPendingAttentionForGenericClaudeWireContextReturnsNilAcrossLaunchPaths() async throws {
+        let cases: [(terminalID: String, title: String, isFocused: Bool)] = [
+            ("claude-wire-existing", "shell", true),
+            ("claude-wire-new-tab", "nambouchara@Nams-MacBook-Pro:~", false),
+            ("claude-wire-managed", "Claude", false),
+        ]
+
+        var forwardedUnderstandings: [UnderstandingSignature] = []
+
+        for entry in cases {
+            let snapshots = genericClaudeWireSnapshots(
+                terminalID: entry.terminalID,
+                title: entry.title,
+                isFocused: entry.isFocused
+            )
+            let observedContext = genericClaudeWireObservedContext(
+                terminalID: entry.terminalID,
+                title: entry.title,
+                isFocused: entry.isFocused
+            )
+            let deltaText = observedContext.understandings.first?.lastMeaningfulEvent ?? "claude"
+            let result = try await draftPendingAttentionCase(
+                snapshots: snapshots,
+                observedContext: observedContext,
+                event: AgentNeedsAttentionEvent(
+                    terminalID: entry.terminalID,
+                    agentIdentity: .claudeCode,
+                    interactionState: .waitingText,
+                    deltaText: deltaText,
+                    timestamp: Date(timeIntervalSince1970: 1),
+                    fingerprint: "\(entry.terminalID)|claude|waitingText|wire-generic"
+                ),
+                replyDraft: try makeReplyDraftResponse(
+                    thought: "This Claude waiting state has no actionable question yet.",
+                    suggestion: .noAction(
+                        reason: "Claude has not asked a concrete question.",
+                        confidence: 1.0
+                    )
+                )
+            )
+
+            #expect(result.signature == nil)
+            forwardedUnderstandings.append(try #require(result.understanding))
+        }
+
+        #expect(forwardedUnderstandings.dropFirst().allSatisfy { $0 == forwardedUnderstandings.first })
+        #expect(forwardedUnderstandings.first?.agentIdentity == .claudeCode)
+        #expect(forwardedUnderstandings.first?.interactionState == .waitingText)
+        #expect(forwardedUnderstandings.first?.interactionContext == .waitingText(question: nil))
+    }
+
+    @Test
     func draftPendingAttentionForKimiRepliesSharesParityAcrossLaunchPaths() async throws {
         let cases: [(terminalID: String, snapshots: [TerminalSnapshot])] = [
             ("kimi-existing", kimiReplySnapshots(terminalID: "kimi-existing", title: "shell", isFocused: true)),
