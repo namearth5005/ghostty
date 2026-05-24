@@ -194,7 +194,7 @@ class AppDelegate: NSObject,
     private let aiForemanObservedContextBuilder = ForemanObservedContextBuilder()
     private var aiForemanCurrentSnapshots: [TerminalSnapshot] = []
     private var aiForemanCurrentUnderstandings: [TerminalUnderstanding] = []
-    private var aiForemanLastOutcomesByTerminalID: [String: TerminalOutcomeReport] = [:]
+    private var aiForemanObservedOutcomeTracker = ForemanObservedOutcomeTracker()
     private var aiForemanPreviousSnapshots: [String: TerminalSnapshot] = [:]
     private var aiForemanPreviousUnderstandings: [String: TerminalUnderstanding] = [:]
     private let agentStateMonitor = AgentStateMonitor()
@@ -1342,7 +1342,7 @@ extension AppDelegate {
 
     @MainActor
     private func handleTerminalOutcome(_ report: TerminalOutcomeReport) {
-        aiForemanLastOutcomesByTerminalID[report.terminalID] = report
+        aiForemanObservedOutcomeTracker.observe(report)
 
         for controller in TerminalController.all {
             let store = controller.foremanSidebarStore
@@ -1663,7 +1663,7 @@ extension AppDelegate {
         managedAgentAttachmentBootstraps = managedAgentAttachmentBootstraps.filter { terminalID, bootstrap in
             activeTerminalIDs.contains(terminalID) && bootstrap.expiresAt > now
         }
-        aiForemanLastOutcomesByTerminalID = aiForemanLastOutcomesByTerminalID.filter { activeTerminalIDs.contains($0.key) }
+        aiForemanObservedOutcomeTracker.prune(activeTerminalIDs: activeTerminalIDs)
 
         for snapshot in allSnapshots {
             if let cwd = snapshot.cwd?.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -1813,7 +1813,7 @@ extension AppDelegate {
         let observedContext = aiForemanObservedContextBuilder.build(
             snapshots: allSnapshots,
             previousSnapshotsByTerminalID: aiForemanPreviousSnapshots,
-            lastOutcomesByTerminalID: aiForemanLastOutcomesByTerminalID,
+            lastOutcomesByTerminalID: aiForemanObservedOutcomeTracker.reportsByTerminalID,
             attachmentHintsByTerminalID: attachmentHintsByTerminalID,
             kimiWireRecordsByTerminalID: kimiWireRecordsByTerminalID,
             codexWireRecordsByTerminalID: codexWireRecordsByTerminalID,
@@ -1862,7 +1862,7 @@ extension AppDelegate {
 
     @MainActor
     private func registerTerminalOutcomeTracking(terminalID: String, sentCommand: String) {
-        aiForemanLastOutcomesByTerminalID.removeValue(forKey: terminalID)
+        aiForemanObservedOutcomeTracker.registerPendingCommand(terminalID: terminalID)
         terminalOutcomeEngine.register(terminalID: terminalID, sentCommand: sentCommand)
     }
 
