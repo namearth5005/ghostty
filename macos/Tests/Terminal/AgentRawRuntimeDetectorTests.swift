@@ -510,4 +510,168 @@ struct AgentRawRuntimeDetectorTests {
 
         #expect(detection.state == .working)
     }
+
+    @Test
+    func interactiveSurfaceAppearingAfterWorkingTransitionsToBlockedAcrossCodexAndClaude() {
+        let codexPrevious = TerminalSnapshot.makePreview(
+            terminalID: "codex-transition",
+            windowID: "win-1",
+            tabID: "tab-1",
+            title: "OpenAI Codex",
+            cwd: "/tmp/project",
+            isFocused: true,
+            visibleText: "• Working (0s • esc to interrupt)",
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessName: "codex",
+            cursorIsAtPrompt: false,
+            usingAlternateScreen: true
+        )
+        let codexCurrent = TerminalSnapshot.makePreview(
+            terminalID: "codex-transition",
+            windowID: "win-1",
+            tabID: "tab-1",
+            title: "OpenAI Codex",
+            cwd: "/tmp/project",
+            isFocused: true,
+            visibleText: """
+            • Hey. What do you need help with?
+
+            ›
+            """,
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessName: "codex",
+            cursorIsAtPrompt: true,
+            usingAlternateScreen: true
+        )
+
+        let claudePrevious = TerminalSnapshot.makePreview(
+            terminalID: "claude-transition",
+            windowID: "win-2",
+            tabID: "tab-2",
+            title: "Claude Code",
+            cwd: "/Users/nambouchara",
+            isFocused: true,
+            visibleText: "Thinking...",
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessName: "claude",
+            cursorIsAtPrompt: false,
+            usingAlternateScreen: true
+        )
+        let claudeCurrent = TerminalSnapshot.makePreview(
+            terminalID: "claude-transition",
+            windowID: "win-2",
+            tabID: "tab-2",
+            title: "Claude Code",
+            cwd: "/Users/nambouchara",
+            isFocused: true,
+            visibleText: """
+            Accessing workspace:
+
+            /Users/nambouchara
+
+            Quick safety check: Is this a project you created or one you trust?
+
+             ❯ 1. Yes, I trust this folder
+               2. No, exit
+
+             Enter to confirm · Esc to cancel
+            """,
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessName: "claude",
+            cursorIsAtPrompt: true,
+            usingAlternateScreen: true
+        )
+
+        let codexDetection = detector.detect(identity: .codex, current: codexCurrent, previous: codexPrevious)
+        let claudeDetection = detector.detect(identity: .claudeCode, current: claudeCurrent, previous: claudePrevious)
+
+        #expect(codexDetection.state == .blocked)
+        #expect(claudeDetection.state == .blocked)
+    }
+
+    @Test
+    func resolvedInteractiveSurfaceTransitionsBackToIdleAcrossCodexAndClaude() {
+        let codexPrevious = TerminalSnapshot.makePreview(
+            terminalID: "codex-idle-transition",
+            windowID: "win-1",
+            tabID: "tab-1",
+            title: "OpenAI Codex",
+            cwd: "/tmp/project",
+            isFocused: true,
+            visibleText: """
+            • Hey. What do you need help with?
+
+            ›
+            """,
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessName: "codex",
+            cursorIsAtPrompt: true,
+            usingAlternateScreen: true
+        )
+        let codexCurrent = TerminalSnapshot.makePreview(
+            terminalID: "codex-idle-transition",
+            windowID: "win-1",
+            tabID: "tab-1",
+            title: "OpenAI Codex",
+            cwd: "/tmp/project",
+            isFocused: true,
+            visibleText: "nambouchara@host ghostty % ",
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessName: "codex",
+            cursorIsAtPrompt: true,
+            usingAlternateScreen: false
+        )
+
+        let claudePrevious = TerminalSnapshot.makePreview(
+            terminalID: "claude-idle-transition",
+            windowID: "win-2",
+            tabID: "tab-2",
+            title: "Claude Code",
+            cwd: "/Users/nambouchara",
+            isFocused: true,
+            visibleText: """
+            Accessing workspace:
+
+            /Users/nambouchara
+
+            Quick safety check: Is this a project you created or one you trust?
+
+             ❯ 1. Yes, I trust this folder
+               2. No, exit
+
+             Enter to confirm · Esc to cancel
+            """,
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessName: "claude",
+            cursorIsAtPrompt: true,
+            usingAlternateScreen: true
+        )
+        let claudeCurrent = TerminalSnapshot.makePreview(
+            terminalID: "claude-idle-transition",
+            windowID: "win-2",
+            tabID: "tab-2",
+            title: "Claude Code",
+            cwd: "/Users/nambouchara",
+            isFocused: true,
+            visibleText: "nambouchara@host ghostty % ",
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessName: "claude",
+            cursorIsAtPrompt: true,
+            usingAlternateScreen: false
+        )
+
+        let codexDetection = detector.detect(identity: .codex, current: codexCurrent, previous: codexPrevious)
+        let claudeDetection = detector.detect(identity: .claudeCode, current: claudeCurrent, previous: claudePrevious)
+
+        #expect(codexDetection.state == .idle)
+        #expect(claudeDetection.state == .idle)
+    }
 }
