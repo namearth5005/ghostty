@@ -1082,6 +1082,8 @@ struct ForemanSidebarStoreTests {
         #expect(store.selectedTerminalWorkerSnapshot == workerSnapshot)
         #expect(store.selectedTerminalSuggestedWorkerAction?.title == "Preserve the API")
         #expect(store.selectedTerminalSuggestionProvenance == "Suggested by Codex")
+        #expect(store.terminalRows.first?.suggestedActions.first?.authoritativeFingerprint == workerSnapshot.attentionFingerprint)
+        #expect(store.terminalRows.first?.suggestedActions.first?.authoritativePayload == "Preserve the current API and adapt the internals.")
         #expect(
             store.selectedTerminalPlanningNotice ==
             "This worker is in plan mode. Review the plan before continuing."
@@ -1219,6 +1221,67 @@ struct ForemanSidebarStoreTests {
             dispatchedIntent ==
             .guideForeman(
                 "Ask Foreman to summarize the options for terminal term-1. Useful when the menu is noisy."
+            )
+        )
+    }
+
+    @MainActor
+    @Test
+    func executeSuggestionRoutesAuthoritativeWorkerReplyWithoutPendingAttention() {
+        let store = ForemanSidebarStore()
+        let snapshot = makeWorkerTerminalSnapshot(terminalID: "term-1", title: "Codex", isFocused: true)
+        let workerSnapshot = makeWorkerSnapshot(
+            terminalID: "term-1",
+            workerSessionID: "codex-session-41",
+            revision: 41,
+            workerGoal: "stabilize the API",
+            identity: .codex,
+            attention: .replyRequired,
+            summary: "Codex is waiting for a reply.",
+            details: ["Asked whether the API should stay stable."],
+            request: .init(
+                id: "req-41",
+                kind: .reply,
+                prompt: "Should I preserve the API?",
+                options: []
+            ),
+            suggestions: [
+                .init(
+                    id: "preserve-api",
+                    kind: .reply,
+                    title: "Preserve the API",
+                    payload: .text("Preserve the current API and adapt the internals."),
+                    rationale: "Lowest migration risk.",
+                    recommended: true,
+                    execution: .manualOnly,
+                    requestID: "req-41"
+                ),
+            ]
+        )
+        let understanding = makeWorkerUnderstanding(
+            terminalID: "term-1",
+            shortExplanation: "Codex is waiting for a reply.",
+            lastMeaningfulEvent: "Should I preserve the API?",
+            agentIdentity: .codex,
+            interactionState: .waitingText,
+            workerSnapshot: workerSnapshot
+        )
+        store.applySnapshots([snapshot], understandingsByTerminalID: ["term-1": understanding])
+
+        var dispatchedIntent: ForemanSidebarIntent?
+        store.onDispatchSidebarIntent = { intent in
+            dispatchedIntent = intent
+        }
+
+        let action = try! #require(store.terminalRows.first?.suggestedActions.first)
+        store.executeSuggestion(terminalID: "term-1", action: action)
+
+        #expect(
+            dispatchedIntent ==
+            .sendTerminalReply(
+                terminalID: "term-1",
+                fingerprint: workerSnapshot.attentionFingerprint,
+                message: "Preserve the current API and adapt the internals."
             )
         )
     }

@@ -89,6 +89,48 @@ struct ForemanSidebarRoutingTests {
     }
 
     @Test
+    func authoritativeWorkerReplySuggestionRoutesDirectlyToTerminalReply() {
+        let router = ForemanSidebarRouter()
+        let fingerprint = "codex-session-41|41|req-41"
+        let state = ForemanSidebarRoutingState(
+            projectID: "/tmp/ghostty",
+            selectedTerminalID: "term-1",
+            focusedTerminalID: "term-1",
+            preferredTarget: nil,
+            pendingAttentionByTerminalID: [:],
+            terminalRows: [makeRow("term-1")],
+            workerSnapshotsByTerminalID: [
+                "term-1": makeWorkerSnapshot(terminalID: "term-1", fingerprint: fingerprint),
+            ],
+            activeProjectGoal: ForemanProjectGoal(
+                projectID: "/tmp/ghostty",
+                objective: "Ship the sidebar fix"
+            )
+        )
+        let action = TerminalSuggestedAction(
+            title: "Preserve the API",
+            command: nil,
+            reason: "Lowest migration risk.",
+            isRecommended: true,
+            authoritativeFingerprint: fingerprint,
+            authoritativePayload: "Preserve the current API and adapt the internals."
+        )
+
+        let result = router.resolveSuggestion(action, terminalID: "term-1", state: state)
+
+        #expect(
+            result.outcome ==
+            .dispatch(
+                .sendTerminalReply(
+                    terminalID: "term-1",
+                    fingerprint: fingerprint,
+                    message: "Preserve the current API and adapt the internals."
+                )
+            )
+        )
+    }
+
+    @Test
     func completedGoalSuppressesPendingAttentionAction() {
         let router = ForemanSidebarRouter()
         let state = ForemanSidebarRoutingState(
@@ -210,6 +252,49 @@ struct ForemanSidebarRoutingTests {
         #expect(router.resolveTarget(from: state) == .project(projectID: "/tmp/ghostty"))
     }
 
+    @Test
+    func workerSnapshotFingerprintAllowsDirectReplyWithoutPendingAttention() {
+        let router = ForemanSidebarRouter()
+        let state = ForemanSidebarRoutingState(
+            projectID: "/tmp/ghostty",
+            selectedTerminalID: "term-1",
+            focusedTerminalID: "term-1",
+            preferredTarget: nil,
+            pendingAttentionByTerminalID: [:],
+            terminalRows: [makeRow("term-1")],
+            workerSnapshotsByTerminalID: [
+                "term-1": makeWorkerSnapshot(
+                    terminalID: "term-1",
+                    fingerprint: "codex-session-41|41|req-41"
+                ),
+            ],
+            activeProjectGoal: ForemanProjectGoal(
+                projectID: "/tmp/ghostty",
+                objective: "Ship the sidebar fix"
+            )
+        )
+
+        let result = router.resolveExplicitIntent(
+            .sendTerminalReply(
+                terminalID: "term-1",
+                fingerprint: "codex-session-41|41|req-41",
+                message: "Preserve the current API and adapt the internals."
+            ),
+            state: state
+        )
+
+        #expect(
+            result.outcome ==
+            .dispatch(
+                .sendTerminalReply(
+                    terminalID: "term-1",
+                    fingerprint: "codex-session-41|41|req-41",
+                    message: "Preserve the current API and adapt the internals."
+                )
+            )
+        )
+    }
+
     private func makeAttention(terminalID: String, fingerprint: String) -> PendingAgentAttention {
         PendingAgentAttention(
             terminalID: terminalID,
@@ -248,6 +333,37 @@ struct ForemanSidebarRoutingTests {
             agentContextDescription: "Answer the active prompt.",
             agentContextDetail: nil,
             agentContextOptions: nil
+        )
+    }
+
+    private func makeWorkerSnapshot(
+        terminalID: String,
+        fingerprint: String
+    ) -> TerminalWorkerSnapshot {
+        let requestID = fingerprint.components(separatedBy: "|").last ?? "req-1"
+        return TerminalWorkerSnapshot(
+            schemaVersion: 1,
+            terminalID: terminalID,
+            workerSessionID: "codex-session-41",
+            revision: 41,
+            observedAt: Date(timeIntervalSince1970: 1_748_222_222),
+            ttlMilliseconds: 15_000,
+            workerGoal: "stabilize the API",
+            agent: .init(identity: .codex),
+            state: .init(
+                lifecycle: .blocked,
+                attention: .replyRequired,
+                summary: "Codex is waiting for a reply.",
+                details: ["Asked whether the API should stay stable."],
+                runtimeFlags: []
+            ),
+            request: .init(
+                id: requestID,
+                kind: .reply,
+                prompt: "Should I preserve the API?",
+                options: []
+            ),
+            suggestions: []
         )
     }
 }

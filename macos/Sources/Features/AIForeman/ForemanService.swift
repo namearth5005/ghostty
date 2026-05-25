@@ -94,7 +94,7 @@ extension ForemanLLMClient {
             return authoritative
         }
 
-        try await draftAgentReply(
+        return try await draftAgentReply(
             narrationContext: narrationContext,
             event: event,
             terminals: terminals,

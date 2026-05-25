@@ -464,7 +464,10 @@ final class ForemanSidebarStore: ObservableObject {
     }
 
     func executeSuggestion(terminalID: String, action: TerminalSuggestedAction) {
-        if let attention = pendingAttentionByTerminalID[terminalID],
+        if action.authoritativePayload == nil,
+           action.command == nil,
+           action.guidancePrompt == nil,
+           let attention = pendingAttentionByTerminalID[terminalID],
            let pendingAction = attention.actions.first(where: { $0.title == action.title }) {
             executePendingAttentionAction(attention, action: pendingAction)
             return
@@ -767,6 +770,7 @@ final class ForemanSidebarStore: ObservableObject {
             preferredTarget: preferredSidebarTarget,
             pendingAttentionByTerminalID: pendingAttentionByTerminalID,
             terminalRows: terminalRows,
+            workerSnapshotsByTerminalID: workerSnapshotsByTerminalID,
             activeProjectGoal: runtimeState.activeProjectGoal
         )
     }
@@ -970,7 +974,10 @@ final class ForemanSidebarStore: ObservableObject {
                     title: suggestion.title,
                     command: snapshotCommand(for: suggestion.payload),
                     reason: suggestion.rationale,
-                    isRecommended: suggestion.recommended
+                    isRecommended: suggestion.recommended,
+                    authoritativeFingerprint: snapshotReplyPayload(for: suggestion.payload) == nil ? nil : workerSnapshot.attentionFingerprint,
+                    authoritativePayload: snapshotReplyPayload(for: suggestion.payload),
+                    guidancePrompt: snapshotGuidancePrompt(for: suggestion.payload)
                 )
             }
         }
@@ -985,6 +992,28 @@ final class ForemanSidebarStore: ObservableObject {
         case .command(let command):
             return command
         case .text, .option, .approval, .foremanPrompt:
+            return nil
+        }
+    }
+
+    private func snapshotReplyPayload(
+        for payload: TerminalWorkerSnapshot.Payload
+    ) -> String? {
+        switch payload {
+        case .text(let value), .option(let value), .approval(let value):
+            return value
+        case .command, .foremanPrompt:
+            return nil
+        }
+    }
+
+    private func snapshotGuidancePrompt(
+        for payload: TerminalWorkerSnapshot.Payload
+    ) -> String? {
+        switch payload {
+        case .foremanPrompt(let value):
+            return value
+        case .text, .command, .option, .approval:
             return nil
         }
     }

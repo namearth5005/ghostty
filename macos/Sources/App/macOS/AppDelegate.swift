@@ -1717,37 +1717,49 @@ extension AppDelegate {
         store: ForemanSidebarStore,
         failureMessage: String
     ) {
-        guard let currentAttention = store.pendingAttentionByTerminalID[terminalID] else {
-            store.errorMessage = "This terminal is no longer waiting for input."
+        let currentAttention = store.pendingAttentionByTerminalID[terminalID]
+        let currentWorkerSnapshot = store.workerSnapshotsByTerminalID[terminalID]
+        let matchesPendingAttention = currentAttention?.fingerprint == fingerprint
+        let matchesWorkerSnapshot = currentWorkerSnapshot?.attentionFingerprint == fingerprint
+
+        guard matchesPendingAttention || matchesWorkerSnapshot else {
+            store.errorMessage = currentAttention == nil && currentWorkerSnapshot == nil
+                ? "This terminal target is no longer available."
+                : "The terminal target changed before the message was sent."
             return
         }
 
-        guard currentAttention.fingerprint == fingerprint else {
-            store.errorMessage = "The terminal target changed before the message was sent."
-            return
+        if matchesPendingAttention {
+            store.markPendingAttentionSending(
+                terminalID: terminalID,
+                fingerprint: fingerprint
+            )
         }
-
-        store.markPendingAttentionSending(
-            terminalID: terminalID,
-            fingerprint: fingerprint
-        )
 
         guard let controller = terminalController(for: terminalID) else {
-            store.markPendingAttentionFailed(
-                terminalID: terminalID,
-                fingerprint: fingerprint,
-                errorMessage: "This terminal is no longer available."
-            )
+            if matchesPendingAttention {
+                store.markPendingAttentionFailed(
+                    terminalID: terminalID,
+                    fingerprint: fingerprint,
+                    errorMessage: "This terminal is no longer available."
+                )
+            } else {
+                store.errorMessage = "This terminal is no longer available."
+            }
             return
         }
 
         let item = DispatchQueueItem(terminalID: terminalID, message: payload)
         guard dispatchQueueCoordinator.send(item, through: controller) else {
-            store.markPendingAttentionFailed(
-                terminalID: terminalID,
-                fingerprint: fingerprint,
-                errorMessage: failureMessage
-            )
+            if matchesPendingAttention {
+                store.markPendingAttentionFailed(
+                    terminalID: terminalID,
+                    fingerprint: fingerprint,
+                    errorMessage: failureMessage
+                )
+            } else {
+                store.errorMessage = failureMessage
+            }
             return
         }
 
@@ -1756,10 +1768,12 @@ extension AppDelegate {
             terminalID: terminalID,
             fingerprint: fingerprint
         )
-        store.resolvePendingAttention(
-            terminalID: terminalID,
-            fingerprint: fingerprint
-        )
+        if matchesPendingAttention {
+            store.resolvePendingAttention(
+                terminalID: terminalID,
+                fingerprint: fingerprint
+            )
+        }
         store.errorMessage = nil
         refreshAIForemanSidebar()
     }

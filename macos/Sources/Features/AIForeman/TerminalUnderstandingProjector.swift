@@ -331,13 +331,17 @@ struct TerminalUnderstandingProjector {
     }
 
     private func makeSuggestedAction(
-        from suggestion: TerminalWorkerSnapshot.Suggestion
+        from suggestion: TerminalWorkerSnapshot.Suggestion,
+        fingerprint: String
     ) -> TerminalSuggestedAction {
         TerminalSuggestedAction(
             title: suggestion.title,
             command: command(for: suggestion.payload),
             reason: suggestion.rationale,
-            isRecommended: suggestion.recommended
+            isRecommended: suggestion.recommended,
+            authoritativeFingerprint: workerPayload(for: suggestion.payload) == nil ? nil : fingerprint,
+            authoritativePayload: workerPayload(for: suggestion.payload),
+            guidancePrompt: guidancePrompt(for: suggestion.payload)
         )
     }
 
@@ -352,13 +356,37 @@ struct TerminalUnderstandingProjector {
         }
     }
 
+    private func workerPayload(
+        for payload: TerminalWorkerSnapshot.Payload
+    ) -> String? {
+        switch payload {
+        case .text(let value), .option(let value), .approval(let value):
+            return value
+        case .command, .foremanPrompt:
+            return nil
+        }
+    }
+
+    private func guidancePrompt(
+        for payload: TerminalWorkerSnapshot.Payload
+    ) -> String? {
+        switch payload {
+        case .foremanPrompt(let value):
+            return value
+        case .text, .command, .option, .approval:
+            return nil
+        }
+    }
+
     private func authoritativeSuggestedActions(
         for workerSnapshot: TerminalWorkerSnapshot,
         state: TerminalUnderstandingState,
         lastEvent: String
     ) -> [TerminalSuggestedAction] {
         if !workerSnapshot.suggestions.isEmpty {
-            return workerSnapshot.suggestions.map { makeSuggestedAction(from: $0) }
+            return workerSnapshot.suggestions.map {
+                makeSuggestedAction(from: $0, fingerprint: workerSnapshot.attentionFingerprint)
+            }
         }
 
         switch workerSnapshot.state.attention {
@@ -380,7 +408,9 @@ struct TerminalUnderstandingProjector {
                         title: option.label,
                         command: nil,
                         reason: request.prompt,
-                        isRecommended: option.recommended || index == 0
+                        isRecommended: option.recommended || index == 0,
+                        authoritativeFingerprint: workerSnapshot.attentionFingerprint,
+                        authoritativePayload: option.id
                     )
                 }
             }

@@ -294,7 +294,7 @@ enum PendingAgentAttentionFactory {
             return nil
         }
 
-        PendingAgentAction(
+        return PendingAgentAction(
             id: suggestion.id,
             title: suggestion.title,
             payload: payload,

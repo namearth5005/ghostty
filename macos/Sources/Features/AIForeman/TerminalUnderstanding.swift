@@ -67,6 +67,27 @@ struct TerminalSuggestedAction: Codable, Equatable, Sendable {
     let command: String?
     let reason: String
     let isRecommended: Bool
+    let authoritativeFingerprint: String?
+    let authoritativePayload: String?
+    let guidancePrompt: String?
+
+    init(
+        title: String,
+        command: String?,
+        reason: String,
+        isRecommended: Bool,
+        authoritativeFingerprint: String? = nil,
+        authoritativePayload: String? = nil,
+        guidancePrompt: String? = nil
+    ) {
+        self.title = title
+        self.command = command
+        self.reason = reason
+        self.isRecommended = isRecommended
+        self.authoritativeFingerprint = authoritativeFingerprint
+        self.authoritativePayload = authoritativePayload
+        self.guidancePrompt = guidancePrompt
+    }
 }
 
 struct TerminalUnderstanding: Codable, Equatable, Sendable, Identifiable {

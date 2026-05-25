@@ -34,7 +34,28 @@ struct ForemanSidebarRoutingState: Equatable, Sendable {
     let preferredTarget: ForemanSidebarTargetPreference?
     let pendingAttentionByTerminalID: [String: PendingAgentAttention]
     let terminalRows: [TerminalSummaryRowModel]
+    let workerSnapshotsByTerminalID: [String: TerminalWorkerSnapshot]
     let activeProjectGoal: ForemanProjectGoal?
+
+    init(
+        projectID: String?,
+        selectedTerminalID: String?,
+        focusedTerminalID: String?,
+        preferredTarget: ForemanSidebarTargetPreference?,
+        pendingAttentionByTerminalID: [String: PendingAgentAttention],
+        terminalRows: [TerminalSummaryRowModel],
+        workerSnapshotsByTerminalID: [String: TerminalWorkerSnapshot] = [:],
+        activeProjectGoal: ForemanProjectGoal?
+    ) {
+        self.projectID = projectID
+        self.selectedTerminalID = selectedTerminalID
+        self.focusedTerminalID = focusedTerminalID
+        self.preferredTarget = preferredTarget
+        self.pendingAttentionByTerminalID = pendingAttentionByTerminalID
+        self.terminalRows = terminalRows
+        self.workerSnapshotsByTerminalID = workerSnapshotsByTerminalID
+        self.activeProjectGoal = activeProjectGoal
+    }
 }
 
 struct ForemanSidebarRouteResult: Equatable, Sendable {
@@ -176,6 +197,27 @@ struct ForemanSidebarRouter {
             )
         }
 
+        if let payload = action.authoritativePayload,
+           let fingerprint = action.authoritativeFingerprint {
+            return .init(
+                target: target,
+                outcome: .dispatch(
+                    .sendTerminalReply(
+                        terminalID: terminalID,
+                        fingerprint: fingerprint,
+                        message: payload
+                    )
+                )
+            )
+        }
+
+        if let guidancePrompt = action.guidancePrompt {
+            return .init(
+                target: target,
+                outcome: .dispatch(.guideForeman(guidancePrompt))
+            )
+        }
+
         let prompt = "\(action.title) for terminal \(title(for: terminalID, in: state)). \(action.reason)"
         return .init(target: target, outcome: .dispatch(.guideForeman(prompt)))
     }
@@ -200,7 +242,11 @@ struct ForemanSidebarRouter {
 
         switch intent {
         case .sendTerminalReply(let terminalID, let fingerprint, let message):
-            guard state.pendingAttentionByTerminalID[terminalID]?.fingerprint == fingerprint else {
+            guard hasMatchingFingerprint(
+                terminalID: terminalID,
+                fingerprint: fingerprint,
+                state: state
+            ) else {
                 return .init(
                     target: target,
                     outcome: .blocked(
@@ -211,7 +257,11 @@ struct ForemanSidebarRouter {
             }
 
         case .sendPendingAttentionAction(let terminalID, let fingerprint, _):
-            guard state.pendingAttentionByTerminalID[terminalID]?.fingerprint == fingerprint else {
+            guard hasMatchingFingerprint(
+                terminalID: terminalID,
+                fingerprint: fingerprint,
+                state: state
+            ) else {
                 return .init(
                     target: target,
                     outcome: .blocked(
@@ -226,6 +276,22 @@ struct ForemanSidebarRouter {
         }
 
         return .init(target: target, outcome: .dispatch(intent))
+    }
+
+    private func hasMatchingFingerprint(
+        terminalID: String,
+        fingerprint: String,
+        state: ForemanSidebarRoutingState
+    ) -> Bool {
+        if let attention = state.pendingAttentionByTerminalID[terminalID] {
+            return attention.fingerprint == fingerprint
+        }
+
+        if let workerSnapshot = state.workerSnapshotsByTerminalID[terminalID] {
+            return workerSnapshot.attentionFingerprint == fingerprint
+        }
+
+        return false
     }
 
     private func title(
