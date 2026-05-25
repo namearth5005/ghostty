@@ -464,6 +464,10 @@ final class ForemanSidebarStore: ObservableObject {
     }
 
     func executeSuggestion(terminalID: String, action: TerminalSuggestedAction) {
+        if terminalRows.contains(where: { $0.terminalID == terminalID }) {
+            selectTerminal(terminalID)
+        }
+
         if action.authoritativePayload == nil,
            action.command == nil,
            action.guidancePrompt == nil,
@@ -970,14 +974,36 @@ final class ForemanSidebarStore: ObservableObject {
         if let workerSnapshot = understanding.workerSnapshot,
            !workerSnapshot.suggestions.isEmpty {
             return workerSnapshot.suggestions.map { suggestion in
-                TerminalSuggestedAction(
+                let authoritativePayload = snapshotReplyPayload(for: suggestion.payload)
+                let guidancePrompt = snapshotGuidancePrompt(for: suggestion.payload)
+                return TerminalSuggestedAction(
                     title: suggestion.title,
                     command: snapshotCommand(for: suggestion.payload),
                     reason: suggestion.rationale,
                     isRecommended: suggestion.recommended,
-                    authoritativeFingerprint: snapshotReplyPayload(for: suggestion.payload) == nil ? nil : workerSnapshot.attentionFingerprint,
-                    authoritativePayload: snapshotReplyPayload(for: suggestion.payload),
-                    guidancePrompt: snapshotGuidancePrompt(for: suggestion.payload)
+                    authoritativeFingerprint: authoritativePayload == nil && guidancePrompt == nil ? nil : workerSnapshot.attentionFingerprint,
+                    authoritativePayload: authoritativePayload,
+                    guidancePrompt: guidancePrompt
+                )
+            }
+        }
+
+        if let workerSnapshot = understanding.workerSnapshot,
+           let guidancePrompt = authoritativeGuidancePrompt(for: workerSnapshot) {
+            return understanding.suggestedNextActions.map { action in
+                guard action.command == nil,
+                      action.authoritativePayload == nil,
+                      action.guidancePrompt == nil else {
+                    return action
+                }
+
+                return TerminalSuggestedAction(
+                    title: action.title,
+                    command: nil,
+                    reason: action.reason,
+                    isRecommended: action.isRecommended,
+                    authoritativeFingerprint: workerSnapshot.attentionFingerprint,
+                    guidancePrompt: guidancePrompt
                 )
             }
         }
@@ -1014,6 +1040,17 @@ final class ForemanSidebarStore: ObservableObject {
         case .foremanPrompt(let value):
             return value
         case .text, .command, .option, .approval:
+            return nil
+        }
+    }
+
+    private func authoritativeGuidancePrompt(
+        for workerSnapshot: TerminalWorkerSnapshot
+    ) -> String? {
+        switch workerSnapshot.state.attention {
+        case .replyRequired, .choiceRequired, .approvalRequired, .error:
+            return workerSnapshot.request?.prompt ?? workerSnapshot.state.summary
+        case .none:
             return nil
         }
     }

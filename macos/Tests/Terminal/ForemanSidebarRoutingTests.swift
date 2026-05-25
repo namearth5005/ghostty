@@ -131,6 +131,48 @@ struct ForemanSidebarRoutingTests {
     }
 
     @Test
+    func authoritativeWorkerGuidanceSuggestionRoutesThroughTerminalScopedForemanIntent() {
+        let router = ForemanSidebarRouter()
+        let fingerprint = "codex-session-52|52|req-52"
+        let state = ForemanSidebarRoutingState(
+            projectID: "/tmp/ghostty",
+            selectedTerminalID: "term-1",
+            focusedTerminalID: "term-1",
+            preferredTarget: nil,
+            pendingAttentionByTerminalID: [:],
+            terminalRows: [makeRow("term-1")],
+            workerSnapshotsByTerminalID: [
+                "term-1": makeWorkerSnapshot(terminalID: "term-1", fingerprint: fingerprint),
+            ],
+            activeProjectGoal: ForemanProjectGoal(
+                projectID: "/tmp/ghostty",
+                objective: "Ship the sidebar fix"
+            )
+        )
+        let action = TerminalSuggestedAction(
+            title: "Reply to the agent",
+            command: nil,
+            reason: "Codex needs direction.",
+            isRecommended: true,
+            authoritativeFingerprint: fingerprint,
+            guidancePrompt: "What should I do here?"
+        )
+
+        let result = router.resolveSuggestion(action, terminalID: "term-1", state: state)
+
+        #expect(
+            result.outcome ==
+            .dispatch(
+                .guideForemanForTerminal(
+                    terminalID: "term-1",
+                    fingerprint: fingerprint,
+                    message: "What should I do here?"
+                )
+            )
+        )
+    }
+
+    @Test
     func completedGoalSuppressesPendingAttentionAction() {
         let router = ForemanSidebarRouter()
         let state = ForemanSidebarRoutingState(

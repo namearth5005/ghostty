@@ -1559,6 +1559,30 @@ extension AppDelegate {
             store.conversation.errorMessage = nil
             store.sidebarSession?.receiveUserMessage(message)
 
+        case .guideForemanForTerminal(let terminalID, let fingerprint, let message):
+            guard store.sidebarSession != nil || bindForemanSidebarSessionIfNeeded(to: store) else {
+                store.conversation.errorMessage = missingForemanAPIKeyMessage
+                return
+            }
+
+            let currentAttention = store.pendingAttentionByTerminalID[terminalID]
+            let currentWorkerSnapshot = store.workerSnapshotsByTerminalID[terminalID]
+            let matchesPendingAttention = currentAttention?.fingerprint == fingerprint
+            let matchesWorkerSnapshot = currentWorkerSnapshot?.attentionFingerprint == fingerprint
+
+            guard matchesPendingAttention || matchesWorkerSnapshot else {
+                store.errorMessage = currentAttention == nil && currentWorkerSnapshot == nil
+                    ? "This terminal target is no longer available."
+                    : "The terminal target changed before Foreman could review it."
+                return
+            }
+
+            store.conversation.errorMessage = nil
+            store.sidebarSession?.receiveUserMessage(
+                message,
+                preferredTerminalID: terminalID
+            )
+
         case .sendTerminalReply(let terminalID, let fingerprint, let message):
             executePendingAttentionPayload(
                 terminalID: terminalID,

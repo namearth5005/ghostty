@@ -22,7 +22,7 @@ actor ForemanAgent {
     private let conversation: ForemanConversation
     private let foremanService: ForemanService
     private let goalRuntime: ForemanProjectGoalRuntime
-    private let preferredTerminalID: String?
+    private var preferredTerminalID: String?
     private let onSendCommand: @MainActor (String, String) async -> Bool
     private let onStatusChange: @MainActor (AgentStatus) -> Void
     private let onAction: @MainActor (AgentAction, String) -> Void
@@ -95,7 +95,13 @@ actor ForemanAgent {
         }
     }
 
-    func receiveUserMessage(_ text: String) async {
+    func receiveUserMessage(
+        _ text: String,
+        preferredTerminalID explicitPreferredTerminalID: String? = nil
+    ) async {
+        if let explicitPreferredTerminalID {
+            preferredTerminalID = explicitPreferredTerminalID
+        }
         await MainActor.run {
             conversation.addMessage(role: .user, content: text)
         }

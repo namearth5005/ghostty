@@ -2,6 +2,7 @@ import Foundation
 
 enum ForemanSidebarIntent: Equatable, Sendable {
     case guideForeman(String)
+    case guideForemanForTerminal(terminalID: String, fingerprint: String, message: String)
     case sendTerminalReply(terminalID: String, fingerprint: String, message: String)
     case sendTerminalCommand(terminalID: String, command: String)
     case sendPendingAttentionAction(terminalID: String, fingerprint: String, payload: String)
@@ -212,6 +213,19 @@ struct ForemanSidebarRouter {
         }
 
         if let guidancePrompt = action.guidancePrompt {
+            if let fingerprint = action.authoritativeFingerprint {
+                return .init(
+                    target: target,
+                    outcome: .dispatch(
+                        .guideForemanForTerminal(
+                            terminalID: terminalID,
+                            fingerprint: fingerprint,
+                            message: guidancePrompt
+                        )
+                    )
+                )
+            }
+
             return .init(
                 target: target,
                 outcome: .dispatch(.guideForeman(guidancePrompt))
@@ -232,7 +246,7 @@ struct ForemanSidebarRouter {
             switch intent {
             case .reopenCompletedGoal, .extendGoal, .clearGoal:
                 break
-            case .guideForeman, .sendTerminalReply, .sendTerminalCommand, .sendPendingAttentionAction:
+            case .guideForeman, .guideForemanForTerminal, .sendTerminalReply, .sendTerminalCommand, .sendPendingAttentionAction:
                 return .init(
                     target: target,
                     outcome: .suppressed(message: ForemanRuntimePolicy.completedGoalMessage)
@@ -241,6 +255,21 @@ struct ForemanSidebarRouter {
         }
 
         switch intent {
+        case .guideForemanForTerminal(let terminalID, let fingerprint, _):
+            guard hasMatchingFingerprint(
+                terminalID: terminalID,
+                fingerprint: fingerprint,
+                state: state
+            ) else {
+                return .init(
+                    target: target,
+                    outcome: .blocked(
+                        message: "The terminal target changed before Foreman could review it.",
+                        draftToPreserve: nil
+                    )
+                )
+            }
+
         case .sendTerminalReply(let terminalID, let fingerprint, let message):
             guard hasMatchingFingerprint(
                 terminalID: terminalID,

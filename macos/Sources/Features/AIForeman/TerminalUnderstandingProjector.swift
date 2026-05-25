@@ -334,14 +334,16 @@ struct TerminalUnderstandingProjector {
         from suggestion: TerminalWorkerSnapshot.Suggestion,
         fingerprint: String
     ) -> TerminalSuggestedAction {
-        TerminalSuggestedAction(
+        let payload = workerPayload(for: suggestion.payload)
+        let guidancePrompt = guidancePrompt(for: suggestion.payload)
+        return TerminalSuggestedAction(
             title: suggestion.title,
             command: command(for: suggestion.payload),
             reason: suggestion.rationale,
             isRecommended: suggestion.recommended,
-            authoritativeFingerprint: workerPayload(for: suggestion.payload) == nil ? nil : fingerprint,
-            authoritativePayload: workerPayload(for: suggestion.payload),
-            guidancePrompt: guidancePrompt(for: suggestion.payload)
+            authoritativeFingerprint: payload == nil && guidancePrompt == nil ? nil : fingerprint,
+            authoritativePayload: payload,
+            guidancePrompt: guidancePrompt
         )
     }
 
@@ -383,6 +385,8 @@ struct TerminalUnderstandingProjector {
         state: TerminalUnderstandingState,
         lastEvent: String
     ) -> [TerminalSuggestedAction] {
+        let guidancePrompt = workerSnapshot.request?.prompt ?? workerSnapshot.state.summary
+
         if !workerSnapshot.suggestions.isEmpty {
             return workerSnapshot.suggestions.map {
                 makeSuggestedAction(from: $0, fingerprint: workerSnapshot.attentionFingerprint)
@@ -392,12 +396,21 @@ struct TerminalUnderstandingProjector {
         switch workerSnapshot.state.attention {
         case .approvalRequired:
             return [
-                .init(title: "Review the approval request", command: nil, reason: lastEvent, isRecommended: true),
+                .init(
+                    title: "Review the approval request",
+                    command: nil,
+                    reason: lastEvent,
+                    isRecommended: true,
+                    authoritativeFingerprint: workerSnapshot.attentionFingerprint,
+                    guidancePrompt: guidancePrompt
+                ),
                 .init(
                     title: "Let Foreman explain the requested action",
                     command: nil,
                     reason: "Use this when the approval UI is dense.",
-                    isRecommended: false
+                    isRecommended: false,
+                    authoritativeFingerprint: workerSnapshot.attentionFingerprint,
+                    guidancePrompt: guidancePrompt
                 ),
             ]
 
@@ -416,23 +429,46 @@ struct TerminalUnderstandingProjector {
             }
 
             return [
-                .init(title: "Inspect the available choices", command: nil, reason: lastEvent, isRecommended: true),
+                .init(
+                    title: "Inspect the available choices",
+                    command: nil,
+                    reason: lastEvent,
+                    isRecommended: true,
+                    authoritativeFingerprint: workerSnapshot.attentionFingerprint,
+                    guidancePrompt: guidancePrompt
+                ),
                 .init(
                     title: "Ask Foreman to summarize the options",
                     command: nil,
                     reason: "Useful when the menu is noisy.",
-                    isRecommended: false
+                    isRecommended: false,
+                    authoritativeFingerprint: workerSnapshot.attentionFingerprint,
+                    guidancePrompt: guidancePrompt
                 ),
             ]
 
         case .replyRequired:
             return [
-                .init(title: "Reply to the agent", command: nil, reason: lastEvent, isRecommended: true),
+                .init(
+                    title: "Reply to the agent",
+                    command: nil,
+                    reason: lastEvent,
+                    isRecommended: true,
+                    authoritativeFingerprint: workerSnapshot.attentionFingerprint,
+                    guidancePrompt: guidancePrompt
+                ),
             ]
 
         case .error:
             return [
-                .init(title: "Inspect the failure details", command: nil, reason: lastEvent, isRecommended: true),
+                .init(
+                    title: "Inspect the failure details",
+                    command: nil,
+                    reason: lastEvent,
+                    isRecommended: true,
+                    authoritativeFingerprint: workerSnapshot.attentionFingerprint,
+                    guidancePrompt: guidancePrompt
+                ),
             ]
 
         case .none:

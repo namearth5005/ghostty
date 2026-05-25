@@ -1227,6 +1227,61 @@ struct ForemanSidebarStoreTests {
 
     @MainActor
     @Test
+    func executeSuggestionRetargetsSelectionBeforeGuidanceDispatch() {
+        let store = ForemanSidebarStore(selectedTerminalID: "term-1")
+        store.applySnapshots([
+            TerminalSnapshot.makePreview(
+                terminalID: "term-1",
+                windowID: "win-1",
+                tabID: "tab-1",
+                title: "Term 1",
+                cwd: "/tmp/project",
+                isFocused: false,
+                visibleText: "",
+                recentScrollbackLines: [],
+                lastInputPreview: nil,
+                foregroundProcessName: "codex"
+            ),
+            TerminalSnapshot.makePreview(
+                terminalID: "term-2",
+                windowID: "win-1",
+                tabID: "tab-2",
+                title: "Term 2",
+                cwd: "/tmp/project",
+                isFocused: true,
+                visibleText: "",
+                recentScrollbackLines: [],
+                lastInputPreview: nil,
+                foregroundProcessName: "codex"
+            ),
+        ])
+
+        var dispatchedIntent: ForemanSidebarIntent?
+        store.onDispatchSidebarIntent = { intent in
+            dispatchedIntent = intent
+        }
+
+        store.executeSuggestion(
+            terminalID: "term-2",
+            action: .init(
+                title: "Inspect the available choices",
+                command: nil,
+                reason: "The worker needs direction.",
+                isRecommended: true
+            )
+        )
+
+        #expect(store.selectedTerminalID == "term-2")
+        #expect(
+            dispatchedIntent ==
+            .guideForeman(
+                "Inspect the available choices for terminal Term 2. The worker needs direction."
+            )
+        )
+    }
+
+    @MainActor
+    @Test
     func executeSuggestionRoutesAuthoritativeWorkerReplyWithoutPendingAttention() {
         let store = ForemanSidebarStore()
         let snapshot = makeWorkerTerminalSnapshot(terminalID: "term-1", title: "Codex", isFocused: true)
@@ -1284,6 +1339,54 @@ struct ForemanSidebarStoreTests {
                 message: "Preserve the current API and adapt the internals."
             )
         )
+    }
+
+    @MainActor
+    @Test
+    func authoritativeWorkerFallbackSuggestionPreservesGuidancePromptAndFingerprint() {
+        let store = ForemanSidebarStore()
+        let workerSnapshot = makeWorkerSnapshot(
+            terminalID: "term-1",
+            workerSessionID: "codex-session-52",
+            revision: 52,
+            workerGoal: "choose a migration path",
+            identity: .codex,
+            attention: .replyRequired,
+            summary: "Codex needs direction.",
+            details: ["Asked how to proceed."],
+            request: .init(
+                id: "req-52",
+                kind: .reply,
+                prompt: "What should I do here?",
+                options: []
+            ),
+            suggestions: []
+        )
+        let understanding = makeWorkerUnderstanding(
+            terminalID: "term-1",
+            shortExplanation: "Codex needs direction.",
+            lastMeaningfulEvent: "What should I do here?",
+            agentIdentity: .codex,
+            interactionState: .waitingText,
+            workerSnapshot: workerSnapshot,
+            suggestedNextActions: [
+                .init(
+                    title: "Reply to the agent",
+                    command: nil,
+                    reason: "What should I do here?",
+                    isRecommended: true
+                ),
+            ]
+        )
+        store.applySnapshots(
+            [makeWorkerTerminalSnapshot(terminalID: "term-1", title: "Codex", isFocused: true)],
+            understandingsByTerminalID: ["term-1": understanding]
+        )
+
+        let action = try! #require(store.terminalRows.first?.suggestedActions.first)
+
+        #expect(action.authoritativeFingerprint == workerSnapshot.attentionFingerprint)
+        #expect(action.guidancePrompt == "What should I do here?")
     }
 
     @MainActor
@@ -1493,7 +1596,8 @@ struct ForemanSidebarStoreTests {
         lastMeaningfulEvent: String,
         agentIdentity: AgentIdentity,
         interactionState: AgentInteractionState,
-        workerSnapshot: TerminalWorkerSnapshot
+        workerSnapshot: TerminalWorkerSnapshot,
+        suggestedNextActions: [TerminalSuggestedAction] = []
     ) -> TerminalUnderstanding {
         TerminalUnderstanding.preview(
             terminalID: terminalID,
@@ -1501,7 +1605,7 @@ struct ForemanSidebarStoreTests {
             shortExplanation: shortExplanation,
             lastMeaningfulEvent: lastMeaningfulEvent,
             importantDetails: workerSnapshot.state.details,
-            suggestedNextActions: [],
+            suggestedNextActions: suggestedNextActions,
             agentIdentity: agentIdentity,
             agentInteractionState: interactionState,
             supportLevel: .firstClass,

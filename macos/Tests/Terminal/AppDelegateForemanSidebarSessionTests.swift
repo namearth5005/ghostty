@@ -59,6 +59,68 @@ struct AppDelegateForemanSidebarSessionTests {
 
     @MainActor
     @Test
+    func dispatchingTargetedGuideForemanIntentPreservesTerminalPreference() {
+        let appDelegate = try! #require(NSApp.delegate as? AppDelegate)
+        let store = ForemanSidebarStore(conversation: ForemanConversation())
+        let spy = SidebarSessionSpy()
+
+        store.attachSidebarSession(spy)
+        store.applySnapshots([
+            TerminalSnapshot.makePreview(
+                terminalID: "term-2",
+                windowID: "win-1",
+                tabID: "tab-2",
+                title: "Codex",
+                cwd: "/tmp/project",
+                isFocused: true,
+                visibleText: "What should I do here?",
+                recentScrollbackLines: [],
+                lastInputPreview: nil,
+                foregroundProcessName: "codex"
+            ),
+        ], understandingsByTerminalID: [
+            "term-2": makeWorkerUnderstanding(
+                terminalID: "term-2",
+                shortExplanation: "Codex needs direction.",
+                lastMeaningfulEvent: "What should I do here?",
+                agentIdentity: .codex,
+                interactionState: .waitingText,
+                workerSnapshot: makeWorkerSnapshot(
+                    terminalID: "term-2",
+                    workerSessionID: "codex-session-52",
+                    revision: 52,
+                    workerGoal: "choose a migration path",
+                    identity: .codex,
+                    attention: .replyRequired,
+                    summary: "Codex needs direction.",
+                    details: [],
+                    request: .init(
+                        id: "req-52",
+                        kind: .reply,
+                        prompt: "What should I do here?",
+                        options: []
+                    ),
+                    suggestions: []
+                ),
+                suggestedNextActions: []
+            ),
+        ])
+
+        appDelegate.dispatchForemanSidebarIntent(
+            .guideForemanForTerminal(
+                terminalID: "term-2",
+                fingerprint: "codex-session-52|52|req-52",
+                message: "What should I do here?"
+            ),
+            store: store
+        )
+
+        #expect(spy.recordedMessages == ["What should I do here?"])
+        #expect(spy.recordedPreferredTerminalIDs == ["term-2"])
+    }
+
+    @MainActor
+    @Test
     func reactiveAutoDispatchInitialDecisionUsesUnifiedSidebarIntent() {
         let appDelegate = try! #require(NSApp.delegate as? AppDelegate)
         let store = ForemanSidebarStore(conversation: ForemanConversation())
@@ -170,11 +232,53 @@ struct AppDelegateForemanSidebarSessionTests {
         session.receiveUserMessage("continue")
         try await waitForSessionMode(conversation: conversation, expectedMode: AgentMode.autonomous)
     }
+
+    @MainActor
+    @Test
+    func sidebarSessionAppliesExplicitPreferredTerminalOnUserMessage() async throws {
+        let conversation = ForemanConversation()
+        let client = SessionTestClient()
+        let service = ForemanService(client: client)
+        let fileManager = FileManager.default
+        let root = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let dbURL = root.appendingPathComponent("foreman-memory.sqlite3")
+        var selectedTerminalID = "term-1"
+        let observedContext = makeAuthoritativeNeedsDirectionContext([
+            "term-1": "What should I do in terminal one?",
+            "term-2": "What should I do in terminal two?",
+        ])
+        let session = ForemanSidebarSession(
+            conversation: conversation,
+            foremanService: service,
+            goalRuntime: ForemanProjectGoalRuntime(memoryStore: ForemanMemoryStore(dbPath: dbURL)),
+            preferredTerminalID: { selectedTerminalID },
+            captureSnapshots: { observedContext.terminals },
+            captureObservedContext: { observedContext },
+            onSendCommand: { _, _ in true }
+        )
+        defer { try? fileManager.removeItem(at: root) }
+
+        session.receiveUserMessage("start")
+        try await waitForAgentMessage(
+            conversation: conversation,
+            content: "Needs direction\n\nWhat should I do in terminal one?",
+            terminalID: "term-1"
+        )
+
+        selectedTerminalID = "term-2"
+        session.receiveUserMessage("continue", preferredTerminalID: "term-2")
+        try await waitForAgentMessage(
+            conversation: conversation,
+            content: "Needs direction\n\nWhat should I do in terminal two?",
+            terminalID: "term-2"
+        )
+    }
 }
 
 @MainActor
 private final class SidebarSessionSpy: ForemanSidebarSessionControlling {
     private(set) var recordedMessages: [String] = []
+    private(set) var recordedPreferredTerminalIDs: [String?] = []
     private(set) var startedGoals: [String] = []
     private(set) var stopCallCount = 0
     private(set) var approvedCount = 0
@@ -185,8 +289,9 @@ private final class SidebarSessionSpy: ForemanSidebarSessionControlling {
         startedGoals.append(goal)
     }
 
-    func receiveUserMessage(_ text: String) {
+    func receiveUserMessage(_ text: String, preferredTerminalID: String?) {
         recordedMessages.append(text)
+        recordedPreferredTerminalIDs.append(preferredTerminalID)
     }
 
     func stop() {
@@ -308,4 +413,155 @@ private func waitForSessionStopped(
 
     Issue.record("Timed out waiting for session to stop.")
     throw CancellationError()
+}
+
+private func waitForAgentMessage(
+    conversation: ForemanConversation,
+    content: String,
+    terminalID: String,
+    timeoutNanoseconds: UInt64 = 3_000_000_000,
+    pollIntervalNanoseconds: UInt64 = 50_000_000
+) async throws {
+    let deadline = DispatchTime.now().uptimeNanoseconds + timeoutNanoseconds
+    while DispatchTime.now().uptimeNanoseconds < deadline {
+        let messages = await MainActor.run { conversation.messages }
+        if messages.contains(where: {
+            $0.role == .agent &&
+            $0.content == content &&
+            $0.terminalID == terminalID
+        }) {
+            return
+        }
+        try await Task.sleep(nanoseconds: pollIntervalNanoseconds)
+    }
+
+    Issue.record("Timed out waiting for agent message '\(content)' on \(terminalID).")
+    throw CancellationError()
+}
+
+private func makeAuthoritativeNeedsDirectionContext(
+    _ promptsByTerminalID: [String: String]
+) -> ForemanObservedTerminalContext {
+    let orderedTerminalIDs = promptsByTerminalID.keys.sorted()
+    let terminals = orderedTerminalIDs.map { terminalID in
+        TerminalSnapshot.makePreview(
+            terminalID: terminalID,
+            windowID: "win-\(terminalID)",
+            tabID: "tab-\(terminalID)",
+            title: terminalID,
+            cwd: "/tmp/project",
+            isFocused: false,
+            visibleText: promptsByTerminalID[terminalID] ?? "",
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessName: "codex"
+        )
+    }
+    let workerSnapshots = Dictionary(uniqueKeysWithValues: orderedTerminalIDs.map { terminalID in
+        let prompt = promptsByTerminalID[terminalID] ?? ""
+        let workerSnapshot = TerminalWorkerSnapshot(
+            schemaVersion: 1,
+            terminalID: terminalID,
+            workerSessionID: "codex-\(terminalID)",
+            revision: 1,
+            observedAt: Date(timeIntervalSince1970: 1_748_000_000),
+            ttlMilliseconds: 15_000,
+            workerGoal: "investigate",
+            agent: .init(identity: .codex),
+            state: .init(
+                lifecycle: .blocked,
+                attention: .replyRequired,
+                summary: prompt,
+                details: [],
+                runtimeFlags: []
+            ),
+            request: .init(
+                id: "req-\(terminalID)",
+                kind: .reply,
+                prompt: prompt,
+                options: []
+            ),
+            suggestions: []
+        )
+        return (terminalID, workerSnapshot)
+    })
+    let understandings = orderedTerminalIDs.map { terminalID in
+        let prompt = promptsByTerminalID[terminalID] ?? ""
+        return TerminalUnderstanding.preview(
+            terminalID: terminalID,
+            state: .waiting,
+            shortExplanation: prompt,
+            lastMeaningfulEvent: prompt,
+            importantDetails: [],
+            suggestedNextActions: [],
+            agentIdentity: .codex,
+            agentInteractionState: .waitingText,
+            supportLevel: .firstClass,
+            evidence: [.init(source: .runtime, detail: "authoritative_worker_snapshot", confidence: 1.0)],
+            agentInteractionContext: .waitingText(question: prompt),
+            workerSnapshot: workerSnapshots[terminalID]
+        )
+    }
+
+    return ForemanObservedTerminalContext(
+        terminals: terminals,
+        understandings: understandings,
+        workerSnapshots: workerSnapshots
+    )
+}
+
+private func makeWorkerSnapshot(
+    terminalID: String,
+    workerSessionID: String,
+    revision: Int,
+    workerGoal: String,
+    identity: AgentIdentity,
+    attention: TerminalWorkerAttention,
+    summary: String,
+    details: [String],
+    request: TerminalWorkerSnapshot.Request?,
+    suggestions: [TerminalWorkerSnapshot.Suggestion]
+) -> TerminalWorkerSnapshot {
+    TerminalWorkerSnapshot(
+        schemaVersion: 1,
+        terminalID: terminalID,
+        workerSessionID: workerSessionID,
+        revision: revision,
+        observedAt: Date(timeIntervalSince1970: 1_748_000_000),
+        ttlMilliseconds: 15_000,
+        workerGoal: workerGoal,
+        agent: .init(identity: identity),
+        state: .init(
+            lifecycle: .blocked,
+            attention: attention,
+            summary: summary,
+            details: details,
+            runtimeFlags: []
+        ),
+        request: request,
+        suggestions: suggestions
+    )
+}
+
+private func makeWorkerUnderstanding(
+    terminalID: String,
+    shortExplanation: String,
+    lastMeaningfulEvent: String,
+    agentIdentity: AgentIdentity,
+    interactionState: AgentInteractionState,
+    workerSnapshot: TerminalWorkerSnapshot,
+    suggestedNextActions: [TerminalSuggestedAction] = []
+) -> TerminalUnderstanding {
+    TerminalUnderstanding.preview(
+        terminalID: terminalID,
+        state: .waiting,
+        shortExplanation: shortExplanation,
+        lastMeaningfulEvent: lastMeaningfulEvent,
+        importantDetails: workerSnapshot.state.details,
+        suggestedNextActions: suggestedNextActions,
+        agentIdentity: agentIdentity,
+        agentInteractionState: interactionState,
+        supportLevel: .firstClass,
+        workerSnapshot: workerSnapshot
+    )
 }

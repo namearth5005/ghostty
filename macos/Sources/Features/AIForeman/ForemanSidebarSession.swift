@@ -3,7 +3,7 @@ import Foundation
 @MainActor
 protocol ForemanSidebarSessionControlling: AnyObject {
     func start(goal: String, mode: AgentMode)
-    func receiveUserMessage(_ text: String)
+    func receiveUserMessage(_ text: String, preferredTerminalID: String?)
     func stop()
     func approvePendingAction()
     func skipPendingAction()
@@ -16,6 +16,12 @@ protocol ForemanSidebarSessionControlling: AnyObject {
         to event: AgentNeedsAttentionEvent,
         observedContext: ForemanObservedTerminalContext?
     ) async
+}
+
+extension ForemanSidebarSessionControlling {
+    func receiveUserMessage(_ text: String) {
+        receiveUserMessage(text, preferredTerminalID: nil)
+    }
 }
 
 @MainActor
@@ -63,9 +69,10 @@ final class ForemanSidebarSession: ForemanSidebarSessionControlling {
         }
     }
 
-    func receiveUserMessage(_ text: String) {
+    func receiveUserMessage(_ text: String, preferredTerminalID explicitPreferredTerminalID: String?) {
+        let resolvedPreferredTerminalID = explicitPreferredTerminalID ?? preferredTerminalID()
         guard let agent else {
-            let agent = ensureAgent(preferredTerminalID: preferredTerminalID())
+            let agent = ensureAgent(preferredTerminalID: resolvedPreferredTerminalID)
             let initialGoal = conversation.runtimeState.effectiveGoal() ?? text
             Task {
                 await agent.start(
@@ -75,14 +82,20 @@ final class ForemanSidebarSession: ForemanSidebarSessionControlling {
                     captureObservedContext: captureObservedContext
                 )
                 if initialGoal != text {
-                    await agent.receiveUserMessage(text)
+                    await agent.receiveUserMessage(
+                        text,
+                        preferredTerminalID: resolvedPreferredTerminalID
+                    )
                 }
             }
             return
         }
 
         Task {
-            await agent.receiveUserMessage(text)
+            await agent.receiveUserMessage(
+                text,
+                preferredTerminalID: resolvedPreferredTerminalID
+            )
         }
     }
 
