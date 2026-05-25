@@ -59,6 +59,90 @@ struct AppDelegateForemanSidebarSessionTests {
 
     @MainActor
     @Test
+    func reactiveAutoDispatchInitialDecisionUsesUnifiedSidebarIntent() {
+        let appDelegate = try! #require(NSApp.delegate as? AppDelegate)
+        let store = ForemanSidebarStore(conversation: ForemanConversation())
+        let attention = PendingAgentAttention(
+            terminalID: "term-1",
+            agentIdentity: .codex,
+            interactionState: .waitingText,
+            fingerprint: "fp-1",
+            title: "Suggested reply",
+            description: "Should I preserve the API?",
+            detail: nil,
+            actions: [
+                .init(
+                    id: "preserve-api",
+                    title: "Preserve the API",
+                    payload: "Preserve the current API and adapt the internals.",
+                    style: .primary
+                ),
+            ]
+        )
+        let action = try! #require(attention.actions.first)
+
+        var dispatchedIntent: ForemanSidebarIntent?
+        store.onDispatchSidebarIntent = { intent in
+            dispatchedIntent = intent
+        }
+
+        let handled = appDelegate.handleReactiveInitialDecision(
+            .autoDispatchPendingAttention(attention, action),
+            store: store
+        )
+
+        #expect(handled)
+        #expect(
+            dispatchedIntent ==
+            .sendPendingAttentionAction(
+                terminalID: "term-1",
+                fingerprint: "fp-1",
+                payload: "Preserve the current API and adapt the internals."
+            )
+        )
+        #expect(store.pendingAttentionByTerminalID["term-1"] == attention)
+    }
+
+    @MainActor
+    @Test
+    func reactiveShowPendingAttentionDecisionOnlyStoresAttention() {
+        let appDelegate = try! #require(NSApp.delegate as? AppDelegate)
+        let store = ForemanSidebarStore(conversation: ForemanConversation())
+        let attention = PendingAgentAttention(
+            terminalID: "term-1",
+            agentIdentity: .codex,
+            interactionState: .waitingText,
+            fingerprint: "fp-1",
+            title: "Suggested reply",
+            description: "Should I preserve the API?",
+            detail: nil,
+            actions: [
+                .init(
+                    id: "preserve-api",
+                    title: "Preserve the API",
+                    payload: "Preserve the current API and adapt the internals.",
+                    style: .primary
+                ),
+            ]
+        )
+
+        var dispatchedIntent: ForemanSidebarIntent?
+        store.onDispatchSidebarIntent = { intent in
+            dispatchedIntent = intent
+        }
+
+        let handled = appDelegate.handleReactiveInitialDecision(
+            .showPendingAttention(attention),
+            store: store
+        )
+
+        #expect(handled)
+        #expect(dispatchedIntent == nil)
+        #expect(store.pendingAttentionByTerminalID["term-1"] == attention)
+    }
+
+    @MainActor
+    @Test
     func sidebarSessionPreservesModeAcrossImplicitRestart() async throws {
         let conversation = ForemanConversation()
         let client = SessionTestClient()

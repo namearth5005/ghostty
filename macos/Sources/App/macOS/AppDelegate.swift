@@ -343,18 +343,7 @@ class AppDelegate: NSObject,
                     activeGoalStatus: store.runtimeState.activeProjectGoal?.status
                 )
 
-                if case .showPendingAttention(let attention) = initialDecision {
-                    store.upsertPendingAttention(attention)
-                    return
-                }
-
-                if case .autoDispatchPendingAttention(let attention, let action) = initialDecision {
-                    store.upsertPendingAttention(attention)
-                    self.executePendingAttentionAction(
-                        attention,
-                        action: action,
-                        store: store
-                    )
+                if self.handleReactiveInitialDecision(initialDecision, store: store) {
                     return
                 }
 
@@ -1773,6 +1762,24 @@ extension AppDelegate {
         )
         store.errorMessage = nil
         refreshAIForemanSidebar()
+    }
+
+    @MainActor
+    func handleReactiveInitialDecision(
+        _ decision: ForemanReactiveEventRouter.InitialDecision,
+        store: ForemanSidebarStore
+    ) -> Bool {
+        switch decision {
+        case .showPendingAttention(let attention):
+            store.upsertPendingAttention(attention)
+            return true
+        case .autoDispatchPendingAttention(let attention, let action):
+            store.upsertPendingAttention(attention)
+            store.executePendingAttentionAction(attention, action: action)
+            return true
+        case .draftWaitingText, .react:
+            return false
+        }
     }
 
     @MainActor
