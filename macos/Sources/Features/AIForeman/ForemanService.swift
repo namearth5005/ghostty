@@ -87,6 +87,13 @@ extension ForemanLLMClient {
         overview: TerminalOverview,
         lastOutcome: TerminalOutcomeReport?
     ) async throws -> AgentReplyDraftResponse {
+        if let authoritative = authoritativeReplyDraftResponse(
+            event: event,
+            workerSnapshots: workerSnapshots
+        ) {
+            return authoritative
+        }
+
         try await draftAgentReply(
             narrationContext: narrationContext,
             event: event,
@@ -143,6 +150,71 @@ extension ForemanLLMClient {
         }
 
         return .init(thought: step.thought, suggestion: suggestion)
+    }
+
+    private func authoritativeReplyDraftResponse(
+        event: AgentNeedsAttentionEvent,
+        workerSnapshots: [String: TerminalWorkerSnapshot]
+    ) -> AgentReplyDraftResponse? {
+        guard let snapshot = workerSnapshots[event.terminalID],
+              let request = snapshot.request else {
+            return nil
+        }
+
+        let requestSuggestions = snapshot.suggestions.filter { suggestion in
+            suggestion.requestID == nil || suggestion.requestID == request.id
+        }
+
+        if let suggestion = requestSuggestions.first(where: \.recommended) ?? requestSuggestions.first {
+            let payload = payloadString(for: suggestion.payload)
+            let replySuggestion: AgentReplyDraftSuggestion
+
+            switch suggestion.payload {
+            case .foremanPrompt:
+                replySuggestion = .askHuman(
+                    terminalID: event.terminalID,
+                    message: payload,
+                    reason: suggestion.rationale.nilIfEmpty ?? "The structured worker snapshot requested project-level guidance.",
+                    confidence: suggestion.recommended ? 1.0 : 0.8
+                )
+            case .text, .command, .option, .approval:
+                replySuggestion = .replyToAgent(
+                    terminalID: event.terminalID,
+                    message: payload,
+                    reason: suggestion.rationale,
+                    confidence: suggestion.recommended ? 1.0 : 0.8
+                )
+            }
+
+            return .init(
+                thought: snapshot.state.summary,
+                suggestion: replySuggestion
+            )
+        }
+
+        return .init(
+            thought: snapshot.state.summary,
+            suggestion: .askHuman(
+                terminalID: event.terminalID,
+                message: request.prompt,
+                reason: "The structured worker snapshot needs direction and did not provide a suggested reply.",
+                confidence: 1.0
+            )
+        )
+    }
+
+    private func payloadString(for payload: TerminalWorkerSnapshot.Payload) -> String {
+        switch payload {
+        case .text(let value), .command(let value), .option(let value), .approval(let value), .foremanPrompt(let value):
+            return value
+        }
+    }
+}
+
+private extension String {
+    var nilIfEmpty: String? {
+        let trimmed = trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 }
 

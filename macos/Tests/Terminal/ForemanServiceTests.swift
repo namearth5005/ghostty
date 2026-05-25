@@ -398,6 +398,102 @@ struct ForemanServiceTests {
     }
 
     @Test
+    func serviceGenericReplyDraftFallbackUsesAuthoritativeWorkerSnapshotBeforeLegacyPlannerStep() async throws {
+        let client = LegacyAgentStepOnlyClient()
+        let service = ForemanService(client: client)
+        let conversation = await MainActor.run { ForemanConversation() }
+        let event = AgentNeedsAttentionEvent(
+            terminalID: "term-1",
+            agentIdentity: .codex,
+            interactionState: .waitingText,
+            deltaText: "Should I preserve the API?",
+            timestamp: Date(timeIntervalSince1970: 1)
+        )
+        let workerSnapshot = TerminalWorkerSnapshot(
+            schemaVersion: 1,
+            terminalID: "term-1",
+            workerSessionID: "codex-session-1",
+            revision: 7,
+            observedAt: Date(timeIntervalSince1970: 1_748_444_444),
+            ttlMilliseconds: 15_000,
+            workerGoal: "stabilize the API",
+            agent: .init(identity: .codex),
+            state: .init(
+                lifecycle: .running,
+                attention: .replyRequired,
+                summary: "Codex is waiting for a reply.",
+                details: ["Asked whether the API should stay stable."],
+                runtimeFlags: []
+            ),
+            request: .init(
+                id: "req-7",
+                kind: .reply,
+                prompt: "Should I preserve the API?",
+                options: []
+            ),
+            suggestions: []
+        )
+        let narrationContext = await MainActor.run { conversation.narrationContext }
+
+        let response = try await service.draftAgentReply(
+            narrationContext: narrationContext,
+            event: event,
+            terminals: sampleSnapshots(),
+            understandings: [],
+            workerSnapshots: ["term-1": workerSnapshot],
+            overview: .init(summary: "term-1 waiting", changedTerminalIDs: ["term-1"], primaryTerminalID: "term-1"),
+            lastOutcome: nil
+        )
+
+        #expect(await client.genericStepCallCount() == 0)
+        #expect(response.thought == "Codex is waiting for a reply.")
+        #expect(
+            response.suggestion == .askHuman(
+                terminalID: "term-1",
+                message: "Should I preserve the API?",
+                reason: "The structured worker snapshot needs direction and did not provide a suggested reply.",
+                confidence: 1.0
+            )
+        )
+    }
+
+    @Test
+    func serviceGenericReplyDraftFallbackStillUsesLegacyPlannerWithoutWorkerSnapshot() async throws {
+        let client = LegacyAgentStepOnlyClient()
+        let service = ForemanService(client: client)
+        let conversation = await MainActor.run { ForemanConversation() }
+        let event = AgentNeedsAttentionEvent(
+            terminalID: "term-1",
+            agentIdentity: .codex,
+            interactionState: .waitingText,
+            deltaText: "What should I work on next?",
+            timestamp: Date(timeIntervalSince1970: 1)
+        )
+        let narrationContext = await MainActor.run { conversation.narrationContext }
+
+        let response = try await service.draftAgentReply(
+            narrationContext: narrationContext,
+            event: event,
+            terminals: sampleSnapshots(),
+            understandings: [],
+            workerSnapshots: [:],
+            overview: .init(summary: "term-1 waiting", changedTerminalIDs: ["term-1"], primaryTerminalID: "term-1"),
+            lastOutcome: nil
+        )
+
+        #expect(await client.genericStepCallCount() == 1)
+        #expect(response.thought == "Legacy planner should not be used here.")
+        #expect(
+            response.suggestion == .replyToAgent(
+                terminalID: "term-1",
+                message: "legacy fallback",
+                reason: "This should not be used for authoritative worker snapshots.",
+                confidence: 0.6
+            )
+        )
+    }
+
+    @Test
     func openAIPromptIncludesWorkerSnapshotsAndNarratorConstraint() async throws {
         let transport = RecordingResponsesTransport(
             payload: """
@@ -638,6 +734,38 @@ private actor LegacyReplyDraftClient: ForemanLLMClient {
 
     func didUseLegacyDraftPath() -> Bool {
         legacyDraftCallCount == 1
+    }
+}
+
+private actor LegacyAgentStepOnlyClient: ForemanLLMClient {
+    private var genericStepCalls = 0
+
+    func summarize(snapshot: TerminalSnapshot) async throws -> TerminalSummary {
+        throw RecordingForemanClientError.unexpectedCall
+    }
+
+    func planDispatch(instruction: String, summaries: [TerminalSummary]) async throws -> DispatchPlan {
+        throw RecordingForemanClientError.unexpectedCall
+    }
+
+    func agentStep(
+        narrationContext: ForemanNarrationContext,
+        terminals: [TerminalSnapshot],
+        lastOutcome: TerminalOutcomeReport?
+    ) async throws -> AgentStepResponse {
+        genericStepCalls += 1
+        return try makeStepResponse(
+            thought: "Legacy planner should not be used here.",
+            action: .sendCommand(
+                terminalID: "term-1",
+                command: "legacy fallback",
+                reason: "This should not be used for authoritative worker snapshots."
+            )
+        )
+    }
+
+    func genericStepCallCount() -> Int {
+        genericStepCalls
     }
 }
 
