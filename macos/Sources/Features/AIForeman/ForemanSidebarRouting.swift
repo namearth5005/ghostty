@@ -115,15 +115,17 @@ struct ForemanSidebarRouter {
             return .completedGoal(projectID: goal.projectID)
         }
 
+        let replyTargetsByTerminalID = availableReplyTargets(from: state)
+
         switch state.preferredTarget {
         case .project:
             return .project(projectID: state.projectID)
 
         case .terminal(let terminalID):
-            if let attention = state.pendingAttentionByTerminalID[terminalID] {
+            if let fingerprint = replyTargetsByTerminalID[terminalID] {
                 return .terminalReply(
                     terminalID: terminalID,
-                    fingerprint: attention.fingerprint
+                    fingerprint: fingerprint
                 )
             }
 
@@ -132,40 +134,40 @@ struct ForemanSidebarRouter {
         }
 
         if let selectedTerminalID = state.selectedTerminalID,
-           let attention = state.pendingAttentionByTerminalID[selectedTerminalID] {
+           let fingerprint = replyTargetsByTerminalID[selectedTerminalID] {
             return .terminalReply(
                 terminalID: selectedTerminalID,
-                fingerprint: attention.fingerprint
+                fingerprint: fingerprint
             )
         }
 
-        let waitingTerminalIDs = state.pendingAttentionByTerminalID.keys.sorted()
+        let waitingTerminalIDs = replyTargetsByTerminalID.keys.sorted()
         if waitingTerminalIDs.count == 1,
            let terminalID = waitingTerminalIDs.first,
-           let attention = state.pendingAttentionByTerminalID[terminalID] {
+           let fingerprint = replyTargetsByTerminalID[terminalID] {
             return .terminalReply(
                 terminalID: terminalID,
-                fingerprint: attention.fingerprint
+                fingerprint: fingerprint
             )
         }
 
         if let focusedTerminalID = state.focusedTerminalID,
-           let attention = state.pendingAttentionByTerminalID[focusedTerminalID] {
+           let fingerprint = replyTargetsByTerminalID[focusedTerminalID] {
             return .terminalReply(
                 terminalID: focusedTerminalID,
-                fingerprint: attention.fingerprint
+                fingerprint: fingerprint
             )
         }
 
         if waitingTerminalIDs.count > 1 {
             let options = waitingTerminalIDs.compactMap { terminalID -> ForemanTargetOption? in
-                guard let attention = state.pendingAttentionByTerminalID[terminalID] else {
+                guard let fingerprint = replyTargetsByTerminalID[terminalID] else {
                     return nil
                 }
 
                 return .terminalReply(
                     terminalID: terminalID,
-                    fingerprint: attention.fingerprint,
+                    fingerprint: fingerprint,
                     title: title(for: terminalID, in: state)
                 )
             } + [.project(title: "Guide Foreman")]
@@ -321,6 +323,42 @@ struct ForemanSidebarRouter {
         }
 
         return false
+    }
+
+    private func availableReplyTargets(
+        from state: ForemanSidebarRoutingState
+    ) -> [String: String] {
+        var targets = Dictionary(
+            uniqueKeysWithValues: state.pendingAttentionByTerminalID.map { terminalID, attention in
+                (terminalID, attention.fingerprint)
+            }
+        )
+
+        for (terminalID, workerSnapshot) in state.workerSnapshotsByTerminalID
+        where targets[terminalID] == nil && snapshotSupportsReplyRouting(workerSnapshot) {
+            targets[terminalID] = workerSnapshot.attentionFingerprint
+        }
+
+        return targets
+    }
+
+    private func snapshotSupportsReplyRouting(
+        _ snapshot: TerminalWorkerSnapshot
+    ) -> Bool {
+        guard let request = snapshot.request else {
+            return false
+        }
+
+        guard snapshot.state.attention != .none else {
+            return false
+        }
+
+        switch request.kind {
+        case .command:
+            return false
+        case .reply, .choice, .approval:
+            return true
+        }
     }
 
     private func title(

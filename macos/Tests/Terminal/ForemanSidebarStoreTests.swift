@@ -1200,6 +1200,55 @@ struct ForemanSidebarStoreTests {
 
     @MainActor
     @Test
+    func sendChatMessageRoutesAuthoritativeWorkerRepliesWithoutPendingAttention() {
+        let store = ForemanSidebarStore(selectedTerminalID: "term-1")
+        let snapshot = makeWorkerTerminalSnapshot(terminalID: "term-1", title: "Codex")
+        let workerSnapshot = makeWorkerSnapshot(
+            terminalID: "term-1",
+            workerSessionID: "codex-session-41",
+            revision: 41,
+            workerGoal: "stabilize the API",
+            identity: .codex,
+            attention: .replyRequired,
+            summary: "Codex is waiting for a reply.",
+            details: ["Asked whether the API should stay stable."],
+            request: .init(
+                id: "req-41",
+                kind: .reply,
+                prompt: "Should I preserve the API?",
+                options: []
+            )
+        )
+        let understanding = makeWorkerUnderstanding(
+            terminalID: "term-1",
+            shortExplanation: "Codex is waiting for a reply.",
+            lastMeaningfulEvent: "Should I preserve the API?",
+            agentIdentity: .codex,
+            interactionState: .waitingText,
+            workerSnapshot: workerSnapshot
+        )
+
+        store.applySnapshots([snapshot], understandingsByTerminalID: ["term-1": understanding])
+
+        var dispatchedIntent: ForemanSidebarIntent?
+        store.onDispatchSidebarIntent = { intent in
+            dispatchedIntent = intent
+        }
+
+        store.sendChatMessage("Preserve the current API and adapt the internals.")
+
+        #expect(
+            dispatchedIntent ==
+            .sendTerminalReply(
+                terminalID: "term-1",
+                fingerprint: workerSnapshot.attentionFingerprint,
+                message: "Preserve the current API and adapt the internals."
+            )
+        )
+    }
+
+    @MainActor
+    @Test
     func executeSuggestionRoutesInformationalActionsThroughUnifiedIntent() {
         let store = ForemanSidebarStore()
         var dispatchedIntent: ForemanSidebarIntent?

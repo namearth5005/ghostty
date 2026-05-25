@@ -27,6 +27,32 @@ struct ForemanSidebarRoutingTests {
     }
 
     @Test
+    func selectedAuthoritativeWorkerWithoutPendingAttentionResolvesReplyTarget() {
+        let router = ForemanSidebarRouter()
+        let fingerprint = "codex-session-41|41|req-41"
+        let state = ForemanSidebarRoutingState(
+            projectID: "/tmp/ghostty",
+            selectedTerminalID: "term-2",
+            focusedTerminalID: "term-1",
+            preferredTarget: nil,
+            pendingAttentionByTerminalID: [:],
+            terminalRows: [makeRow("term-1"), makeRow("term-2")],
+            workerSnapshotsByTerminalID: [
+                "term-2": makeWorkerSnapshot(terminalID: "term-2", fingerprint: fingerprint),
+            ],
+            activeProjectGoal: ForemanProjectGoal(
+                projectID: "/tmp/ghostty",
+                objective: "Ship the sidebar fix"
+            )
+        )
+
+        #expect(
+            router.resolveTarget(from: state) ==
+            .terminalReply(terminalID: "term-2", fingerprint: fingerprint)
+        )
+    }
+
+    @Test
     func ambiguousWaitingTargetsRequireExplicitChoice() {
         let router = ForemanSidebarRouter()
         let state = ForemanSidebarRoutingState(
