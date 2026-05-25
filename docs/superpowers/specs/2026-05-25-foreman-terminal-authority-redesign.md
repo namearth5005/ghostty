@@ -1,7 +1,7 @@
 # Foreman Terminal-Authority Redesign
 
 **Date:** 2026-05-25
-**Status:** Drafted for review
+**Status:** Validated for review
 **Recommendation:** Make terminal-local worker state authoritative and thin Foreman into a narrator/router/voice layer.
 
 ## Goal
@@ -29,6 +29,39 @@ This creates a split-brain product:
 - autonomous behavior can be driven by Foreman-authored reasoning instead of worker-local reasoning
 
 The result is ambiguity about who is actually in charge.
+
+## Current-State Validation
+
+The redesign direction is grounded in the current codebase, not just product preference.
+
+### Duplicate Planning Authority Exists Today
+
+- `TerminalUnderstandingProjector` produces terminal-local `suggestedNextActions`.
+- `PendingAgentAttentionFactory` separately derives approval and choice actions from the same terminal state.
+- `ForemanAgent` separately drafts replies, recommends next steps, evaluates completion, and can directly send commands.
+
+This means the current system has multiple places deciding what should happen next.
+
+### Foreman Still Acts Like A Worker
+
+`ForemanAgent` still has direct execution authority through `onSendCommand`, and it can author recommendation prompts such as “recommend the single most useful next step toward that goal.” That is evidence that Foreman is still behaving like a second worker instead of a thin coordinator.
+
+### Mode And Completion State Are Still Leaky
+
+- `ForemanSidebarSession.receiveUserMessage` recreates a missing in-memory session in `.interactive` mode rather than preserving the previous mode.
+- Kimi `plan_mode` is parsed in wire data but is not currently used to drive routing or continuation policy.
+- `ForemanAgent.reopenCompletedGoalAfterUserMessageIfNeeded` reopens completed goals on any non-empty follow-up text.
+
+Those are direct examples of why mode policy and goal policy should move out of a monolithic Foreman agent and into explicit shared runtime rules.
+
+### Goal And Terminal State Are Still Split Across Layers
+
+- terminal-local suggestions live in `TerminalUnderstanding`
+- completion gating is applied in the router and sidebar store
+- active project goal is still stored on `ForemanConversation`
+- `ForemanAgent` independently evaluates project goals against observed terminals
+
+This split confirms that the product still lacks one clear semantic authority boundary.
 
 ## Non-Goals
 
