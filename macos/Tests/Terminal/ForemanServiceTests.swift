@@ -191,12 +191,67 @@ struct ForemanServiceTests {
             conversation: conversation,
             terminals: sampleSnapshots(),
             understandings: [understanding],
+            workerSnapshots: [:],
             overview: overview,
             lastOutcome: nil
         )
 
         let recorded = await client.lastUnderstandings
         #expect(recorded == [understanding])
+    }
+
+    @Test
+    func serviceForwardsAuthoritativeWorkerSnapshotsToClient() async throws {
+        let client = RecordingForemanClient()
+        let service = ForemanService(client: client)
+        let conversation = await MainActor.run { ForemanConversation() }
+        let workerSnapshot = TerminalWorkerSnapshot(
+            schemaVersion: 1,
+            terminalID: "term-1",
+            workerSessionID: "codex-session-1",
+            revision: 7,
+            observedAt: Date(timeIntervalSince1970: 1_748_444_444),
+            ttlMilliseconds: 15_000,
+            workerGoal: "stabilize the API",
+            agent: .init(identity: .codex),
+            state: .init(
+                lifecycle: .running,
+                attention: .replyRequired,
+                summary: "Codex is waiting for a reply.",
+                details: ["Asked whether the API should stay stable."],
+                runtimeFlags: []
+            ),
+            request: .init(
+                id: "req-7",
+                kind: .reply,
+                prompt: "Should I preserve the API?",
+                options: []
+            ),
+            suggestions: [
+                .init(
+                    id: "preserve-api",
+                    kind: .reply,
+                    title: "Preserve the API",
+                    payload: .text("Preserve the current API and adapt the internals."),
+                    rationale: "Lowest migration risk.",
+                    recommended: true,
+                    execution: .manualOnly,
+                    requestID: "req-7"
+                ),
+            ]
+        )
+
+        _ = try await service.agentStep(
+            conversation: conversation,
+            terminals: sampleSnapshots(),
+            understandings: [],
+            workerSnapshots: ["term-1": workerSnapshot],
+            overview: .init(summary: "term-1 waiting", changedTerminalIDs: ["term-1"], primaryTerminalID: "term-1"),
+            lastOutcome: nil
+        )
+
+        let recorded = await client.lastWorkerSnapshots
+        #expect(recorded == ["term-1": workerSnapshot])
     }
 
     @Test
@@ -222,12 +277,75 @@ struct ForemanServiceTests {
             conversation: conversation,
             terminals: sampleSnapshots(),
             understandings: [understanding],
+            workerSnapshots: [:],
             overview: overview,
             lastOutcome: nil
         )
 
         let forwarded = await client.didUseLegacyPath()
         #expect(forwarded == true)
+    }
+
+    @Test
+    func openAIPromptIncludesWorkerSnapshotsAndNarratorConstraint() async throws {
+        let transport = RecordingResponsesTransport(
+            payload: """
+            {"thought":"Use the worker suggestion.","action":{"type":"respond","message":"Codex already recommended preserving the API."}}
+            """
+        )
+        let client = OpenAIClient(apiKey: "test-key", transport: transport)
+        let conversation = await MainActor.run { ForemanConversation() }
+        let workerSnapshot = TerminalWorkerSnapshot(
+            schemaVersion: 1,
+            terminalID: "term-1",
+            workerSessionID: "codex-session-1",
+            revision: 7,
+            observedAt: Date(timeIntervalSince1970: 1_748_444_444),
+            ttlMilliseconds: 15_000,
+            workerGoal: "stabilize the API",
+            agent: .init(identity: .codex),
+            state: .init(
+                lifecycle: .running,
+                attention: .replyRequired,
+                summary: "Codex is waiting for a reply.",
+                details: ["Asked whether the API should stay stable."],
+                runtimeFlags: []
+            ),
+            request: .init(
+                id: "req-7",
+                kind: .reply,
+                prompt: "Should I preserve the API?",
+                options: []
+            ),
+            suggestions: [
+                .init(
+                    id: "preserve-api",
+                    kind: .reply,
+                    title: "Preserve the API",
+                    payload: .text("Preserve the current API and adapt the internals."),
+                    rationale: "Lowest migration risk.",
+                    recommended: true,
+                    execution: .manualOnly,
+                    requestID: "req-7"
+                ),
+            ]
+        )
+
+        _ = try await client.agentStep(
+            conversation: conversation,
+            terminals: sampleSnapshots(),
+            understandings: [],
+            workerSnapshots: ["term-1": workerSnapshot],
+            overview: .init(summary: "term-1 waiting", changedTerminalIDs: ["term-1"], primaryTerminalID: "term-1"),
+            lastOutcome: nil
+        )
+
+        let request = try #require(await transport.lastRequest)
+        let prompt = request.input[0].content[0].text
+        #expect(request.instructions.contains("do not invent a competing suggestion"))
+        #expect(prompt.contains("Structured worker snapshots:"))
+        #expect(prompt.contains("\"preserve-api\""))
+        #expect(prompt.contains("\"worker_goal\":\"stabilize the API\""))
     }
 }
 
@@ -250,6 +368,7 @@ private func sampleSnapshots() -> [TerminalSnapshot] {
 
 private actor RecordingForemanClient: ForemanLLMClient {
     private(set) var lastUnderstandings: [TerminalUnderstanding] = []
+    private(set) var lastWorkerSnapshots: [String: TerminalWorkerSnapshot] = [:]
 
     func summarize(snapshot: TerminalSnapshot) async throws -> TerminalSummary {
         throw RecordingForemanClientError.unexpectedCall
@@ -263,10 +382,12 @@ private actor RecordingForemanClient: ForemanLLMClient {
         conversation: ForemanConversation,
         terminals: [TerminalSnapshot],
         understandings: [TerminalUnderstanding],
+        workerSnapshots: [String: TerminalWorkerSnapshot],
         overview: TerminalOverview,
         lastOutcome: TerminalOutcomeReport?
     ) async throws -> AgentStepResponse {
         lastUnderstandings = understandings
+        lastWorkerSnapshots = workerSnapshots
         return try makeStepResponse(
             thought: "Answering from structured context.",
             action: .respond(message: overview.summary)
@@ -286,10 +407,12 @@ private actor RecordingForemanClient: ForemanLLMClient {
         event: AgentNeedsAttentionEvent,
         terminals: [TerminalSnapshot],
         understandings: [TerminalUnderstanding],
+        workerSnapshots: [String: TerminalWorkerSnapshot],
         overview: TerminalOverview,
         lastOutcome: TerminalOutcomeReport?
     ) async throws -> AgentReplyDraftResponse {
         lastUnderstandings = understandings
+        lastWorkerSnapshots = workerSnapshots
         return AgentReplyDraftResponse(
             thought: "Asking for human direction.",
             suggestion: .askHuman(

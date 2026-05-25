@@ -229,7 +229,8 @@ actor ForemanAgent {
         await MainActor.run {
             conversation.updateTerminalContext(
                 overview: overview,
-                understandings: understandings
+                understandings: understandings,
+                workerSnapshots: observedTerminals.workerSnapshots
             )
         }
         _ = await updateConversationProjectGoal(
@@ -252,6 +253,7 @@ actor ForemanAgent {
             event: event,
             terminals: deltaTerminals,
             understandings: understandings,
+            workerSnapshots: observedTerminals.workerSnapshots,
             overview: overview,
             lastOutcome: lastOutcome
         )
@@ -432,7 +434,8 @@ actor ForemanAgent {
             await MainActor.run {
                 conversation.updateTerminalContext(
                     overview: overview,
-                    understandings: understandings
+                    understandings: understandings,
+                    workerSnapshots: observedTerminals.workerSnapshots
                 )
             }
             _ = await updateConversationProjectGoal(
@@ -462,6 +465,7 @@ actor ForemanAgent {
                 conversation: conversation,
                 terminals: deltaTerminals,
                 understandings: understandings,
+                workerSnapshots: observedTerminals.workerSnapshots,
                 overview: overview,
                 lastOutcome: lastOutcome
             )
@@ -727,7 +731,8 @@ actor ForemanAgent {
         await MainActor.run {
             conversation.updateTerminalContext(
                 overview: overview,
-                understandings: understandings
+                understandings: understandings,
+                workerSnapshots: observedTerminals.workerSnapshots
             )
         }
         _ = await updateConversationProjectGoal(
@@ -757,6 +762,7 @@ actor ForemanAgent {
             conversation: conversation,
             terminals: deltaTerminals,
             understandings: understandings,
+            workerSnapshots: observedTerminals.workerSnapshots,
             overview: overview,
             lastOutcome: lastOutcome
         )

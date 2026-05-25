@@ -43,6 +43,7 @@ final class ForemanConversation: ObservableObject {
     @Published var errorMessage: String?
     @Published var lastOverview: TerminalOverview?
     @Published var lastUnderstandings: [TerminalUnderstanding] = []
+    @Published var lastWorkerSnapshots: [String: TerminalWorkerSnapshot] = [:]
     @Published private(set) var hiddenContext: [String] = []
     @Published private(set) var activeProjectGoal: ForemanProjectGoal?
 
@@ -57,6 +58,7 @@ final class ForemanConversation: ObservableObject {
         self.errorMessage = nil
         self.lastOverview = nil
         self.lastUnderstandings = []
+        self.lastWorkerSnapshots = [:]
         self.hiddenContext = []
         self.activeProjectGoal = nil
         addMessage(role: .user, content: goal)
@@ -67,6 +69,7 @@ final class ForemanConversation: ObservableObject {
         status = .idle
         lastOverview = nil
         lastUnderstandings = []
+        lastWorkerSnapshots = [:]
         hiddenContext = []
     }
 
@@ -110,10 +113,12 @@ final class ForemanConversation: ObservableObject {
 
     func updateTerminalContext(
         overview: TerminalOverview,
-        understandings: [TerminalUnderstanding]
+        understandings: [TerminalUnderstanding],
+        workerSnapshots: [String: TerminalWorkerSnapshot] = [:]
     ) {
         self.lastOverview = overview
         self.lastUnderstandings = understandings
+        self.lastWorkerSnapshots = workerSnapshots
     }
 
     func setActiveProjectGoal(_ goal: ForemanProjectGoal?) {

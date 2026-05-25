@@ -7,6 +7,15 @@ protocol ForemanLLMClient: Sendable {
         conversation: ForemanConversation,
         terminals: [TerminalSnapshot],
         understandings: [TerminalUnderstanding],
+        workerSnapshots: [String: TerminalWorkerSnapshot],
+        overview: TerminalOverview,
+        lastOutcome: TerminalOutcomeReport?
+    ) async throws -> AgentStepResponse
+
+    func agentStep(
+        conversation: ForemanConversation,
+        terminals: [TerminalSnapshot],
+        understandings: [TerminalUnderstanding],
         overview: TerminalOverview,
         lastOutcome: TerminalOutcomeReport?
     ) async throws -> AgentStepResponse
@@ -22,12 +31,39 @@ protocol ForemanLLMClient: Sendable {
         event: AgentNeedsAttentionEvent,
         terminals: [TerminalSnapshot],
         understandings: [TerminalUnderstanding],
+        workerSnapshots: [String: TerminalWorkerSnapshot],
+        overview: TerminalOverview,
+        lastOutcome: TerminalOutcomeReport?
+    ) async throws -> AgentReplyDraftResponse
+
+    func draftAgentReply(
+        conversation: ForemanConversation,
+        event: AgentNeedsAttentionEvent,
+        terminals: [TerminalSnapshot],
+        understandings: [TerminalUnderstanding],
         overview: TerminalOverview,
         lastOutcome: TerminalOutcomeReport?
     ) async throws -> AgentReplyDraftResponse
 }
 
 extension ForemanLLMClient {
+    func agentStep(
+        conversation: ForemanConversation,
+        terminals: [TerminalSnapshot],
+        understandings: [TerminalUnderstanding],
+        workerSnapshots: [String: TerminalWorkerSnapshot],
+        overview: TerminalOverview,
+        lastOutcome: TerminalOutcomeReport?
+    ) async throws -> AgentStepResponse {
+        try await agentStep(
+            conversation: conversation,
+            terminals: terminals,
+            understandings: understandings,
+            overview: overview,
+            lastOutcome: lastOutcome
+        )
+    }
+
     func agentStep(
         conversation: ForemanConversation,
         terminals: [TerminalSnapshot],
@@ -47,6 +83,26 @@ extension ForemanLLMClient {
         event: AgentNeedsAttentionEvent,
         terminals: [TerminalSnapshot],
         understandings: [TerminalUnderstanding],
+        workerSnapshots: [String: TerminalWorkerSnapshot],
+        overview: TerminalOverview,
+        lastOutcome: TerminalOutcomeReport?
+    ) async throws -> AgentReplyDraftResponse {
+        let step = try await agentStep(
+            conversation: conversation,
+            terminals: terminals,
+            understandings: understandings,
+            workerSnapshots: workerSnapshots,
+            overview: overview,
+            lastOutcome: lastOutcome
+        )
+        return makeReplyDraftResponse(from: step, event: event)
+    }
+
+    func draftAgentReply(
+        conversation: ForemanConversation,
+        event: AgentNeedsAttentionEvent,
+        terminals: [TerminalSnapshot],
+        understandings: [TerminalUnderstanding],
         overview: TerminalOverview,
         lastOutcome: TerminalOutcomeReport?
     ) async throws -> AgentReplyDraftResponse {
@@ -57,7 +113,13 @@ extension ForemanLLMClient {
             overview: overview,
             lastOutcome: lastOutcome
         )
+        return makeReplyDraftResponse(from: step, event: event)
+    }
 
+    private func makeReplyDraftResponse(
+        from step: AgentStepResponse,
+        event: AgentNeedsAttentionEvent
+    ) -> AgentReplyDraftResponse {
         let suggestion: AgentReplyDraftSuggestion
         switch step.action {
         case .sendCommand(let terminalID, let command, let reason):
@@ -81,7 +143,7 @@ extension ForemanLLMClient {
             )
         }
 
-        return AgentReplyDraftResponse(thought: step.thought, suggestion: suggestion)
+        return .init(thought: step.thought, suggestion: suggestion)
     }
 }
 
@@ -104,6 +166,7 @@ actor ForemanService {
         conversation: ForemanConversation,
         terminals: [TerminalSnapshot],
         understandings: [TerminalUnderstanding],
+        workerSnapshots: [String: TerminalWorkerSnapshot],
         overview: TerminalOverview,
         lastOutcome: TerminalOutcomeReport?
     ) async throws -> AgentStepResponse {
@@ -111,6 +174,7 @@ actor ForemanService {
             conversation: conversation,
             terminals: terminals,
             understandings: understandings,
+            workerSnapshots: workerSnapshots,
             overview: overview,
             lastOutcome: lastOutcome
         )
@@ -121,6 +185,7 @@ actor ForemanService {
         event: AgentNeedsAttentionEvent,
         terminals: [TerminalSnapshot],
         understandings: [TerminalUnderstanding],
+        workerSnapshots: [String: TerminalWorkerSnapshot],
         overview: TerminalOverview,
         lastOutcome: TerminalOutcomeReport?
     ) async throws -> AgentReplyDraftResponse {
@@ -129,6 +194,7 @@ actor ForemanService {
             event: event,
             terminals: terminals,
             understandings: understandings,
+            workerSnapshots: workerSnapshots,
             overview: overview,
             lastOutcome: lastOutcome
         )

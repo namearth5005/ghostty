@@ -110,6 +110,7 @@ struct AnthropicClient: ForemanLLMClient, Sendable {
         conversation: ForemanConversation,
         terminals: [TerminalSnapshot],
         understandings: [TerminalUnderstanding],
+        workerSnapshots: [String: TerminalWorkerSnapshot],
         overview: TerminalOverview,
         lastOutcome: TerminalOutcomeReport?
     ) async throws -> AgentStepResponse {
@@ -134,6 +135,7 @@ struct AnthropicClient: ForemanLLMClient, Sendable {
                 messages: messages,
                 hiddenContext: hiddenContext,
                 understandings: understandings,
+                workerSnapshots: workerSnapshots,
                 overview: overview,
                 terminals: terminals,
                 lastOutcome: lastOutcome,
@@ -150,6 +152,7 @@ struct AnthropicClient: ForemanLLMClient, Sendable {
         event: AgentNeedsAttentionEvent,
         terminals: [TerminalSnapshot],
         understandings: [TerminalUnderstanding],
+        workerSnapshots: [String: TerminalWorkerSnapshot],
         overview: TerminalOverview,
         lastOutcome: TerminalOutcomeReport?
     ) async throws -> AgentReplyDraftResponse {
@@ -167,6 +170,7 @@ struct AnthropicClient: ForemanLLMClient, Sendable {
                 hiddenContext: hiddenContext,
                 event: event,
                 understandings: understandings,
+                workerSnapshots: workerSnapshots,
                 overview: overview,
                 terminals: terminals,
                 lastOutcome: lastOutcome,
@@ -185,10 +189,12 @@ struct AnthropicClient: ForemanLLMClient, Sendable {
     ) async throws -> AgentStepResponse {
         let overview = await MainActor.run { conversation.lastOverview } ?? Self.fallbackOverview(for: terminals)
         let understandings = await MainActor.run { conversation.lastUnderstandings }
+        let workerSnapshots = await MainActor.run { conversation.lastWorkerSnapshots }
         return try await agentStep(
             conversation: conversation,
             terminals: terminals,
             understandings: understandings,
+            workerSnapshots: workerSnapshots,
             overview: overview,
             lastOutcome: lastOutcome
         )
@@ -222,11 +228,13 @@ extension AnthropicClient {
 
     private static func makeAgentStepInstructions() -> String {
         """
-        You are an autonomous terminal foreman. You observe terminal state, think step by step, and choose exactly ONE action.
+        You are a terminal foreman narrator and router. You do not replace an active terminal-local worker's plan.
         Return JSON only. Do not wrap the JSON in markdown code blocks.
         Available action types (use exact snake_case strings): respond, send_command, ask_user, declare_complete, declare_stuck.
         Treat the latest user message as the active turn. Earlier goal text is session context only and may be superseded by a follow-up.
         Use structured terminal understanding as your primary context. Use raw terminal snapshots only as supporting evidence.
+        If a terminal-local worker already supplied a structured next-step suggestion, do not invent a competing suggestion.
+        Prefer summarizing progress, asking the user to resolve ambiguity, or giving project-level guidance.
         Treat Active turn as the current task. If Active turn is a reactive terminal event, handle that event as the current task.
         Use respond for plain conversational replies that do not require terminal actions or a blocking follow-up.
         Use ask_user only when you genuinely need information from the user before you can continue a task.
@@ -246,6 +254,7 @@ extension AnthropicClient {
     You draft the next interactive reply for a human supervising AI agent terminals.
     Return JSON only. Do not wrap the JSON in markdown code blocks.
     Choose exactly one suggestion type: reply_to_agent, ask_human, or no_action.
+    If a structured worker snapshot already includes a matching suggested reply or choice, follow that suggestion instead of inventing a competing one.
     Use reply_to_agent when terminal history gives enough context to send a useful raw message to the AI agent.
     Use ask_human when the AI agent needs a real goal or choice that is absent from terminal history.
     Use no_action only when the waiting text is duplicate, cosmetic, or not actionable.
@@ -305,6 +314,7 @@ extension AnthropicClient {
         messages: [ConversationMessage],
         hiddenContext: [String],
         understandings: [TerminalUnderstanding],
+        workerSnapshots: [String: TerminalWorkerSnapshot],
         overview: TerminalOverview,
         terminals: [TerminalSnapshot],
         lastOutcome: TerminalOutcomeReport?,
@@ -345,6 +355,9 @@ extension AnthropicClient {
         Structured terminal understandings:
         \(encode(understandings, using: encoder))
 
+        Structured worker snapshots:
+        \(encode(workerSnapshots, using: encoder))
+
         Terminal snapshots:
         \(encode(terminals, using: encoder))
 
@@ -359,6 +372,7 @@ extension AnthropicClient {
         hiddenContext: [String],
         event: AgentNeedsAttentionEvent,
         understandings: [TerminalUnderstanding],
+        workerSnapshots: [String: TerminalWorkerSnapshot],
         overview: TerminalOverview,
         terminals: [TerminalSnapshot],
         lastOutcome: TerminalOutcomeReport?,
@@ -393,6 +407,9 @@ extension AnthropicClient {
 
         Structured terminal understandings:
         \(encode(understandings, using: encoder))
+
+        Structured worker snapshots:
+        \(encode(workerSnapshots, using: encoder))
 
         Terminal snapshots:
         \(encode(terminals, using: encoder))

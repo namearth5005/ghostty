@@ -183,6 +183,68 @@ struct AnthropicClientTests {
             confidence: 0.9
         ))
     }
+
+    @Test
+    func anthropicPromptIncludesWorkerSnapshotsAndNarratorConstraint() async throws {
+        let transport = RecordingAnthropicTransport(
+            payload: """
+            {"thought":"Use the worker suggestion.","action":{"type":"respond","message":"Codex already recommended preserving the API."}}
+            """
+        )
+        let client = AnthropicClient(apiKey: "test-key", transport: transport)
+        let conversation = await MainActor.run { ForemanConversation() }
+        let workerSnapshot = TerminalWorkerSnapshot(
+            schemaVersion: 1,
+            terminalID: "term-1",
+            workerSessionID: "codex-session-1",
+            revision: 7,
+            observedAt: Date(timeIntervalSince1970: 1_748_444_444),
+            ttlMilliseconds: 15_000,
+            workerGoal: "stabilize the API",
+            agent: .init(identity: .codex),
+            state: .init(
+                lifecycle: .running,
+                attention: .replyRequired,
+                summary: "Codex is waiting for a reply.",
+                details: ["Asked whether the API should stay stable."],
+                runtimeFlags: []
+            ),
+            request: .init(
+                id: "req-7",
+                kind: .reply,
+                prompt: "Should I preserve the API?",
+                options: []
+            ),
+            suggestions: [
+                .init(
+                    id: "preserve-api",
+                    kind: .reply,
+                    title: "Preserve the API",
+                    payload: .text("Preserve the current API and adapt the internals."),
+                    rationale: "Lowest migration risk.",
+                    recommended: true,
+                    execution: .manualOnly,
+                    requestID: "req-7"
+                ),
+            ]
+        )
+
+        _ = try await client.agentStep(
+            conversation: conversation,
+            terminals: sampleSnapshots(),
+            understandings: [],
+            workerSnapshots: ["term-1": workerSnapshot],
+            overview: .init(summary: "term-1 waiting", changedTerminalIDs: ["term-1"], primaryTerminalID: "term-1"),
+            lastOutcome: nil
+        )
+
+        let request = try #require(await transport.lastRequest)
+        #expect(request.system.contains("do not invent a competing suggestion"))
+        let prompt = request.messages[0].content
+        #expect(prompt.contains("Structured worker snapshots:"))
+        #expect(prompt.contains("\"preserve-api\""))
+        #expect(prompt.contains("\"worker_goal\":\"stabilize the API\""))
+    }
 }
 
 @MainActor
