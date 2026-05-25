@@ -10,7 +10,6 @@ final class ForemanRuntimeState: ObservableObject {
 
     func resetForNewConversation() {
         resetObservedTerminalContext()
-        activeProjectGoal = nil
     }
 
     func resetObservedTerminalContext() {
