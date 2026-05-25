@@ -60,6 +60,35 @@ enum AgentStatus: String, Codable, Sendable, Equatable {
 struct AgentReplyDraftResponse: Codable, Equatable, Sendable {
     let thought: String
     let suggestion: AgentReplyDraftSuggestion
+
+    enum CodingKeys: String, CodingKey {
+        case thought
+        case suggestion
+    }
+
+    init(thought: String, suggestion: AgentReplyDraftSuggestion) {
+        self.thought = thought
+        self.suggestion = suggestion
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.thought = try container.decode(String.self, forKey: .thought)
+
+        if container.contains(.suggestion) {
+            let suggestionDecoder = try container.superDecoder(forKey: .suggestion)
+            self.suggestion = try AgentReplyDraftSuggestion(from: suggestionDecoder)
+            return
+        }
+
+        self.suggestion = try AgentReplyDraftSuggestion(from: decoder)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(thought, forKey: .thought)
+        try container.encode(suggestion, forKey: .suggestion)
+    }
 }
 
 enum AgentReplyDraftSuggestion: Codable, Equatable, Sendable {

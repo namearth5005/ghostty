@@ -132,9 +132,15 @@ struct ForemanServiceTests {
     @Test
     func openAIClientDraftAgentReplyUsesDedicatedSchema() async throws {
         let transport = RecordingResponsesTransport(
-            payload: """
-            {"thought":"Need human direction.","suggestion":{"type":"ask_human","terminal_id":"term-1","message":"What should Kimi do next?","reason":"No active Foreman goal exists.","confidence":0.8}}
-            """
+            payload: try makeReplyDraftResponse(
+                thought: "Need human direction.",
+                suggestion: .askHuman(
+                    terminalID: "term-1",
+                    message: "What should Kimi do next?",
+                    reason: "No active Foreman goal exists.",
+                    confidence: 0.8
+                )
+            )
         )
         let client = OpenAIClient(apiKey: "test-key", transport: transport)
         let conversation = await MainActor.run { ForemanConversation() }
@@ -284,6 +290,44 @@ struct ForemanServiceTests {
 
         let forwarded = await client.didUseLegacyPath()
         #expect(forwarded == true)
+    }
+
+    @Test
+    func serviceUsesReplyDraftProtocolFallbackForLegacyClients() async throws {
+        let client = LegacyReplyDraftClient()
+        let service = ForemanService(client: client)
+        let conversation = await MainActor.run { ForemanConversation() }
+        let event = AgentNeedsAttentionEvent(
+            terminalID: "term-1",
+            agentIdentity: .codex,
+            interactionState: .waitingText,
+            deltaText: "What should I work on next?",
+            timestamp: Date(timeIntervalSince1970: 1)
+        )
+
+        let response = try await service.draftAgentReply(
+            conversation: conversation,
+            event: event,
+            terminals: sampleSnapshots(),
+            understandings: [],
+            workerSnapshots: [:],
+            overview: .init(summary: "term-1 waiting", changedTerminalIDs: ["term-1"], primaryTerminalID: "term-1"),
+            lastOutcome: nil
+        )
+
+        let forwarded = await client.didUseLegacyDraftPath()
+        #expect(forwarded == true)
+        #expect(
+            response == AgentReplyDraftResponse(
+                thought: "Use the dedicated reply-draft path.",
+                suggestion: .askHuman(
+                    terminalID: "term-1",
+                    message: "What should the worker do next?",
+                    reason: "The legacy reply-draft path handled this request.",
+                    confidence: 0.7
+                )
+            )
+        )
     }
 
     @Test
@@ -453,6 +497,50 @@ private actor LegacyRecordingForemanClient: ForemanLLMClient {
     }
 }
 
+private actor LegacyReplyDraftClient: ForemanLLMClient {
+    private var legacyDraftCallCount = 0
+
+    func summarize(snapshot: TerminalSnapshot) async throws -> TerminalSummary {
+        throw RecordingForemanClientError.unexpectedCall
+    }
+
+    func planDispatch(instruction: String, summaries: [TerminalSummary]) async throws -> DispatchPlan {
+        throw RecordingForemanClientError.unexpectedCall
+    }
+
+    func agentStep(
+        conversation: ForemanConversation,
+        terminals: [TerminalSnapshot],
+        lastOutcome: TerminalOutcomeReport?
+    ) async throws -> AgentStepResponse {
+        throw RecordingForemanClientError.unexpectedCall
+    }
+
+    func draftAgentReply(
+        conversation: ForemanConversation,
+        event: AgentNeedsAttentionEvent,
+        terminals: [TerminalSnapshot],
+        understandings: [TerminalUnderstanding],
+        overview: TerminalOverview,
+        lastOutcome: TerminalOutcomeReport?
+    ) async throws -> AgentReplyDraftResponse {
+        legacyDraftCallCount += 1
+        return AgentReplyDraftResponse(
+            thought: "Use the dedicated reply-draft path.",
+            suggestion: .askHuman(
+                terminalID: event.terminalID,
+                message: "What should the worker do next?",
+                reason: "The legacy reply-draft path handled this request.",
+                confidence: 0.7
+            )
+        )
+    }
+
+    func didUseLegacyDraftPath() -> Bool {
+        legacyDraftCallCount == 1
+    }
+}
+
 private actor RecordingResponsesTransport: OpenAIResponsesTransport {
     let payload: String
     private(set) var lastRequest: OpenAIClient.Request?
@@ -479,4 +567,20 @@ private func makeStepResponse(thought: String, action: AgentAction) throws -> Ag
 
     let data = try JSONEncoder().encode(StepEnvelope(thought: thought, action: action))
     return try JSONDecoder().decode(AgentStepResponse.self, from: data)
+}
+
+private func makeReplyDraftResponse(
+    thought: String,
+    suggestion: AgentReplyDraftSuggestion
+) throws -> String {
+    struct DraftEnvelope: Encodable {
+        let thought: String
+        let suggestion: AgentReplyDraftSuggestion
+    }
+
+    let data = try JSONEncoder().encode(DraftEnvelope(thought: thought, suggestion: suggestion))
+    guard let string = String(data: data, encoding: .utf8) else {
+        fatalError("Unable to encode AgentReplyDraftResponse fixture.")
+    }
+    return string
 }

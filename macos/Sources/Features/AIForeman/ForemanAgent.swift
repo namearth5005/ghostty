@@ -198,14 +198,6 @@ actor ForemanAgent {
         observedContext: ForemanObservedTerminalContext? = nil,
         captureSnapshots: @escaping @MainActor () -> [TerminalSnapshot]
     ) async throws -> PendingAgentAttention? {
-        if let authoritativeAttention = draftAuthoritativePendingAttention(
-            for: event,
-            observedContext: observedContext
-        ) {
-            DebugLogger.log("[ForemanAgent] draftPendingAttention authoritative terminal=\(event.terminalID.prefix(8)) title='\(authoritativeAttention.title)'")
-            return authoritativeAttention
-        }
-
         let contextMessage = makeContextMessage(for: event)
         DebugLogger.log("[ForemanAgent] draftPendingAttention start terminal=\(event.terminalID.prefix(8)) state=\(event.interactionState) delta='\(event.deltaText.prefix(160))'")
         await MainActor.run {
@@ -246,6 +238,13 @@ actor ForemanAgent {
                 for: event,
                 goal: evaluatedGoal
             )
+        }
+        if let authoritativeAttention = draftAuthoritativePendingAttention(
+            for: event,
+            observedTerminals: observedTerminals
+        ) {
+            DebugLogger.log("[ForemanAgent] draftPendingAttention authoritative terminal=\(event.terminalID.prefix(8)) title='\(authoritativeAttention.title)'")
+            return authoritativeAttention
         }
 
         let response = try await foremanService.draftAgentReply(
@@ -320,11 +319,10 @@ actor ForemanAgent {
 
     private func draftAuthoritativePendingAttention(
         for event: AgentNeedsAttentionEvent,
-        observedContext: ForemanObservedTerminalContext?
+        observedTerminals: ForemanObservedTerminalContext
     ) -> PendingAgentAttention? {
-        guard let observedContext,
-              let understanding = observedContext.understandings.first(where: { $0.terminalID == event.terminalID }),
-              let workerSnapshot = observedContext.workerSnapshots[event.terminalID] else {
+        guard let understanding = observedTerminals.understandings.first(where: { $0.terminalID == event.terminalID }),
+              let workerSnapshot = observedTerminals.workerSnapshots[event.terminalID] else {
             return nil
         }
 

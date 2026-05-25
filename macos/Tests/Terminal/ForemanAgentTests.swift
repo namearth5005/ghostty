@@ -179,7 +179,7 @@ struct ForemanAgentTests {
     }
 
     @Test
-    func followUpMessageAfterCompleteStartsANewLoop() async throws {
+    func explicitGoalReopenAfterCompleteStartsANewLoop() async throws {
         let conversation = await MainActor.run { ForemanConversation() }
         let responses: [AgentStepResponse] = [
             try makeStepResponse(
@@ -203,14 +203,14 @@ struct ForemanAgentTests {
 
         try await waitForStatus(.complete, in: conversation)
 
-        await agent.receiveUserMessage("hey how are you")
+        await agent.receiveUserMessage("/goal reopen")
 
         try await waitForIterationCount(2, in: conversation)
         try await waitForStatus(.complete, in: conversation)
 
         let messages = await MainActor.run { conversation.messages }
         let commands = await commandRecorder.recordedCommands()
-        #expect(messages.contains { $0.role == .user && $0.content == "hey how are you" })
+        #expect(messages.contains { $0.role == .user && $0.content == "/goal reopen" })
         #expect(messages.contains { $0.role == .agent && $0.content == "✅ Hello back." })
         #expect(commands.isEmpty)
     }
@@ -1588,6 +1588,127 @@ struct ForemanAgentTests {
         #expect(signatures.first?.detail?.contains("/goal reopen") == true)
         #expect(signatures.first?.detail?.contains("/goal clear") == true)
         #expect(signatures.first?.actions.isEmpty == true)
+    }
+
+    @Test
+    func draftPendingAttentionForCompletedGoalSuppressesAuthoritativeWorkerAttention() async throws {
+        let runtime = ForemanProjectGoalRuntime()
+        await runtime.saveGoal("Ship the goal evaluator.", for: "/tmp/project")
+        await runtime.recordEvaluation(
+            .init(
+                progress: .completed,
+                evidenceSnapshot: "Codex finished the evaluator slice and the project goal is done.",
+                evaluatedAt: Date(timeIntervalSince1970: 10)
+            ),
+            for: "/tmp/project"
+        )
+
+        let conversation = await MainActor.run { ForemanConversation() }
+        let client = ScriptedForemanClient(replyDrafts: [
+            try makeReplyDraftResponse(
+                thought: "This should never be drafted once the goal is complete.",
+                suggestion: .replyToAgent(
+                    terminalID: "term-1",
+                    message: "Keep going.",
+                    reason: "This should not be used.",
+                    confidence: 1.0
+                )
+            ),
+        ])
+        let commandRecorder = CommandRecorder()
+        let agent = makeAgent(
+            conversation: conversation,
+            client: client,
+            commandRecorder: commandRecorder,
+            goalRuntime: runtime,
+            preferredTerminalID: "term-1"
+        )
+
+        let snapshot = TerminalSnapshot.makePreview(
+            terminalID: "term-1",
+            windowID: "win-1",
+            tabID: "tab-1",
+            title: "Codex",
+            cwd: "/tmp/project",
+            isFocused: true,
+            visibleText: "Should I preserve the API?",
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessName: "codex"
+        )
+        let workerSnapshot = TerminalWorkerSnapshot(
+            schemaVersion: 1,
+            terminalID: "term-1",
+            workerSessionID: "codex-session-1",
+            revision: 7,
+            observedAt: Date(timeIntervalSince1970: 1_748_444_444),
+            ttlMilliseconds: 15_000,
+            workerGoal: "stabilize the API",
+            agent: .init(identity: .codex),
+            state: .init(
+                lifecycle: .running,
+                attention: .replyRequired,
+                summary: "Codex is waiting for a reply.",
+                details: ["Asked whether the API should stay stable."],
+                runtimeFlags: []
+            ),
+            request: .init(
+                id: "req-7",
+                kind: .reply,
+                prompt: "Should I preserve the API?",
+                options: []
+            ),
+            suggestions: [
+                .init(
+                    id: "preserve-api",
+                    kind: .reply,
+                    title: "Preserve the API",
+                    payload: .text("Preserve the current API and adapt the internals."),
+                    rationale: "Lowest migration risk.",
+                    recommended: true,
+                    execution: .manualOnly,
+                    requestID: "req-7"
+                ),
+            ]
+        )
+        let understanding = TerminalUnderstanding.preview(
+            terminalID: "term-1",
+            state: .waiting,
+            shortExplanation: "Codex is waiting for a reply.",
+            lastMeaningfulEvent: "Should I preserve the API?",
+            importantDetails: [],
+            suggestedNextActions: [],
+            agentIdentity: .codex,
+            agentInteractionState: .waitingText,
+            workerSnapshot: workerSnapshot
+        )
+
+        let attention = try await agent.draftPendingAttention(
+            for: AgentNeedsAttentionEvent(
+                terminalID: "term-1",
+                agentIdentity: .codex,
+                interactionState: .waitingText,
+                deltaText: "Should I preserve the API?",
+                timestamp: Date(timeIntervalSince1970: 11),
+                fingerprint: "term-1|codex|waitingText|complete-authoritative"
+            ),
+            observedContext: ForemanObservedTerminalContext(
+                terminals: [snapshot],
+                understandings: [understanding],
+                workerSnapshots: ["term-1": workerSnapshot]
+            ),
+            captureSnapshots: { [snapshot] }
+        )
+
+        let signature = try #require(pendingAttentionSignature(attention))
+        #expect(signature.title == "Goal complete")
+        #expect(signature.description.contains("continue") == true)
+        #expect(signature.description.contains("close") == true)
+        #expect(signature.detail?.contains("/goal reopen") == true)
+        #expect(signature.detail?.contains("/goal clear") == true)
+        #expect(signature.actions.isEmpty == true)
+        let draftCalls = await client.replyDraftCallCount()
+        #expect(draftCalls == 0)
     }
 
     @Test

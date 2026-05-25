@@ -87,15 +87,14 @@ extension ForemanLLMClient {
         overview: TerminalOverview,
         lastOutcome: TerminalOutcomeReport?
     ) async throws -> AgentReplyDraftResponse {
-        let step = try await agentStep(
+        try await draftAgentReply(
             conversation: conversation,
+            event: event,
             terminals: terminals,
             understandings: understandings,
-            workerSnapshots: workerSnapshots,
             overview: overview,
             lastOutcome: lastOutcome
         )
-        return makeReplyDraftResponse(from: step, event: event)
     }
 
     func draftAgentReply(
