@@ -8,6 +8,7 @@ struct ForemanObservedContextBuilder {
     }
 
     private let understandingEngine = TerminalUnderstandingEngine()
+    private let workerSnapshotProjector = TerminalWorkerSnapshotProjector()
 
     func build(
         snapshots: [TerminalSnapshot],
@@ -42,6 +43,23 @@ struct ForemanObservedContextBuilder {
         let understandingsByTerminalID = Dictionary(
             uniqueKeysWithValues: understandings.map { ($0.terminalID, $0) }
         )
+        let workerSnapshots: [String: TerminalWorkerSnapshot] = Dictionary(
+            uniqueKeysWithValues: understandings.compactMap { understanding -> (String, TerminalWorkerSnapshot)? in
+                guard let snapshot = snapshots.first(where: { $0.terminalID == understanding.terminalID }) else {
+                    return nil
+                }
+
+                let workerSnapshot = workerSnapshotProjector.project(
+                    snapshot: snapshot,
+                    workerGoal: nil,
+                    identity: understanding.agentIdentity,
+                    context: understanding.agentInteractionContext,
+                    fallbackState: understanding.state
+                )
+
+                return workerSnapshot.map { (understanding.terminalID, $0) }
+            }
+        )
         let runtimeEntriesByTerminalID = Dictionary(
             uniqueKeysWithValues: runtimePlan.entries.map { ($0.snapshot.terminalID, $0) }
         )
@@ -49,7 +67,8 @@ struct ForemanObservedContextBuilder {
         return Result(
             context: ForemanObservedTerminalContext(
                 terminals: snapshots,
-                understandings: understandings
+                understandings: understandings,
+                workerSnapshots: workerSnapshots
             ),
             understandingsByTerminalID: understandingsByTerminalID,
             runtimeEntriesByTerminalID: runtimeEntriesByTerminalID

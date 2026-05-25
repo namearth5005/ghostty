@@ -19,7 +19,7 @@ struct KimiWireTypesTests {
         #expect(record.message.payload.sender == "shell")
 
         let context = try #require(record.asAgentInteractionContext)
-        if case .waitingApproval(let desc, let tool) = context {
+        if case .waitingApproval(let desc, let tool, _, _, _, _) = context {
             #expect(desc == "Run shell command: git push origin main")
             #expect(tool == "shell")
         } else {
@@ -43,7 +43,7 @@ struct KimiWireTypesTests {
         #expect(firstQ.options?.count == 2)
 
         let context = try #require(record.asAgentInteractionContext)
-        if case .waitingChoice(let q, let opts) = context {
+        if case .waitingChoice(let q, let opts, _, _, _, _) = context {
             #expect(q == "Choose a branch")
             #expect(opts == ["main", "dev"])
         } else {
@@ -62,7 +62,7 @@ struct KimiWireTypesTests {
         let record = try JSONDecoder().decode(KimiWireRecord.self, from: data)
 
         let context = try #require(record.asAgentInteractionContext)
-        if case .waitingText(let q) = context {
+        if case .waitingText(let q, _, _, _, _) = context {
             #expect(q == "What is your name?")
         } else {
             Issue.record("Expected waitingText context")
@@ -120,7 +120,7 @@ struct KimiWireTypesTests {
         #expect(record.message.type == "StepBegin")
         #expect(record.message.payload.n == 3)
         let context = try #require(record.asAgentInteractionContext)
-        if case .running(let step) = context {
+        if case .running(let step, _, _) = context {
             #expect(step == "Step 3")
         } else {
             Issue.record("Expected running context with step")
@@ -139,7 +139,7 @@ struct KimiWireTypesTests {
 
         #expect(record.message.type == "Error")
         let context = try #require(record.asAgentInteractionContext)
-        if case .error(let desc) = context {
+        if case .error(let desc, _, _) = context {
             #expect(desc == "Authentication required")
         } else {
             Issue.record("Expected error context")
@@ -377,7 +377,7 @@ struct WireRecordsOutrankHeuristicsTests {
 
         #expect(understanding.agentIdentity == .kimi)
         #expect(understanding.agentInteractionState == .waitingApproval)
-        if case .waitingApproval(let desc, let tool) = understanding.agentInteractionContext {
+        if case .waitingApproval(let desc, let tool, _, _, _, _) = understanding.agentInteractionContext {
             #expect(desc == "Run shell command: git push origin main")
             #expect(tool == "shell")
         } else {
@@ -455,7 +455,7 @@ struct WireRecordsOutrankHeuristicsTests {
         )
 
         #expect(understanding.agentInteractionState == .waitingChoice)
-        if case .waitingChoice(let q, let opts) = understanding.agentInteractionContext {
+        if case .waitingChoice(let q, let opts, _, _, _, _) = understanding.agentInteractionContext {
             #expect(q == "Choose a branch")
             #expect(opts == ["main", "dev"])
         } else {

@@ -163,7 +163,14 @@ extension KimiWireRecord {
         case "ApprovalRequest":
             let desc = message.payload.description ?? "Approval requested"
             let tool = message.payload.sender ?? message.payload.tool_call_id
-            return .waitingApproval(description: desc, tool: tool)
+            return .waitingApproval(
+                description: desc,
+                tool: tool,
+                requestID: message.payload.id,
+                sessionID: nil,
+                revision: nil,
+                isPlanning: message.payload.plan_mode ?? false
+            )
 
         case "QuestionRequest":
             guard let firstQuestion = message.payload.questions?.first else {
@@ -173,24 +180,40 @@ extension KimiWireRecord {
             if let options = firstQuestion.options, !options.isEmpty {
                 return .waitingChoice(
                     question: questionText,
-                    options: options.map(\.label)
+                    options: options.map(\.label),
+                    requestID: message.payload.id,
+                    sessionID: nil,
+                    revision: nil,
+                    isPlanning: message.payload.plan_mode ?? false
                 )
             }
-            return .waitingText(question: questionText)
+            return .waitingText(
+                question: questionText,
+                requestID: message.payload.id,
+                sessionID: nil,
+                revision: nil,
+                isPlanning: message.payload.plan_mode ?? false
+            )
 
         case "TurnBegin":
-            return .running(stepDescription: nil)
+            return .running(stepDescription: nil, sessionID: nil, revision: nil)
 
         case "TurnEnd":
-            return .waitingText(question: nil)
+            return .waitingText(
+                question: nil,
+                requestID: nil,
+                sessionID: nil,
+                revision: nil,
+                isPlanning: message.payload.plan_mode ?? false
+            )
 
         case "StepBegin":
             let step = message.payload.n.map { "Step \($0)" }
-            return .running(stepDescription: step)
+            return .running(stepDescription: step, sessionID: nil, revision: message.payload.n)
 
         case "Error":
             let err = message.payload.message ?? message.payload.code ?? "Unknown error"
-            return .error(description: err)
+            return .error(description: err, sessionID: nil, revision: nil)
 
         default:
             return nil

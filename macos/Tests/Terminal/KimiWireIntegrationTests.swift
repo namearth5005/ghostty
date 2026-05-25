@@ -44,7 +44,7 @@ struct KimiWireIntegrationTests {
         let lastRecord = try #require(records.last)
         #expect(lastRecord.message.type == "TurnEnd")
         let context = try #require(lastRecord.asAgentInteractionContext)
-        if case .waitingText(let q) = context {
+        if case .waitingText(let q, _, _, _, _) = context {
             #expect(q == nil)
         } else {
             Issue.record("Expected waitingText, got \(context)")
@@ -130,6 +130,43 @@ struct KimiWireIntegrationTests {
         #expect(understanding.agentIdentity == .kimi)
         // Without wire records, heuristics see -- input and classify as waitingText
         #expect(understanding.agentInteractionState == .waitingText)
+    }
+
+    @Test
+    func questionRequestExposesPlanningMetadata() throws {
+        let record = KimiWireRecord(
+            timestamp: 1,
+            message: KimiWireMessage(
+                type: "QuestionRequest",
+                payload: KimiWirePayload(
+                    plan_mode: true,
+                    id: "req-12",
+                    questions: [
+                        QuestionItem(
+                            question: "Which direction should I take?",
+                            header: nil,
+                            options: [
+                                .init(label: "Keep current API", description: nil),
+                                .init(label: "Allow breaking change", description: nil),
+                            ],
+                            multi_select: nil
+                        ),
+                    ]
+                )
+            )
+        )
+
+        let context = try #require(record.asAgentInteractionContext)
+        let expected: AgentInteractionContext = .waitingChoice(
+            question: "Which direction should I take?",
+            options: ["Keep current API", "Allow breaking change"],
+            requestID: "req-12",
+            sessionID: nil,
+            revision: nil,
+            isPlanning: true
+        )
+
+        #expect(context == expected)
     }
 
     /// Monitor should find the most recent wire file in the sessions directory

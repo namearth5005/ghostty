@@ -176,6 +176,33 @@ struct TerminalUnderstandingTests {
     }
 
     @Test
+    func codableRoundTripPreservesWorkerSnapshot() throws {
+        let workerSnapshot = makeWorkerSnapshot()
+        let understanding = TerminalUnderstanding(
+            terminalID: "term-1",
+            title: "OpenAI Codex",
+            cwd: "/tmp/project",
+            state: .waiting,
+            agentIdentity: .codex,
+            agentInteractionState: .waitingText,
+            supportLevel: .firstClass,
+            lastMeaningfulEvent: "Should I keep the current API?",
+            shortExplanation: "Codex is waiting for your reply.",
+            importantDetails: ["The worker needs confirmation before editing the API."],
+            evidence: [],
+            suggestedNextActions: [],
+            agentInteractionContext: .waitingText(question: "Should I keep the current API?"),
+            workerSnapshot: workerSnapshot
+        )
+
+        let data = try JSONEncoder().encode(understanding)
+        let decoded = try JSONDecoder().decode(TerminalUnderstanding.self, from: data)
+
+        #expect(decoded == understanding)
+        #expect(decoded.workerSnapshot == workerSnapshot)
+    }
+
+    @Test
     func similarlyNamedProcessesDoNotCreateFirstClassUnderstandingWithoutSeparateScreenEvidence() {
         let engine = TerminalUnderstandingEngine()
         let snapshots = [

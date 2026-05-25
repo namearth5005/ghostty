@@ -2422,7 +2422,8 @@ private func kimiObservedWaitingTextContext(
                 evidence: [.init(source: .wireSignal, detail: "Wire record: QuestionRequest", confidence: 0.98)],
                 agentInteractionContext: .waitingText(question: "What should I do here?")
             ),
-        ]
+        ],
+        workerSnapshots: [:]
     )
 }
 

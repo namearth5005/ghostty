@@ -59,17 +59,17 @@ struct TerminalUnderstandingProjector {
         }
 
         switch classification.context {
-        case .waitingText(let question):
+        case .waitingText(let question, _, _, _, _):
             return question ?? lastEvent
-        case .waitingChoice(let question, _):
+        case .waitingChoice(let question, _, _, _, _, _):
             return question
-        case .waitingApproval(let description, _):
+        case .waitingApproval(let description, _, _, _, _, _):
             return description.isEmpty ? lastEvent : description
-        case .running(let stepDescription):
+        case .running(let stepDescription, _, _):
             return stepDescription ?? lastEvent
-        case .completed(let summary):
+        case .completed(let summary, _, _):
             return summary ?? lastEvent
-        case .error(let description):
+        case .error(let description, _, _):
             return description
         case .none:
             return lastEvent

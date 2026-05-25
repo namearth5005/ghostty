@@ -192,6 +192,7 @@ class AppDelegate: NSObject,
     private let aiForemanObservedContextBuilder = ForemanObservedContextBuilder()
     private var aiForemanCurrentSnapshots: [TerminalSnapshot] = []
     private var aiForemanCurrentUnderstandings: [TerminalUnderstanding] = []
+    private var aiForemanCurrentWorkerSnapshots: [String: TerminalWorkerSnapshot] = [:]
     private var aiForemanObservedOutcomeTracker = ForemanObservedOutcomeTracker()
     private var aiForemanPreviousSnapshots: [String: TerminalSnapshot] = [:]
     private var aiForemanPreviousUnderstandings: [String: TerminalUnderstanding] = [:]
@@ -332,7 +333,8 @@ class AppDelegate: NSObject,
                 let understanding = self.aiForemanPreviousUnderstandings[event.terminalID]
                 let observedContext = self.aiForemanCurrentSnapshots.isEmpty ? nil : ForemanObservedTerminalContext(
                     terminals: self.aiForemanCurrentSnapshots,
-                    understandings: self.aiForemanCurrentUnderstandings
+                    understandings: self.aiForemanCurrentUnderstandings,
+                    workerSnapshots: self.aiForemanCurrentWorkerSnapshots
                 )
                 let initialDecision = ForemanReactiveEventRouter.initialDecision(
                     for: event,
@@ -1954,6 +1956,7 @@ extension AppDelegate {
 
         aiForemanCurrentSnapshots = allSnapshots
         aiForemanCurrentUnderstandings = understandings
+        aiForemanCurrentWorkerSnapshots = observedContext.context.workerSnapshots
         aiForemanPreviousUnderstandings = understandingsByTerminalID
         aiForemanPreviousSnapshots = Dictionary(
             uniqueKeysWithValues: allSnapshots.map { ($0.terminalID, $0) }
@@ -1961,10 +1964,7 @@ extension AppDelegate {
 
         return (
             snapshotsByController: snapshotsByController,
-            context: ForemanObservedTerminalContext(
-                terminals: allSnapshots,
-                understandings: understandings
-            ),
+            context: observedContext.context,
             understandingsByTerminalID: understandingsByTerminalID
         )
     }

@@ -43,6 +43,47 @@ struct AgentInteractionContextResolverTests {
     }
 
     @Test
+    func kimiQuestionRequestPreservesRequestIDAndPlanningFlag() throws {
+        let records = [
+            KimiWireRecord(
+                timestamp: 1,
+                message: KimiWireMessage(
+                    type: "QuestionRequest",
+                    payload: KimiWirePayload(
+                        plan_mode: true,
+                        id: "req-12",
+                        questions: [
+                            QuestionItem(
+                                question: "Which direction should I take?",
+                                header: nil,
+                                options: [
+                                    .init(label: "Keep current API", description: nil),
+                                    .init(label: "Allow breaking change", description: nil),
+                                ],
+                                multi_select: nil
+                            ),
+                        ]
+                    )
+                )
+            ),
+        ]
+
+        let resolved = try #require(resolver.resolveKimi(from: records))
+        let expected: AgentInteractionContext = .waitingChoice(
+            question: "Which direction should I take?",
+            options: ["Keep current API", "Allow breaking change"],
+            requestID: "req-12",
+            sessionID: nil,
+            revision: nil,
+            isPlanning: true
+        )
+
+        #expect(resolved.context == expected)
+        #expect(resolved.context.requestID == "req-12")
+        #expect(resolved.context.isPlanning)
+    }
+
+    @Test
     func codexUsesLatestActionableWireRecord() throws {
         let records = [
             try decodeCodexRecord("""
