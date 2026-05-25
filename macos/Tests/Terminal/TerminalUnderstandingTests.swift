@@ -33,6 +33,33 @@ struct TerminalUnderstandingTests {
         )
     }
 
+    private func makeWorkerSnapshot() -> TerminalWorkerSnapshot {
+        TerminalWorkerSnapshot(
+            schemaVersion: 1,
+            terminalID: "term-worker",
+            workerSessionID: "worker-session-1",
+            revision: 3,
+            observedAt: Date(timeIntervalSince1970: 1_748_222_222),
+            ttlMilliseconds: 12_000,
+            workerGoal: "confirm the API direction",
+            agent: .init(identity: .codex),
+            state: .init(
+                lifecycle: .running,
+                attention: .replyRequired,
+                summary: "Waiting for an API decision.",
+                details: ["The worker asked whether the API should remain stable."],
+                runtimeFlags: []
+            ),
+            request: .init(
+                id: "req-3",
+                kind: .reply,
+                prompt: "Should I keep the current API?",
+                options: []
+            ),
+            suggestions: []
+        )
+    }
+
     private func interactiveParitySignature(_ understanding: TerminalUnderstanding) -> InteractiveParitySignature {
         InteractiveParitySignature(
             state: understanding.state,
@@ -102,6 +129,50 @@ struct TerminalUnderstandingTests {
         #expect(understanding.agentIdentity == .kimi)
         #expect(understanding.shortExplanation.contains("Kimi"))
         #expect(!understanding.shortExplanation.contains("Claude Code"))
+    }
+
+    @Test
+    func initializerStoresWorkerSnapshot() {
+        let workerSnapshot = makeWorkerSnapshot()
+        let understanding = TerminalUnderstanding(
+            terminalID: "term-1",
+            title: "OpenAI Codex",
+            cwd: "/tmp/project",
+            state: .waiting,
+            agentIdentity: .codex,
+            agentInteractionState: .waitingText,
+            supportLevel: .firstClass,
+            lastMeaningfulEvent: "Should I keep the current API?",
+            shortExplanation: "Codex is waiting for your reply.",
+            importantDetails: ["The worker needs confirmation before editing the API."],
+            evidence: [],
+            suggestedNextActions: [],
+            agentInteractionContext: .waitingText(question: "Should I keep the current API?"),
+            workerSnapshot: workerSnapshot
+        )
+
+        #expect(understanding.workerSnapshot == workerSnapshot)
+    }
+
+    @Test
+    func previewCarriesWorkerSnapshot() {
+        let workerSnapshot = makeWorkerSnapshot()
+        let understanding = TerminalUnderstanding.preview(
+            terminalID: "term-1",
+            state: .waiting,
+            shortExplanation: "Codex is waiting for your reply.",
+            lastMeaningfulEvent: "Should I keep the current API?",
+            importantDetails: ["The worker needs confirmation before editing the API."],
+            suggestedNextActions: [],
+            agentIdentity: .codex,
+            agentInteractionState: .waitingText,
+            supportLevel: .firstClass,
+            evidence: [],
+            agentInteractionContext: .waitingText(question: "Should I keep the current API?"),
+            workerSnapshot: workerSnapshot
+        )
+
+        #expect(understanding.workerSnapshot == workerSnapshot)
     }
 
     @Test

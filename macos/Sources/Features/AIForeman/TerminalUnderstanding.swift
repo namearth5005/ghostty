@@ -83,6 +83,7 @@ struct TerminalUnderstanding: Codable, Equatable, Sendable, Identifiable {
     let evidence: [UnderstandingEvidence]
     let suggestedNextActions: [TerminalSuggestedAction]
     let agentInteractionContext: AgentInteractionContext
+    let workerSnapshot: TerminalWorkerSnapshot?
 
     var id: String { terminalID }
 
@@ -99,7 +100,8 @@ struct TerminalUnderstanding: Codable, Equatable, Sendable, Identifiable {
         importantDetails: [String] = [],
         evidence: [UnderstandingEvidence] = [],
         suggestedNextActions: [TerminalSuggestedAction] = [],
-        agentInteractionContext: AgentInteractionContext = .none
+        agentInteractionContext: AgentInteractionContext = .none,
+        workerSnapshot: TerminalWorkerSnapshot? = nil
     ) {
         self.terminalID = terminalID
         self.title = title
@@ -114,6 +116,7 @@ struct TerminalUnderstanding: Codable, Equatable, Sendable, Identifiable {
         self.evidence = evidence
         self.suggestedNextActions = suggestedNextActions
         self.agentInteractionContext = agentInteractionContext
+        self.workerSnapshot = workerSnapshot
     }
 
     var recommendedAction: TerminalSuggestedAction? {
@@ -131,7 +134,8 @@ struct TerminalUnderstanding: Codable, Equatable, Sendable, Identifiable {
         agentInteractionState: AgentInteractionState = .unknown,
         supportLevel: AgentSupportLevel = .genericFallback,
         evidence: [UnderstandingEvidence] = [],
-        agentInteractionContext: AgentInteractionContext = .none
+        agentInteractionContext: AgentInteractionContext = .none,
+        workerSnapshot: TerminalWorkerSnapshot? = nil
     ) -> Self {
         .init(
             terminalID: terminalID,
@@ -146,7 +150,8 @@ struct TerminalUnderstanding: Codable, Equatable, Sendable, Identifiable {
             importantDetails: importantDetails,
             evidence: evidence,
             suggestedNextActions: suggestedNextActions,
-            agentInteractionContext: agentInteractionContext
+            agentInteractionContext: agentInteractionContext,
+            workerSnapshot: workerSnapshot
         )
     }
 }
