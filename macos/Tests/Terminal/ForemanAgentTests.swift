@@ -299,22 +299,7 @@ struct ForemanAgentTests {
     }
 
     @Test
-    func loopUsesSuppliedObservedContextDuringStart() async throws {
-        let conversation = await MainActor.run { ForemanConversation() }
-        let client = ScriptedForemanClient(
-            responses: [
-                try makeStepResponse(
-                    thought: "The structured waiting question is already clear.",
-                    action: .respond(message: "Use the structured waiting question.")
-                ),
-            ]
-        )
-        let commandRecorder = CommandRecorder()
-        let agent = makeAgent(
-            conversation: conversation,
-            client: client,
-            commandRecorder: commandRecorder
-        )
+    func loopUsesSuppliedObservedContextToPauseFirstClassWaitingWorkerDuringStart() async throws {
         let snapshots = kimiInputChromeSnapshots(
             terminalID: "term-1",
             title: "Kimi Code",
@@ -324,29 +309,25 @@ struct ForemanAgentTests {
             terminalID: "term-1",
             snapshots: snapshots
         )
-
-        await agent.start(
-            goal: "help kimi",
-            mode: .interactive,
-            captureSnapshots: { snapshots },
-            captureObservedContext: { observedContext }
+        let result = try await startWithObservedContextPauseCase(
+            snapshots: snapshots,
+            observedContext: observedContext,
+            response: try makeStepResponse(
+                thought: "Foreman should not plan this structured first-class wait.",
+                action: .respond(message: "This should never be used.")
+            )
         )
 
-        try await waitFor {
-            await MainActor.run { conversation.messages.contains { $0.content == "Use the structured waiting question." } }
-        }
-
-        let payloads = await client.recordedUnderstandings()
-        let forwarded = try #require(payloads.first?.first)
-        #expect(forwarded.agentInteractionContext == .waitingText(question: "What should I do here?"))
-        #expect(forwarded.lastMeaningfulEvent == "What should I do here?")
-        let runtimeState = await MainActor.run { conversation.runtimeState }
-        let lastUnderstandings = await MainActor.run { runtimeState.lastUnderstandings }
-        #expect(lastUnderstandings.first?.agentInteractionContext == .waitingText(question: "What should I do here?"))
+        let understanding = try #require(result.understanding)
+        #expect(result.stepCallCount == 0)
+        #expect(result.status == .waitingForUser)
+        #expect(result.agentMessage == "Needs direction\n\nWhat should I do here?")
+        #expect(understanding.interactionContext == .waitingText(question: "What should I do here?"))
+        #expect(understanding.lastMeaningfulEvent == "What should I do here?")
     }
 
     @Test
-    func approvalResumeUsesSuppliedObservedContextProvider() async throws {
+    func approvalResumeUsesSuppliedObservedContextProviderForGenericContext() async throws {
         let conversation = await MainActor.run { ForemanConversation() }
         let client = ScriptedForemanClient(
             responses: [
@@ -355,12 +336,12 @@ struct ForemanAgentTests {
                     action: .sendCommand(
                         terminalID: "term-1",
                         command: "echo structured",
-                        reason: "Reply based on the structured waiting question."
+                        reason: "Reply using the structured generic Codex context."
                     )
                 ),
                 try makeStepResponse(
-                    thought: "The context stayed structured after approval.",
-                    action: .respond(message: "Structured context persisted after approval.")
+                    thought: "The generic context stayed structured after approval.",
+                    action: .respond(message: "Structured generic context persisted after approval.")
                 ),
             ]
         )
@@ -370,18 +351,19 @@ struct ForemanAgentTests {
             client: client,
             commandRecorder: commandRecorder
         )
-        let snapshots = kimiInputChromeSnapshots(
+        let snapshots = genericCodexWireSnapshots(
             terminalID: "term-1",
-            title: "Kimi Code",
+            title: "Codex",
             isFocused: true
         )
-        let observedContext = kimiObservedWaitingTextContext(
+        let observedContext = genericCodexWireObservedContext(
             terminalID: "term-1",
-            snapshots: snapshots
+            title: "Codex",
+            isFocused: true
         )
 
         await agent.start(
-            goal: "reply to kimi",
+            goal: "reply to codex",
             mode: .interactive,
             captureSnapshots: { snapshots },
             captureObservedContext: { observedContext }
@@ -395,15 +377,15 @@ struct ForemanAgentTests {
         )
 
         try await waitFor {
-            await MainActor.run { conversation.messages.contains { $0.content == "Structured context persisted after approval." } }
+            await MainActor.run { conversation.messages.contains { $0.content == "Structured generic context persisted after approval." } }
         }
 
         let payloads = await client.recordedUnderstandings()
         #expect(payloads.count == 2)
         for payload in payloads {
             let forwarded = try #require(payload.first)
-            #expect(forwarded.agentInteractionContext == .waitingText(question: "What should I do here?"))
-            #expect(forwarded.lastMeaningfulEvent == "What should I do here?")
+            #expect(forwarded.agentIdentity == .codex)
+            #expect(forwarded.agentInteractionContext == .waitingText(question: nil))
         }
     }
 
@@ -1914,20 +1896,7 @@ struct ForemanAgentTests {
     }
 
     @Test
-    func reactiveIterationUsesSuppliedObservedContext() async throws {
-        let conversation = await MainActor.run { ForemanConversation() }
-        let client = ScriptedForemanClient(responses: [
-            try makeStepResponse(
-                thought: "The question is already clear from the structured context.",
-                action: .respond(message: "Use the structured waiting question.")
-            ),
-        ])
-        let commandRecorder = CommandRecorder()
-        let agent = makeAgent(
-            conversation: conversation,
-            client: client,
-            commandRecorder: commandRecorder
-        )
+    func reactiveIterationUsesSuppliedObservedContextToPauseFirstClassWaitingWorker() async throws {
         let snapshots = kimiInputChromeSnapshots(
             terminalID: "kimi-reactive",
             title: "Kimi Code",
@@ -1945,28 +1914,26 @@ struct ForemanAgentTests {
             timestamp: Date(timeIntervalSince1970: 1),
             fingerprint: "kimi-reactive|kimi|waitingText|wire"
         )
-
-        await agent.react(
-            to: event,
+        let result = try await reactiveObservedContextPauseCase(
+            snapshots: snapshots,
             observedContext: observedContext,
-            captureSnapshots: { snapshots }
+            event: event,
+            response: try makeStepResponse(
+                thought: "Foreman should not plan this structured first-class wait.",
+                action: .respond(message: "This should never be used.")
+            )
         )
 
-        try await waitFor {
-            await MainActor.run { conversation.messages.contains { $0.content == "Use the structured waiting question." } }
-        }
-
-        let payloads = await client.recordedUnderstandings()
-        let forwarded = try #require(payloads.first?.first)
-        #expect(forwarded.agentInteractionContext == .waitingText(question: "What should I do here?"))
-        #expect(forwarded.lastMeaningfulEvent == "What should I do here?")
-        let runtimeState = await MainActor.run { conversation.runtimeState }
-        let lastUnderstandings = await MainActor.run { runtimeState.lastUnderstandings }
-        #expect(lastUnderstandings.first?.agentInteractionContext == .waitingText(question: "What should I do here?"))
+        let understanding = try #require(result.understanding)
+        #expect(result.stepCallCount == 0)
+        #expect(result.status == .waitingForUser)
+        #expect(result.agentMessage == "Needs direction\n\nWhat should I do here?")
+        #expect(understanding.interactionContext == .waitingText(question: "What should I do here?"))
+        #expect(understanding.lastMeaningfulEvent == "What should I do here?")
     }
 
     @Test
-    func reactiveObservedContextKeepsLaunchPathParity() async throws {
+    func reactiveObservedContextKeepsFirstClassPauseParity() async throws {
         let cases: [(terminalID: String, title: String, isFocused: Bool)] = [
             ("kimi-reactive-existing", "shell", true),
             ("kimi-reactive-new-tab", "nambouchara@Nams-MacBook-Pro:~", false),
@@ -1974,6 +1941,8 @@ struct ForemanAgentTests {
         ]
 
         var forwardedUnderstandings: [UnderstandingSignature] = []
+        var agentMessages: [String] = []
+        var stepCallCounts: [Int] = []
 
         for entry in cases {
             let snapshots = kimiInputChromeSnapshots(
@@ -1985,7 +1954,7 @@ struct ForemanAgentTests {
                 terminalID: entry.terminalID,
                 snapshots: snapshots
             )
-            let result = try await reactiveIterationCase(
+            let result = try await reactiveObservedContextPauseCase(
                 snapshots: snapshots,
                 observedContext: observedContext,
                 event: AgentNeedsAttentionEvent(
@@ -1997,17 +1966,22 @@ struct ForemanAgentTests {
                     fingerprint: "\(entry.terminalID)|kimi|waitingText|wire"
                 ),
                 response: try makeStepResponse(
-                    thought: "The question is already clear from the structured context.",
-                    action: .respond(message: "Use the structured waiting question.")
+                    thought: "Foreman should not plan this structured first-class wait.",
+                    action: .respond(message: "This should never be used.")
                 )
             )
 
             forwardedUnderstandings.append(try #require(result.understanding))
+            agentMessages.append(try #require(result.agentMessage))
+            stepCallCounts.append(result.stepCallCount)
         }
 
         #expect(forwardedUnderstandings.dropFirst().allSatisfy { $0 == forwardedUnderstandings.first })
+        #expect(agentMessages.dropFirst().allSatisfy { $0 == agentMessages.first })
+        #expect(stepCallCounts.allSatisfy { $0 == 0 })
         #expect(forwardedUnderstandings.first?.interactionContext == .waitingText(question: "What should I do here?"))
         #expect(forwardedUnderstandings.first?.lastMeaningfulEvent == "What should I do here?")
+        #expect(agentMessages.first == "Needs direction\n\nWhat should I do here?")
     }
 
     @Test
@@ -3032,6 +3006,56 @@ private func reactiveIterationCase(
     return (
         understanding: understandingSignature(understandings.first?.first),
         messages: messages
+    )
+}
+
+private func reactiveObservedContextPauseCase(
+    snapshots: [TerminalSnapshot],
+    observedContext: ForemanObservedTerminalContext,
+    event: AgentNeedsAttentionEvent,
+    response: AgentStepResponse
+) async throws -> (
+    understanding: ForemanAgentTests.UnderstandingSignature?,
+    agentMessage: String?,
+    status: AgentStatus,
+    stepCallCount: Int
+) {
+    let conversation = await MainActor.run { ForemanConversation() }
+    let client = ScriptedForemanClient(responses: [response])
+    let commandRecorder = CommandRecorder()
+    let agent = makeAgent(
+        conversation: conversation,
+        client: client,
+        commandRecorder: commandRecorder
+    )
+
+    await agent.react(
+        to: event,
+        observedContext: observedContext,
+        captureSnapshots: { snapshots }
+    )
+
+    try await waitFor {
+        let stepCallCount = await client.agentStepCallCount()
+        return await MainActor.run {
+            (conversation.status == .waitingForUser && conversation.isRunning == false) ||
+            (stepCallCount > 0 && conversation.isRunning == false)
+        }
+    }
+
+    let commands = await commandRecorder.recordedCommands()
+    #expect(commands.isEmpty)
+
+    let runtimeState = await MainActor.run { conversation.runtimeState }
+    let status = await MainActor.run { conversation.status }
+    let lastUnderstandings = await MainActor.run { runtimeState.lastUnderstandings }
+    let messages = await MainActor.run { conversation.messages }
+
+    return (
+        understanding: understandingSignature(lastUnderstandings.first),
+        agentMessage: messages.last(where: { $0.role == .agent })?.content,
+        status: status,
+        stepCallCount: await client.agentStepCallCount()
     )
 }
 

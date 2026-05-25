@@ -265,7 +265,7 @@ actor ForemanAgent {
             DebugLogger.log("[ForemanAgent] draftPendingAttention authoritative terminal=\(event.terminalID.prefix(8)) title='\(authoritativeAttention.title)'")
             return authoritativeAttention
         }
-        if let firstClassAttention = draftFirstClassPendingAttentionWithoutSnapshot(
+        if let firstClassAttention = firstClassPendingAttentionWithoutSnapshot(
             for: event,
             observedTerminals: observedTerminals
         ) {
@@ -367,7 +367,7 @@ actor ForemanAgent {
         )
     }
 
-    private func draftFirstClassPendingAttentionWithoutSnapshot(
+    private func firstClassPendingAttentionWithoutSnapshot(
         for event: AgentNeedsAttentionEvent,
         observedTerminals: ForemanObservedTerminalContext
     ) -> PendingAgentAttention? {
@@ -405,6 +405,51 @@ actor ForemanAgent {
         case .waitingApproval, .waitingChoice, .unknown, .running, .completed:
             return nil
         }
+    }
+
+    private func firstClassWorkerPauseWithoutSnapshot(
+        for terminalID: String?,
+        observedTerminals: ForemanObservedTerminalContext
+    ) -> AuthoritativeWorkerPause? {
+        let candidateTerminalIDs: [String]
+        if let terminalID {
+            candidateTerminalIDs = [terminalID]
+        } else {
+            candidateTerminalIDs = observedTerminals.understandings.map(\.terminalID)
+        }
+
+        for candidateTerminalID in candidateTerminalIDs {
+            guard let understanding = observedTerminals.understandings.first(where: { $0.terminalID == candidateTerminalID }),
+                  understanding.supportLevel == .firstClass,
+                  observedTerminals.workerSnapshots[candidateTerminalID] == nil else {
+                continue
+            }
+
+            let prompt = understanding.agentInteractionContext.descriptionString ??
+                understanding.lastMeaningfulEvent
+            let event = AgentNeedsAttentionEvent(
+                terminalID: candidateTerminalID,
+                agentIdentity: understanding.agentIdentity,
+                interactionState: understanding.agentInteractionState,
+                deltaText: prompt,
+                timestamp: Date(timeIntervalSince1970: 0)
+            )
+
+            guard let attention = firstClassPendingAttentionWithoutSnapshot(
+                for: event,
+                observedTerminals: observedTerminals
+            ) else {
+                continue
+            }
+
+            return AuthoritativeWorkerPause(
+                terminalID: candidateTerminalID,
+                message: authoritativePauseMessage(for: attention),
+                question: authoritativePauseQuestion(for: attention)
+            )
+        }
+
+        return nil
     }
 
     func receiveOutcome(_ report: TerminalOutcomeReport) {
@@ -547,6 +592,17 @@ actor ForemanAgent {
             ) {
                 await pauseForAuthoritativeWorker(
                     authoritativePause,
+                    terminalID: preferredTerminalID ?? overview.primaryTerminalID
+                )
+                break
+            }
+
+            if let firstClassPause = firstClassWorkerPauseWithoutSnapshot(
+                for: preferredTerminalID ?? overview.primaryTerminalID,
+                observedTerminals: observedTerminals
+            ) {
+                await pauseForAuthoritativeWorker(
+                    firstClassPause,
                     terminalID: preferredTerminalID ?? overview.primaryTerminalID
                 )
                 break
@@ -894,6 +950,14 @@ actor ForemanAgent {
             observedTerminals: observedTerminals
         ) {
             await pauseForAuthoritativeWorker(authoritativePause, terminalID: event.terminalID)
+            return
+        }
+
+        if let firstClassPause = firstClassWorkerPauseWithoutSnapshot(
+            for: event.terminalID,
+            observedTerminals: observedTerminals
+        ) {
+            await pauseForAuthoritativeWorker(firstClassPause, terminalID: event.terminalID)
             return
         }
 
