@@ -5,6 +5,10 @@ enum PendingAgentAttentionFactory {
         from event: AgentNeedsAttentionEvent,
         understanding: TerminalUnderstanding?
     ) -> PendingAgentAttention? {
+        if let authoritative = authoritativeAttention(from: event, understanding: understanding) {
+            return authoritative
+        }
+
         switch event.interactionState {
         case .waitingApproval:
             let actions = approvalActions(for: event, understanding: understanding)
@@ -47,6 +51,84 @@ enum PendingAgentAttentionFactory {
             )
 
         default:
+            return nil
+        }
+    }
+
+    private static func authoritativeAttention(
+        from event: AgentNeedsAttentionEvent,
+        understanding: TerminalUnderstanding?
+    ) -> PendingAgentAttention? {
+        guard let understanding,
+              let snapshot = understanding.workerSnapshot,
+              let request = snapshot.request else {
+            return nil
+        }
+
+        let requestSuggestions = snapshot.suggestions.filter { suggestion in
+            suggestion.requestID == nil || suggestion.requestID == request.id
+        }
+
+        switch request.kind {
+        case .reply:
+            let actions = requestSuggestions.prefix(4).map { makePendingAction(from: $0) }
+            guard !actions.isEmpty else {
+                return nil
+            }
+
+            return PendingAgentAttention(
+                terminalID: snapshot.terminalID,
+                agentIdentity: snapshot.agent.identity,
+                interactionState: understanding.agentInteractionState,
+                fingerprint: event.fingerprint,
+                title: "Suggested reply",
+                description: request.prompt,
+                detail: snapshot.state.details.joined(separator: "\n").nilIfEmpty,
+                actions: actions
+            )
+
+        case .choice:
+            let actions = requestSuggestions.isEmpty
+                ? fallbackChoiceActions(for: request)
+                : requestSuggestions.prefix(4).map { makePendingAction(from: $0) }
+            guard !actions.isEmpty else {
+                return nil
+            }
+
+            return PendingAgentAttention(
+                terminalID: snapshot.terminalID,
+                agentIdentity: snapshot.agent.identity,
+                interactionState: understanding.agentInteractionState,
+                fingerprint: event.fingerprint,
+                title: "Choose an option",
+                description: request.prompt,
+                detail: nil,
+                actions: actions
+            )
+
+        case .approval:
+            let actions = requestSuggestions.isEmpty
+                ? approvalActions(for: event, understanding: understanding)
+                : requestSuggestions.prefix(4).map { makePendingAction(from: $0) }
+            guard !actions.isEmpty else {
+                return nil
+            }
+
+            let detail = request.options.map(\.label).joined(separator: "\n").nilIfEmpty ??
+                snapshot.state.details.joined(separator: "\n").nilIfEmpty
+
+            return PendingAgentAttention(
+                terminalID: snapshot.terminalID,
+                agentIdentity: snapshot.agent.identity,
+                interactionState: understanding.agentInteractionState,
+                fingerprint: event.fingerprint,
+                title: "Needs your approval",
+                description: request.prompt,
+                detail: detail,
+                actions: actions
+            )
+
+        case .command:
             return nil
         }
     }
@@ -181,5 +263,55 @@ enum PendingAgentAttentionFactory {
 
     private static func containsAny(_ text: String, markers: [String]) -> Bool {
         markers.contains(where: text.contains)
+    }
+
+    private static func fallbackChoiceActions(
+        for request: TerminalWorkerSnapshot.Request
+    ) -> [PendingAgentAction] {
+        request.options.prefix(4).enumerated().map { index, option in
+            PendingAgentAction(
+                id: "choice_\(index + 1)",
+                title: option.label,
+                payload: option.id,
+                style: option.recommended || index == 0 ? .primary : .secondary
+            )
+        }
+    }
+
+    private static func makePendingAction(
+        from suggestion: TerminalWorkerSnapshot.Suggestion
+    ) -> PendingAgentAction {
+        PendingAgentAction(
+            id: suggestion.id,
+            title: suggestion.title,
+            payload: payloadText(from: suggestion.payload),
+            style: actionStyle(for: suggestion)
+        )
+    }
+
+    private static func payloadText(
+        from payload: TerminalWorkerSnapshot.Payload
+    ) -> String {
+        switch payload {
+        case .text(let value), .command(let value), .option(let value), .approval(let value), .foremanPrompt(let value):
+            return value
+        }
+    }
+
+    private static func actionStyle(
+        for suggestion: TerminalWorkerSnapshot.Suggestion
+    ) -> PendingAgentAction.Style {
+        let loweredTitle = suggestion.title.lowercased()
+        if loweredTitle.contains("reject") || loweredTitle.contains("deny") {
+            return .destructive
+        }
+
+        return suggestion.recommended ? .primary : .secondary
+    }
+}
+
+private extension String {
+    var nilIfEmpty: String? {
+        isEmpty ? nil : self
     }
 }

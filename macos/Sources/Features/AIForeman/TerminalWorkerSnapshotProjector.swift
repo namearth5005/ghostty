@@ -144,8 +144,8 @@ struct TerminalWorkerSnapshotProjector {
                 id: requestID ?? fallbackRequestID(for: TerminalWorkerSnapshot.Kind.choice, prompt: question),
                 kind: .choice,
                 prompt: question,
-                options: options.map { option in
-                    .init(id: optionID(for: option), label: option, recommended: false)
+                options: options.enumerated().map { index, option in
+                    .init(id: String(index + 1), label: option, recommended: index == 0)
                 }
             )
         case .waitingText(let question, let requestID, _, _, _):
@@ -170,14 +170,14 @@ struct TerminalWorkerSnapshotProjector {
         switch context {
         case .waitingChoice(_, let options, _, _, _, _):
             guard let request else { return [] }
-            return options.map { option in
+            return options.enumerated().map { index, option in
                 .init(
-                    id: "choice-\(optionID(for: option))",
+                    id: "choice-\(index + 1)",
                     kind: .choice,
                     title: option,
-                    payload: .option(optionID(for: option)),
+                    payload: .option(String(index + 1)),
                     rationale: "Worker-provided option.",
-                    recommended: false,
+                    recommended: index == 0,
                     execution: .manualOnly,
                     requestID: request.id
                 )

@@ -43,5 +43,8 @@ struct TerminalWorkerSnapshotProjectorTests {
         #expect(projectedSnapshot.state.attention == .choiceRequired)
         #expect(projectedSnapshot.workerSessionID == "kimi-session-12")
         #expect(projectedSnapshot.revision == 12)
+        #expect(projectedSnapshot.request?.options.map(\.id) == ["1", "2"])
+        #expect(projectedSnapshot.suggestions.map(\.recommended) == [true, false])
+        #expect(projectedSnapshot.suggestions.map(\.payload) == [.option("1"), .option("2")])
     }
 }

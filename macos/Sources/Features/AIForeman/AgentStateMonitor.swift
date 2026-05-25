@@ -82,11 +82,12 @@ final class AgentStateMonitor {
 
             if shouldFire {
                 let deltaText = Self.eventText(from: understanding)
+                let fingerprintText = Self.fingerprintText(from: understanding, fallback: deltaText)
                 let fingerprint = AgentNeedsAttentionEvent.makeFingerprint(
                     terminalID: id,
                     agentIdentity: understanding.agentIdentity,
                     interactionState: current,
-                    text: deltaText
+                    text: fingerprintText
                 )
 
                 if pendingFingerprintsByTerminalID[id]?.contains(fingerprint) == true {
@@ -159,6 +160,13 @@ final class AgentStateMonitor {
     }
 
     private static func eventText(from understanding: TerminalUnderstanding) -> String {
+        if let request = understanding.workerSnapshot?.request {
+            let prompt = request.prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !prompt.isEmpty {
+                return prompt
+            }
+        }
+
         if understanding.agentInteractionState == .waitingText,
            let question = understanding.agentInteractionContext.descriptionString,
            !question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -166,5 +174,17 @@ final class AgentStateMonitor {
         }
 
         return understanding.importantDetails.joined(separator: "\n")
+    }
+
+    private static func fingerprintText(
+        from understanding: TerminalUnderstanding,
+        fallback: String
+    ) -> String {
+        if let snapshot = understanding.workerSnapshot,
+           snapshot.request != nil {
+            return snapshot.attentionFingerprint
+        }
+
+        return fallback
     }
 }

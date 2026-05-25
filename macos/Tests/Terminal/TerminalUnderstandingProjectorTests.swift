@@ -57,6 +57,84 @@ struct TerminalUnderstandingProjectorTests {
     }
 
     @Test
+    func authoritativeWorkerSnapshotOverridesHeuristicProjection() {
+        let snapshot = TerminalSnapshot.makePreview(
+            terminalID: "codex-term",
+            windowID: "win-1",
+            tabID: "tab-1",
+            title: "shell",
+            cwd: "/tmp/project",
+            isFocused: true,
+            visibleText: "zsh: command not found: hfind",
+            recentScrollbackLines: ["zsh: command not found: hfind"],
+            lastInputPreview: "hfind . -print",
+            foregroundProcessName: "codex",
+            cursorIsAtPrompt: true,
+            usingAlternateScreen: true
+        )
+        let workerSnapshot = TerminalWorkerSnapshot(
+            schemaVersion: 1,
+            terminalID: "codex-term",
+            workerSessionID: "codex-session-41",
+            revision: 41,
+            observedAt: Date(timeIntervalSince1970: 1_748_222_222),
+            ttlMilliseconds: 15_000,
+            workerGoal: "stabilize the API",
+            agent: .init(identity: .codex),
+            state: .init(
+                lifecycle: .blocked,
+                attention: .replyRequired,
+                summary: "Codex is waiting for a reply.",
+                details: ["Asked whether the API should stay stable."],
+                runtimeFlags: []
+            ),
+            request: .init(
+                id: "req-41",
+                kind: .reply,
+                prompt: "Should I preserve the API?",
+                options: []
+            ),
+            suggestions: [
+                .init(
+                    id: "preserve-api",
+                    kind: .reply,
+                    title: "Preserve the API",
+                    payload: .text("Preserve the current API and adapt the internals."),
+                    rationale: "Lowest migration risk.",
+                    recommended: true,
+                    execution: .manualOnly,
+                    requestID: "req-41"
+                ),
+            ]
+        )
+
+        let understanding = projector.project(
+            current: snapshot,
+            classification: Optional<AgentMeaningDetector.Detection>.none,
+            lastOutcome: Optional<TerminalOutcomeReport>.none,
+            lastEvent: "zsh: command not found: hfind",
+            workerSnapshot: workerSnapshot
+        )
+
+        #expect(understanding.state == .waiting)
+        #expect(understanding.agentIdentity == .codex)
+        #expect(understanding.agentInteractionState == .waitingText)
+        #expect(understanding.shortExplanation == "Codex is waiting for a reply.")
+        #expect(understanding.suggestedNextActions.map(\.title) == ["Preserve the API"])
+        #expect(understanding.workerSnapshot == workerSnapshot)
+        #expect(
+            understanding.agentInteractionContext ==
+            .waitingText(
+                question: "Should I preserve the API?",
+                requestID: "req-41",
+                sessionID: "codex-session-41",
+                revision: 41,
+                isPlanning: false
+            )
+        )
+    }
+
+    @Test
     func codexWaitingTextProjectionKeepsManagedLaunchParity() {
         let question = "• Hello. What do you want to work on in ghostty?"
         let classification = AgentMeaningDetector.Detection(

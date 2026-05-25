@@ -191,6 +191,72 @@ struct PendingAgentAttentionFactoryTests {
         ])
     }
 
+    @Test
+    func authoritativeReplySuggestionBecomesPrimaryAction() throws {
+        let snapshot = TerminalWorkerSnapshot(
+            schemaVersion: 1,
+            terminalID: "term-1",
+            workerSessionID: "codex-session-41",
+            revision: 41,
+            observedAt: Date(timeIntervalSince1970: 1_748_222_222),
+            ttlMilliseconds: 15_000,
+            workerGoal: "stabilize the API",
+            agent: .init(identity: .codex),
+            state: .init(
+                lifecycle: .running,
+                attention: .replyRequired,
+                summary: "Codex is waiting for a reply.",
+                details: ["Asked whether the API should stay stable."],
+                runtimeFlags: []
+            ),
+            request: .init(
+                id: "req-41",
+                kind: .reply,
+                prompt: "Should I preserve the API?",
+                options: []
+            ),
+            suggestions: [
+                .init(
+                    id: "preserve-api",
+                    kind: .reply,
+                    title: "Preserve the API",
+                    payload: .text("Preserve the current API and adapt the internals."),
+                    rationale: "Lowest migration risk.",
+                    recommended: true,
+                    execution: .manualOnly,
+                    requestID: "req-41"
+                ),
+            ]
+        )
+        let understanding = TerminalUnderstanding.preview(
+            terminalID: "term-1",
+            state: .waiting,
+            shortExplanation: "Codex is waiting for a reply.",
+            lastMeaningfulEvent: "Should I preserve the API?",
+            importantDetails: [],
+            suggestedNextActions: [],
+            agentIdentity: .codex,
+            agentInteractionState: .waitingText,
+            workerSnapshot: snapshot
+        )
+        let event = AgentNeedsAttentionEvent(
+            terminalID: "term-1",
+            agentIdentity: .codex,
+            interactionState: .waitingText,
+            deltaText: "Should I preserve the API?",
+            timestamp: Date(),
+            fingerprint: snapshot.attentionFingerprint
+        )
+
+        let attention = try #require(
+            PendingAgentAttentionFactory.make(from: event, understanding: understanding)
+        )
+
+        #expect(attention.title == "Suggested reply")
+        #expect(attention.actions.first?.title == "Preserve the API")
+        #expect(attention.fingerprint == snapshot.attentionFingerprint)
+    }
+
     private func paritySignature(_ attention: PendingAgentAttention) -> AttentionParitySignature {
         AttentionParitySignature(
             agentIdentity: attention.agentIdentity,

@@ -874,6 +874,91 @@ struct ForemanSidebarStoreTests {
 
     @MainActor
     @Test
+    func applySnapshotsDropsStalePendingAttentionWhenWorkerFingerprintChanges() {
+        let store = ForemanSidebarStore()
+        store.upsertPendingAttention(
+            makePendingAttention(
+                terminalID: "term-1",
+                fingerprint: "codex-session-40|40|req-40",
+                agentIdentity: .codex,
+                interactionState: .waitingText
+            )
+        )
+
+        let snapshot = TerminalSnapshot.makePreview(
+            terminalID: "term-1",
+            windowID: "win-1",
+            tabID: "tab-1",
+            title: "Codex",
+            cwd: "/tmp/project",
+            isFocused: true,
+            visibleText: "Should I preserve the API?",
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessName: "codex"
+        )
+        let workerSnapshot = TerminalWorkerSnapshot(
+            schemaVersion: 1,
+            terminalID: "term-1",
+            workerSessionID: "codex-session-41",
+            revision: 41,
+            observedAt: Date(timeIntervalSince1970: 1_748_222_222),
+            ttlMilliseconds: 15_000,
+            workerGoal: "stabilize the API",
+            agent: .init(identity: .codex),
+            state: .init(
+                lifecycle: .blocked,
+                attention: .replyRequired,
+                summary: "Codex is waiting for a reply.",
+                details: ["Asked whether the API should stay stable."],
+                runtimeFlags: []
+            ),
+            request: .init(
+                id: "req-41",
+                kind: .reply,
+                prompt: "Should I preserve the API?",
+                options: []
+            ),
+            suggestions: [
+                .init(
+                    id: "preserve-api",
+                    kind: .reply,
+                    title: "Preserve the API",
+                    payload: .text("Preserve the current API and adapt the internals."),
+                    rationale: "Lowest migration risk.",
+                    recommended: true,
+                    execution: .manualOnly,
+                    requestID: "req-41"
+                ),
+            ]
+        )
+        let understanding = TerminalUnderstanding.preview(
+            terminalID: "term-1",
+            state: .waiting,
+            shortExplanation: "Codex is waiting for a reply.",
+            lastMeaningfulEvent: "Should I preserve the API?",
+            importantDetails: workerSnapshot.state.details,
+            suggestedNextActions: [
+                .init(
+                    title: "Preserve the API",
+                    command: nil,
+                    reason: "Lowest migration risk.",
+                    isRecommended: true
+                ),
+            ],
+            agentIdentity: .codex,
+            agentInteractionState: .waitingText,
+            workerSnapshot: workerSnapshot
+        )
+
+        store.applySnapshots([snapshot], understandingsByTerminalID: ["term-1": understanding])
+
+        #expect(store.pendingAttentionByTerminalID["term-1"] == nil)
+        #expect(store.terminalRows.first?.pendingAttention == nil)
+    }
+
+    @MainActor
+    @Test
     func sendChatMessageRoutesTerminalRepliesThroughUnifiedIntent() {
         let store = ForemanSidebarStore(selectedTerminalID: "term-1")
         store.applySnapshots([
@@ -934,6 +1019,55 @@ struct ForemanSidebarStoreTests {
             dispatchedIntent ==
             .guideForeman(
                 "Ask Foreman to summarize the options for terminal term-1. Useful when the menu is noisy."
+            )
+        )
+    }
+
+    @MainActor
+    @Test
+    func executeSuggestionRoutesMatchingPendingAttentionActionWhenAvailable() {
+        let store = ForemanSidebarStore()
+        store.upsertPendingAttention(
+            PendingAgentAttention(
+                terminalID: "term-1",
+                agentIdentity: .codex,
+                interactionState: .waitingText,
+                fingerprint: "fp-1",
+                title: "Suggested reply",
+                description: "Should I preserve the API?",
+                detail: nil,
+                actions: [
+                    .init(
+                        id: "preserve-api",
+                        title: "Preserve the API",
+                        payload: "Preserve the current API and adapt the internals.",
+                        style: .primary
+                    ),
+                ]
+            )
+        )
+
+        var dispatchedIntent: ForemanSidebarIntent?
+        store.onDispatchSidebarIntent = { intent in
+            dispatchedIntent = intent
+        }
+
+        store.executeSuggestion(
+            terminalID: "term-1",
+            action: .init(
+                title: "Preserve the API",
+                command: nil,
+                reason: "Lowest migration risk.",
+                isRecommended: true
+            )
+        )
+
+        #expect(
+            dispatchedIntent ==
+            .sendPendingAttentionAction(
+                terminalID: "term-1",
+                fingerprint: "fp-1",
+                payload: "Preserve the current API and adapt the internals."
             )
         )
     }
@@ -1014,6 +1148,8 @@ struct ForemanSidebarStoreTests {
     private func makePendingAttention(
         terminalID: String,
         fingerprint: String = "fp-1",
+        agentIdentity: AgentIdentity = .claudeCode,
+        interactionState: AgentInteractionState = .waitingChoice,
         actions: [PendingAgentAction] = [
             .init(
                 id: "continue",
@@ -1025,8 +1161,8 @@ struct ForemanSidebarStoreTests {
     ) -> PendingAgentAttention {
         PendingAgentAttention(
             terminalID: terminalID,
-            agentIdentity: .claudeCode,
-            interactionState: .waitingChoice,
+            agentIdentity: agentIdentity,
+            interactionState: interactionState,
             fingerprint: fingerprint,
             title: "Claude needs a choice",
             description: "Select the continue option.",

@@ -5,8 +5,17 @@ struct TerminalUnderstandingProjector {
         current: TerminalSnapshot,
         classification: AgentMeaningDetector.Detection?,
         lastOutcome: TerminalOutcomeReport?,
-        lastEvent: String
+        lastEvent: String,
+        workerSnapshot: TerminalWorkerSnapshot? = nil
     ) -> TerminalUnderstanding {
+        if let workerSnapshot {
+            return projectAuthoritatively(
+                current: current,
+                lastEvent: lastEvent,
+                workerSnapshot: workerSnapshot
+            )
+        }
+
         let effectiveLastEvent = resolvedLastMeaningfulEvent(
             lastEvent: lastEvent,
             classification: classification
@@ -42,6 +51,36 @@ struct TerminalUnderstandingProjector {
             evidence: classification?.evidence ?? [],
             suggestedNextActions: suggestedActions,
             agentInteractionContext: classification?.context ?? .none
+        )
+    }
+
+    private func projectAuthoritatively(
+        current: TerminalSnapshot,
+        lastEvent: String,
+        workerSnapshot: TerminalWorkerSnapshot
+    ) -> TerminalUnderstanding {
+        let authoritativeLastEvent = workerSnapshot.request?.prompt ?? lastEvent
+        let state = understandingState(for: workerSnapshot.state.lifecycle)
+
+        return TerminalUnderstanding(
+            terminalID: current.terminalID,
+            title: current.title,
+            cwd: current.cwd,
+            state: state,
+            agentIdentity: workerSnapshot.agent.identity,
+            agentInteractionState: interactionState(for: workerSnapshot.state.attention),
+            supportLevel: .firstClass,
+            lastMeaningfulEvent: authoritativeLastEvent,
+            shortExplanation: workerSnapshot.state.summary,
+            importantDetails: workerSnapshot.state.details,
+            evidence: [.init(source: .runtime, detail: "authoritative_worker_snapshot", confidence: 1.0)],
+            suggestedNextActions: authoritativeSuggestedActions(
+                for: workerSnapshot,
+                state: state,
+                lastEvent: authoritativeLastEvent
+            ),
+            agentInteractionContext: interactionContext(from: workerSnapshot),
+            workerSnapshot: workerSnapshot
         )
     }
 
@@ -176,6 +215,196 @@ struct TerminalUnderstandingProjector {
             return "The terminal is idle."
         case .noisyHealthy:
             return "The terminal is producing output without signs of failure."
+        }
+    }
+
+    private func understandingState(
+        for lifecycle: TerminalWorkerLifecycle
+    ) -> TerminalUnderstandingState {
+        switch lifecycle {
+        case .idle:
+            return .idle
+        case .running:
+            return .running
+        case .blocked:
+            return .waiting
+        case .completed:
+            return .succeeded
+        case .failed:
+            return .failed
+        }
+    }
+
+    private func interactionState(
+        for attention: TerminalWorkerAttention
+    ) -> AgentInteractionState {
+        switch attention {
+        case .none:
+            return .unknown
+        case .replyRequired:
+            return .waitingText
+        case .choiceRequired:
+            return .waitingChoice
+        case .approvalRequired:
+            return .waitingApproval
+        case .error:
+            return .error
+        }
+    }
+
+    private func interactionContext(
+        from workerSnapshot: TerminalWorkerSnapshot
+    ) -> AgentInteractionContext {
+        let isPlanning = workerSnapshot.state.runtimeFlags.contains(.planning)
+        let request = workerSnapshot.request
+
+        switch workerSnapshot.state.attention {
+        case .replyRequired:
+            return .waitingText(
+                question: request?.prompt,
+                requestID: request?.id,
+                sessionID: workerSnapshot.workerSessionID,
+                revision: workerSnapshot.revision,
+                isPlanning: isPlanning
+            )
+
+        case .choiceRequired:
+            return .waitingChoice(
+                question: request?.prompt ?? workerSnapshot.state.summary,
+                options: request?.options.map(\.label) ?? [],
+                requestID: request?.id,
+                sessionID: workerSnapshot.workerSessionID,
+                revision: workerSnapshot.revision,
+                isPlanning: isPlanning
+            )
+
+        case .approvalRequired:
+            return .waitingApproval(
+                description: request?.prompt ?? workerSnapshot.state.summary,
+                tool: request?.options.first?.label,
+                requestID: request?.id,
+                sessionID: workerSnapshot.workerSessionID,
+                revision: workerSnapshot.revision,
+                isPlanning: isPlanning
+            )
+
+        case .error:
+            return .error(
+                description: workerSnapshot.state.summary,
+                sessionID: workerSnapshot.workerSessionID,
+                revision: workerSnapshot.revision
+            )
+
+        case .none:
+            switch workerSnapshot.state.lifecycle {
+            case .running:
+                return .running(
+                    stepDescription: workerSnapshot.state.summary,
+                    sessionID: workerSnapshot.workerSessionID,
+                    revision: workerSnapshot.revision
+                )
+            case .completed:
+                return .completed(
+                    summary: workerSnapshot.state.summary,
+                    sessionID: workerSnapshot.workerSessionID,
+                    revision: workerSnapshot.revision
+                )
+            case .failed:
+                return .error(
+                    description: workerSnapshot.state.summary,
+                    sessionID: workerSnapshot.workerSessionID,
+                    revision: workerSnapshot.revision
+                )
+            case .idle, .blocked:
+                return .none
+            }
+        }
+    }
+
+    private func makeSuggestedAction(
+        from suggestion: TerminalWorkerSnapshot.Suggestion
+    ) -> TerminalSuggestedAction {
+        TerminalSuggestedAction(
+            title: suggestion.title,
+            command: command(for: suggestion.payload),
+            reason: suggestion.rationale,
+            isRecommended: suggestion.recommended
+        )
+    }
+
+    private func command(
+        for payload: TerminalWorkerSnapshot.Payload
+    ) -> String? {
+        switch payload {
+        case .command(let command):
+            return command
+        case .text, .option, .approval, .foremanPrompt:
+            return nil
+        }
+    }
+
+    private func authoritativeSuggestedActions(
+        for workerSnapshot: TerminalWorkerSnapshot,
+        state: TerminalUnderstandingState,
+        lastEvent: String
+    ) -> [TerminalSuggestedAction] {
+        if !workerSnapshot.suggestions.isEmpty {
+            return workerSnapshot.suggestions.map { makeSuggestedAction(from: $0) }
+        }
+
+        switch workerSnapshot.state.attention {
+        case .approvalRequired:
+            return [
+                .init(title: "Review the approval request", command: nil, reason: lastEvent, isRecommended: true),
+                .init(
+                    title: "Let Foreman explain the requested action",
+                    command: nil,
+                    reason: "Use this when the approval UI is dense.",
+                    isRecommended: false
+                ),
+            ]
+
+        case .choiceRequired:
+            if let request = workerSnapshot.request, !request.options.isEmpty {
+                return request.options.prefix(4).enumerated().map { index, option in
+                    TerminalSuggestedAction(
+                        title: option.label,
+                        command: nil,
+                        reason: request.prompt,
+                        isRecommended: option.recommended || index == 0
+                    )
+                }
+            }
+
+            return [
+                .init(title: "Inspect the available choices", command: nil, reason: lastEvent, isRecommended: true),
+                .init(
+                    title: "Ask Foreman to summarize the options",
+                    command: nil,
+                    reason: "Useful when the menu is noisy.",
+                    isRecommended: false
+                ),
+            ]
+
+        case .replyRequired:
+            return [
+                .init(title: "Reply to the agent", command: nil, reason: lastEvent, isRecommended: true),
+            ]
+
+        case .error:
+            return [
+                .init(title: "Inspect the failure details", command: nil, reason: lastEvent, isRecommended: true),
+            ]
+
+        case .none:
+            switch state {
+            case .failed:
+                return [
+                    .init(title: "Inspect the failure details", command: nil, reason: lastEvent, isRecommended: true),
+                ]
+            case .idle, .running, .succeeded, .waiting, .noisyHealthy:
+                return []
+            }
         }
     }
 

@@ -396,6 +396,12 @@ final class ForemanSidebarStore: ObservableObject {
     }
 
     func executeSuggestion(terminalID: String, action: TerminalSuggestedAction) {
+        if let attention = pendingAttentionByTerminalID[terminalID],
+           let pendingAction = attention.actions.first(where: { $0.title == action.title }) {
+            executePendingAttentionAction(attention, action: pendingAction)
+            return
+        }
+
         if let onDispatchSidebarIntent {
             let routeResult = sidebarRouter.resolveSuggestion(
                 action,
@@ -529,7 +535,7 @@ final class ForemanSidebarStore: ObservableObject {
                     supportLevel: understanding.supportLevel.rawValue,
                     evidenceSummary: understanding.evidence.first?.source.rawValue,
                     isFocused: snapshot.isFocused,
-                    suggestedActions: goalScopedSuggestedActions(understanding.suggestedNextActions),
+                    suggestedActions: goalScopedSuggestedActions(suggestedActions(for: understanding)),
                     pendingAttention: pendingAttentionByTerminalID[snapshot.terminalID],
                     agentContextType: context.typeString,
                     agentContextTitle: context.titleString,
@@ -630,6 +636,12 @@ final class ForemanSidebarStore: ObservableObject {
         }
 
         guard understanding.agentInteractionState == attention.interactionState else {
+            return false
+        }
+
+        if let workerSnapshot = understanding.workerSnapshot,
+           workerSnapshot.request != nil,
+           attention.fingerprint != workerSnapshot.attentionFingerprint {
             return false
         }
 
@@ -839,6 +851,35 @@ final class ForemanSidebarStore: ObservableObject {
         }
 
         return []
+    }
+
+    private func suggestedActions(
+        for understanding: TerminalUnderstanding
+    ) -> [TerminalSuggestedAction] {
+        if let workerSnapshot = understanding.workerSnapshot,
+           !workerSnapshot.suggestions.isEmpty {
+            return workerSnapshot.suggestions.map { suggestion in
+                TerminalSuggestedAction(
+                    title: suggestion.title,
+                    command: snapshotCommand(for: suggestion.payload),
+                    reason: suggestion.rationale,
+                    isRecommended: suggestion.recommended
+                )
+            }
+        }
+
+        return understanding.suggestedNextActions
+    }
+
+    private func snapshotCommand(
+        for payload: TerminalWorkerSnapshot.Payload
+    ) -> String? {
+        switch payload {
+        case .command(let command):
+            return command
+        case .text, .option, .approval, .foremanPrompt:
+            return nil
+        }
     }
 
     private func shouldAdoptPendingAttentionSelection(for terminalID: String) -> Bool {

@@ -28,7 +28,7 @@ struct ForemanObservedContextBuilder {
             attachmentHintsByTerminalID: attachmentHintsByTerminalID
         )
 
-        let understandings = runtimePlan.entries.map { entry in
+        let initialUnderstandings = runtimePlan.entries.map { entry in
             let snapshot = entry.snapshot
             return understandingEngine.understand(
                 current: snapshot,
@@ -40,12 +40,10 @@ struct ForemanObservedContextBuilder {
                 runtimeDetection: entry.detection
             )
         }
-        let understandingsByTerminalID = Dictionary(
-            uniqueKeysWithValues: understandings.map { ($0.terminalID, $0) }
-        )
+        let snapshotsByTerminalID = Dictionary(uniqueKeysWithValues: snapshots.map { ($0.terminalID, $0) })
         let workerSnapshots: [String: TerminalWorkerSnapshot] = Dictionary(
-            uniqueKeysWithValues: understandings.compactMap { understanding -> (String, TerminalWorkerSnapshot)? in
-                guard let snapshot = snapshots.first(where: { $0.terminalID == understanding.terminalID }) else {
+            uniqueKeysWithValues: initialUnderstandings.compactMap { understanding -> (String, TerminalWorkerSnapshot)? in
+                guard let snapshot = snapshotsByTerminalID[understanding.terminalID] else {
                     return nil
                 }
 
@@ -59,6 +57,31 @@ struct ForemanObservedContextBuilder {
 
                 return workerSnapshot.map { (understanding.terminalID, $0) }
             }
+        )
+        let understandings = initialUnderstandings.map { understanding in
+            guard let workerSnapshot = workerSnapshots[understanding.terminalID] else {
+                return understanding
+            }
+
+            return TerminalUnderstanding(
+                terminalID: understanding.terminalID,
+                title: understanding.title,
+                cwd: understanding.cwd,
+                state: understanding.state,
+                agentIdentity: understanding.agentIdentity,
+                agentInteractionState: understanding.agentInteractionState,
+                supportLevel: understanding.supportLevel,
+                lastMeaningfulEvent: understanding.lastMeaningfulEvent,
+                shortExplanation: understanding.shortExplanation,
+                importantDetails: understanding.importantDetails,
+                evidence: understanding.evidence,
+                suggestedNextActions: understanding.suggestedNextActions,
+                agentInteractionContext: understanding.agentInteractionContext,
+                workerSnapshot: workerSnapshot
+            )
+        }
+        let understandingsByTerminalID = Dictionary(
+            uniqueKeysWithValues: understandings.map { ($0.terminalID, $0) }
         )
         let runtimeEntriesByTerminalID = Dictionary(
             uniqueKeysWithValues: runtimePlan.entries.map { ($0.snapshot.terminalID, $0) }
