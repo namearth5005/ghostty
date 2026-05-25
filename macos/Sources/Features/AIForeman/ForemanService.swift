@@ -112,44 +112,7 @@ extension ForemanLLMClient {
         overview: TerminalOverview,
         lastOutcome: TerminalOutcomeReport?
     ) async throws -> AgentReplyDraftResponse {
-        let step = try await agentStep(
-            narrationContext: narrationContext,
-            terminals: terminals,
-            understandings: understandings,
-            overview: overview,
-            lastOutcome: lastOutcome
-        )
-        return makeReplyDraftResponse(from: step, event: event)
-    }
-
-    private func makeReplyDraftResponse(
-        from step: AgentStepResponse,
-        event: AgentNeedsAttentionEvent
-    ) -> AgentReplyDraftResponse {
-        let suggestion: AgentReplyDraftSuggestion
-        switch step.action {
-        case .sendCommand(let terminalID, let command, let reason):
-            suggestion = .replyToAgent(
-                terminalID: terminalID,
-                message: command,
-                reason: reason,
-                confidence: 0.6
-            )
-        case .askUser(let question):
-            suggestion = .askHuman(
-                terminalID: event.terminalID,
-                message: question,
-                reason: "The generic agent step requested human input.",
-                confidence: 0.6
-            )
-        default:
-            suggestion = .noAction(
-                reason: "The generic agent step did not produce a waiting-text reply.",
-                confidence: 0.4
-            )
-        }
-
-        return .init(thought: step.thought, suggestion: suggestion)
+        fallbackReplyDraftResponse(for: event)
     }
 
     private func authoritativeReplyDraftResponse(
@@ -205,6 +168,38 @@ extension ForemanLLMClient {
         switch payload {
         case .text(let value), .command(let value), .option(let value), .approval(let value), .foremanPrompt(let value):
             return value
+        }
+    }
+
+    private func fallbackReplyDraftResponse(
+        for event: AgentNeedsAttentionEvent
+    ) -> AgentReplyDraftResponse {
+        let message = event.deltaText.nilIfEmpty ?? fallbackReplyPrompt(for: event.interactionState)
+        return .init(
+            thought: "No authoritative worker reply draft is available.",
+            suggestion: .askHuman(
+                terminalID: event.terminalID,
+                message: message,
+                reason: "This client does not provide a dedicated reply-draft response, so Foreman cannot invent a worker-local reply.",
+                confidence: 1.0
+            )
+        )
+    }
+
+    private func fallbackReplyPrompt(
+        for interactionState: AgentInteractionState
+    ) -> String {
+        switch interactionState {
+        case .waitingApproval:
+            return "The worker needs your approval."
+        case .waitingChoice:
+            return "The worker needs your choice."
+        case .waitingText:
+            return "The worker needs your direction."
+        case .error:
+            return "The worker encountered an error and needs your direction."
+        case .unknown, .running, .completed:
+            return "The worker needs your direction."
         }
     }
 }

@@ -461,7 +461,7 @@ struct ForemanServiceTests {
     }
 
     @Test
-    func serviceGenericReplyDraftFallbackStillUsesLegacyPlannerWithoutWorkerSnapshot() async throws {
+    func serviceGenericReplyDraftFallbackEscalatesWithoutWorkerSnapshot() async throws {
         let client = LegacyAgentStepOnlyClient()
         let service = ForemanService(client: client)
         let conversation = await MainActor.run { ForemanConversation() }
@@ -484,14 +484,14 @@ struct ForemanServiceTests {
             lastOutcome: nil
         )
 
-        #expect(await client.genericStepCallCount() == 1)
-        #expect(response.thought == "Legacy planner should not be used here.")
+        #expect(await client.genericStepCallCount() == 0)
+        #expect(response.thought == "No authoritative worker reply draft is available.")
         #expect(
-            response.suggestion == .replyToAgent(
+            response.suggestion == .askHuman(
                 terminalID: "term-1",
-                message: "legacy fallback",
-                reason: "This should not be used for authoritative worker snapshots.",
-                confidence: 0.6
+                message: "What should I work on next?",
+                reason: "This client does not provide a dedicated reply-draft response, so Foreman cannot invent a worker-local reply.",
+                confidence: 1.0
             )
         )
     }
