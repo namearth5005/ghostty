@@ -135,6 +135,80 @@ struct TerminalUnderstandingProjectorTests {
     }
 
     @Test
+    func authoritativeProjectionIgnoresSuggestionsFromOlderRequests() {
+        let snapshot = TerminalSnapshot.makePreview(
+            terminalID: "codex-term",
+            windowID: "win-1",
+            tabID: "tab-1",
+            title: "shell",
+            cwd: "/tmp/project",
+            isFocused: true,
+            visibleText: "What should I do next?",
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessName: "codex",
+            cursorIsAtPrompt: true,
+            usingAlternateScreen: true
+        )
+        let workerSnapshot = TerminalWorkerSnapshot(
+            schemaVersion: 1,
+            terminalID: "codex-term",
+            workerSessionID: "codex-session-55",
+            revision: 55,
+            observedAt: Date(timeIntervalSince1970: 1_748_333_334),
+            ttlMilliseconds: 15_000,
+            workerGoal: "answer the latest question",
+            agent: .init(identity: .codex),
+            state: .init(
+                lifecycle: .blocked,
+                attention: .replyRequired,
+                summary: "Codex is waiting for a reply.",
+                details: ["A stale recommendation should not be rendered."],
+                runtimeFlags: []
+            ),
+            request: .init(
+                id: "req-current",
+                kind: .reply,
+                prompt: "What should I do next?",
+                options: []
+            ),
+            suggestions: [
+                .init(
+                    id: "stale",
+                    kind: .reply,
+                    title: "Follow the old plan",
+                    payload: .text("Use the previous migration path."),
+                    rationale: "This suggestion belongs to the old request.",
+                    recommended: true,
+                    execution: .manualOnly,
+                    requestID: "req-old"
+                ),
+                .init(
+                    id: "current",
+                    kind: .reply,
+                    title: "Answer the current question",
+                    payload: .text("Use the current migration path."),
+                    rationale: "This matches the live request.",
+                    recommended: false,
+                    execution: .manualOnly,
+                    requestID: "req-current"
+                ),
+            ]
+        )
+
+        let understanding = projector.project(
+            current: snapshot,
+            classification: Optional<AgentMeaningDetector.Detection>.none,
+            lastOutcome: Optional<TerminalOutcomeReport>.none,
+            lastEvent: "What should I do next?",
+            workerSnapshot: workerSnapshot
+        )
+
+        #expect(understanding.suggestedNextActions.map(\.title) == ["Answer the current question"])
+        #expect(understanding.suggestedNextActions.first?.authoritativePayload == "Use the current migration path.")
+    }
+
+    @Test
     func authoritativeWorkerLifecycleMapsToInteractionStateWhenAttentionIsNone() {
         let snapshot = TerminalSnapshot.makePreview(
             terminalID: "kimi-term",

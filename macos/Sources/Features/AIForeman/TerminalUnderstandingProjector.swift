@@ -387,8 +387,9 @@ struct TerminalUnderstandingProjector {
     ) -> [TerminalSuggestedAction] {
         let guidancePrompt = workerSnapshot.request?.prompt ?? workerSnapshot.state.summary
 
-        if !workerSnapshot.suggestions.isEmpty {
-            return workerSnapshot.suggestions.map {
+        let requestSuggestions = workerSnapshot.requestSuggestions
+        if !requestSuggestions.isEmpty {
+            return requestSuggestions.map {
                 makeSuggestedAction(from: $0, fingerprint: workerSnapshot.attentionFingerprint)
             }
         }

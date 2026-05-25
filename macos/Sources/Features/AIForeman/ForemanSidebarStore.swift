@@ -971,8 +971,8 @@ final class ForemanSidebarStore: ObservableObject {
         for understanding: TerminalUnderstanding
     ) -> [TerminalSuggestedAction] {
         if let workerSnapshot = understanding.workerSnapshot,
-           !workerSnapshot.suggestions.isEmpty {
-            return workerSnapshot.suggestions.map { suggestion in
+           !workerSnapshot.requestSuggestions.isEmpty {
+            return workerSnapshot.requestSuggestions.map { suggestion in
                 let authoritativePayload = snapshotReplyPayload(for: suggestion.payload)
                 let guidancePrompt = snapshotGuidancePrompt(for: suggestion.payload)
                 return TerminalSuggestedAction(

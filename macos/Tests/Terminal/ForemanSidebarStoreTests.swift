@@ -1150,6 +1150,64 @@ struct ForemanSidebarStoreTests {
 
     @MainActor
     @Test
+    func terminalRowsIgnoreWorkerSuggestionsFromOlderRequests() {
+        let store = ForemanSidebarStore(selectedTerminalID: "term-1")
+        let snapshot = makeWorkerTerminalSnapshot(terminalID: "term-1", title: "Codex")
+        let workerSnapshot = makeWorkerSnapshot(
+            terminalID: "term-1",
+            workerSessionID: "codex-session-55",
+            revision: 55,
+            workerGoal: "answer the latest question",
+            identity: .codex,
+            attention: .replyRequired,
+            summary: "Codex is waiting for a reply.",
+            details: ["A stale recommendation should not be rendered in the row."],
+            request: .init(
+                id: "req-current",
+                kind: .reply,
+                prompt: "What should I do next?",
+                options: []
+            ),
+            suggestions: [
+                .init(
+                    id: "stale",
+                    kind: .reply,
+                    title: "Follow the old plan",
+                    payload: .text("Use the previous migration path."),
+                    rationale: "This suggestion belongs to the old request.",
+                    recommended: true,
+                    execution: .manualOnly,
+                    requestID: "req-old"
+                ),
+                .init(
+                    id: "current",
+                    kind: .reply,
+                    title: "Answer the current question",
+                    payload: .text("Use the current migration path."),
+                    rationale: "This matches the live request.",
+                    recommended: false,
+                    execution: .manualOnly,
+                    requestID: "req-current"
+                ),
+            ]
+        )
+        let understanding = makeWorkerUnderstanding(
+            terminalID: "term-1",
+            shortExplanation: "Codex is waiting for a reply.",
+            lastMeaningfulEvent: "What should I do next?",
+            agentIdentity: .codex,
+            interactionState: .waitingText,
+            workerSnapshot: workerSnapshot
+        )
+
+        store.applySnapshots([snapshot], understandingsByTerminalID: ["term-1": understanding])
+
+        #expect(store.terminalRows.first?.suggestedActions.map(\.title) == ["Answer the current question"])
+        #expect(store.terminalRows.first?.suggestedActions.first?.authoritativePayload == "Use the current migration path.")
+    }
+
+    @MainActor
+    @Test
     func attentionSummaryTextNamesMultipleWaitingWorkers() {
         let store = ForemanSidebarStore()
         let replySnapshot = makeWorkerSnapshot(
