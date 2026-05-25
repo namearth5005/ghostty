@@ -2146,6 +2146,96 @@ struct ForemanAgentTests {
     }
 
     @Test
+    func startInteractiveModeUsesWorkerSuggestionWithoutPlannerCall() async throws {
+        let conversation = await MainActor.run { ForemanConversation() }
+        let client = ScriptedForemanClient(responses: [
+            try makeStepResponse(
+                thought: "Foreman should not need to plan this.",
+                action: AgentAction.sendCommand(
+                    terminalID: "term-1",
+                    command: "1",
+                    reason: "Choose Keep current API."
+                )
+            ),
+        ])
+        let commandRecorder = CommandRecorder()
+        let agent = makeAgent(
+            conversation: conversation,
+            client: client,
+            commandRecorder: commandRecorder
+        )
+        let observedContext = choiceObservedContext(
+            isPlanning: false,
+            execution: .manualOnly
+        )
+
+        await agent.start(
+            goal: "Continue the worker.",
+            mode: .interactive,
+            captureSnapshots: { observedContext.terminals },
+            captureObservedContext: { observedContext }
+        )
+
+        try await waitForStatus(.waitingForUser, in: conversation)
+
+        let commands = await commandRecorder.recordedCommands()
+        #expect(commands.isEmpty)
+        #expect(await client.agentStepCallCount() == 0)
+    }
+
+    @Test
+    func startAutonomousModeUsesWorkerSuggestionWithoutPlannerCall() async throws {
+        let conversation = await MainActor.run { ForemanConversation() }
+        let client = ScriptedForemanClient(responses: [
+            try makeStepResponse(
+                thought: "Foreman should not need to plan this.",
+                action: AgentAction.sendCommand(
+                    terminalID: "term-1",
+                    command: "1",
+                    reason: "Choose Keep current API."
+                )
+            ),
+        ])
+        let commandRecorder = CommandRecorder()
+        let initialContext = choiceObservedContext(
+            isPlanning: false,
+            execution: .autonomousOK
+        )
+        let followupContext = runningObservedContextAfterSuggestedChoice()
+        let contextSource = await MainActor.run {
+            MutableObservedContextSource(initialContext)
+        }
+        let service = ForemanService(client: client)
+        let agent = ForemanAgent(
+            conversation: conversation,
+            foremanService: service,
+            goalRuntime: ForemanProjectGoalRuntime(),
+            onSendCommand: { terminalID, command in
+                await commandRecorder.record(terminalID: terminalID, command: command)
+                contextSource.current = followupContext
+                return true
+            },
+            onStatusChange: { _ in },
+            onAction: { _, _ in }
+        )
+
+        await agent.start(
+            goal: "Continue the worker.",
+            mode: .autonomous,
+            captureSnapshots: { contextSource.current.terminals },
+            captureObservedContext: { contextSource.current }
+        )
+
+        try await waitFor {
+            let commands = await commandRecorder.recordedCommands()
+            let isRunning = await MainActor.run { conversation.isRunning }
+            return commands.contains { $0.terminalID == "term-1" && $0.command == "1" } && !isRunning
+        }
+
+        #expect(await client.agentStepCallCount() == 0)
+    }
+
+    @Test
     func reactInteractiveModePausesForApproval() async throws {
         let conversation = await MainActor.run { ForemanConversation() }
         let client = ScriptedForemanClient(responses: [
@@ -2736,6 +2826,15 @@ private actor ScriptedForemanClient: ForemanLLMClient {
     }
 }
 
+@MainActor
+private final class MutableObservedContextSource {
+    var current: ForemanObservedTerminalContext
+
+    init(_ current: ForemanObservedTerminalContext) {
+        self.current = current
+    }
+}
+
 private func kimiReplySnapshots(
     terminalID: String,
     title: String,
@@ -2922,6 +3021,68 @@ private func choiceObservedContext(
             sessionID: "kimi-session-12",
             revision: 12,
             isPlanning: isPlanning
+        ),
+        workerSnapshot: workerSnapshot
+    )
+
+    return ForemanObservedTerminalContext(
+        terminals: snapshots,
+        understandings: [understanding],
+        workerSnapshots: ["term-1": workerSnapshot]
+    )
+}
+
+private func runningObservedContextAfterSuggestedChoice() -> ForemanObservedTerminalContext {
+    let snapshots = [
+        TerminalSnapshot.makePreview(
+            terminalID: "term-1",
+            windowID: "win-1",
+            tabID: "tab-1",
+            title: "Kimi Code",
+            cwd: "/tmp/project",
+            isFocused: true,
+            visibleText: "Applying the selected API direction.",
+            recentScrollbackLines: [],
+            lastInputPreview: "1",
+            foregroundProcessName: "kimi",
+            cursorIsAtPrompt: false,
+            usingAlternateScreen: true
+        ),
+    ]
+    let workerSnapshot = TerminalWorkerSnapshot(
+        schemaVersion: 1,
+        terminalID: "term-1",
+        workerSessionID: "kimi-session-12",
+        revision: 13,
+        observedAt: Date(timeIntervalSince1970: 1_748_333_334),
+        ttlMilliseconds: 15_000,
+        workerGoal: "compare API directions",
+        agent: .init(identity: .kimi),
+        state: .init(
+            lifecycle: .running,
+            attention: .none,
+            summary: "Kimi is applying the selected API direction.",
+            details: ["The worker is continuing with the approved choice."],
+            runtimeFlags: []
+        ),
+        request: nil,
+        suggestions: []
+    )
+    let understanding = TerminalUnderstanding.preview(
+        terminalID: "term-1",
+        state: .running,
+        shortExplanation: "Kimi is applying the selected API direction.",
+        lastMeaningfulEvent: "Applying the selected API direction.",
+        importantDetails: ["The worker is continuing with the approved choice."],
+        suggestedNextActions: [],
+        agentIdentity: .kimi,
+        agentInteractionState: .running,
+        supportLevel: .firstClass,
+        evidence: [.init(source: .runtime, detail: "authoritative_worker_snapshot", confidence: 1.0)],
+        agentInteractionContext: .running(
+            stepDescription: "Applying the selected API direction.",
+            sessionID: "kimi-session-12",
+            revision: 13
         ),
         workerSnapshot: workerSnapshot
     )

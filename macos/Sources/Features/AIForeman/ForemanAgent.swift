@@ -459,6 +459,29 @@ actor ForemanAgent {
                 break
             }
 
+            if let authoritativeResponse = authoritativeWorkerResponse(
+                for: preferredTerminalID ?? overview.primaryTerminalID,
+                observedTerminals: observedTerminals
+            ) {
+                await MainActor.run {
+                    conversation.incrementIteration()
+                }
+                _ = await evaluateProjectGoal(
+                    for: preferredTerminalID ?? overview.primaryTerminalID,
+                    terminals: terminals,
+                    understandings: understandings,
+                    recommendationOutcome: .agentAction(authoritativeResponse.action)
+                )
+
+                let shouldContinue = try await executeAction(
+                    authoritativeResponse,
+                    terminalID: preferredTerminalID ?? overview.primaryTerminalID
+                )
+                try Task.checkCancellation()
+                guard shouldContinue else { break }
+                continue
+            }
+
             // 2. Plan (with delta-truncated terminal text to keep LLM context small)
             await setStatus(.planning)
             let response = try await foremanService.agentStep(
@@ -758,6 +781,32 @@ actor ForemanAgent {
             return
         }
 
+        if let authoritativeResponse = authoritativeWorkerResponse(
+            for: event.terminalID,
+            observedTerminals: observedTerminals
+        ) {
+            await MainActor.run {
+                conversation.incrementIteration()
+            }
+            _ = await evaluateProjectGoal(
+                for: event.terminalID,
+                terminals: terminals,
+                understandings: understandings,
+                recommendationOutcome: .agentAction(authoritativeResponse.action)
+            )
+
+            _ = try await executeAction(authoritativeResponse, terminalID: event.terminalID)
+            try Task.checkCancellation()
+
+            await MainActor.run {
+                if conversation.status != .waitingForUser {
+                    conversation.status = .idle
+                    conversation.isRunning = false
+                }
+            }
+            return
+        }
+
         // Plan
         await setStatus(.planning)
         let response = try await foremanService.agentStep(
@@ -869,6 +918,52 @@ actor ForemanAgent {
         await MainActor.run {
             conversation.setStatus(.idle)
             conversation.isRunning = false
+        }
+    }
+
+    private func authoritativeWorkerResponse(
+        for terminalID: String?,
+        observedTerminals: ForemanObservedTerminalContext
+    ) -> AgentStepResponse? {
+        let candidateTerminalIDs: [String]
+        if let terminalID {
+            candidateTerminalIDs = [terminalID]
+        } else {
+            candidateTerminalIDs = observedTerminals.understandings.map(\.terminalID)
+        }
+
+        for candidateTerminalID in candidateTerminalIDs {
+            guard let workerSnapshot = observedTerminals.workerSnapshots[candidateTerminalID],
+                  hasAuthoritativeRuntimeIdentity(workerSnapshot),
+                  let suggestion = workerSnapshot.recommendedSuggestion ?? workerSnapshot.suggestions.first,
+                  let payload = payloadString(for: suggestion.payload) else {
+                continue
+            }
+
+            return AgentStepResponse(
+                thought: workerSnapshot.state.summary,
+                action: .sendCommand(
+                    terminalID: candidateTerminalID,
+                    command: payload,
+                    reason: suggestion.rationale
+                )
+            )
+        }
+
+        return nil
+    }
+
+    private func hasAuthoritativeRuntimeIdentity(_ snapshot: TerminalWorkerSnapshot) -> Bool {
+        snapshot.revision > 0 ||
+        snapshot.workerSessionID != "\(snapshot.agent.identity.rawValue)-\(snapshot.terminalID)"
+    }
+
+    private func payloadString(for payload: TerminalWorkerSnapshot.Payload) -> String? {
+        switch payload {
+        case .text(let value), .command(let value), .option(let value), .approval(let value):
+            return value
+        case .foremanPrompt:
+            return nil
         }
     }
 
