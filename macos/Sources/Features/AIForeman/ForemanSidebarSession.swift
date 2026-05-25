@@ -66,7 +66,7 @@ final class ForemanSidebarSession: ForemanSidebarSessionControlling {
     func receiveUserMessage(_ text: String) {
         guard let agent else {
             let agent = ensureAgent(preferredTerminalID: preferredTerminalID())
-            let initialGoal = conversation.runtimeState.effectiveGoal(fallbackGoal: conversation.goal) ?? text
+            let initialGoal = conversation.runtimeState.effectiveGoal() ?? text
             Task {
                 await agent.start(
                     goal: initialGoal,

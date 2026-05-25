@@ -3,6 +3,7 @@ import Foundation
 
 @MainActor
 final class ForemanRuntimeState: ObservableObject {
+    @Published private(set) var conversationGoal: String?
     @Published var lastOverview: TerminalOverview?
     @Published var lastUnderstandings: [TerminalUnderstanding] = []
     @Published var lastWorkerSnapshots: [String: TerminalWorkerSnapshot] = [:]
@@ -10,6 +11,10 @@ final class ForemanRuntimeState: ObservableObject {
 
     func resetForNewConversation() {
         resetObservedTerminalContext()
+    }
+
+    func setConversationGoal(_ goal: String?) {
+        conversationGoal = goal
     }
 
     func resetObservedTerminalContext() {
@@ -32,11 +37,11 @@ final class ForemanRuntimeState: ObservableObject {
         activeProjectGoal = goal
     }
 
-    func effectiveGoal(fallbackGoal: String?) -> String? {
+    func effectiveGoal() -> String? {
         if let activeProjectGoal, activeProjectGoal.status.isActive {
             return activeProjectGoal.objective
         }
 
-        return fallbackGoal
+        return conversationGoal
     }
 }

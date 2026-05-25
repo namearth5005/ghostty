@@ -58,6 +58,7 @@ final class ForemanConversation: ObservableObject {
         self.status = .observing
         self.iterationCount = 0
         self.errorMessage = nil
+        runtimeState.setConversationGoal(goal)
         runtimeState.resetForNewConversation()
         self.hiddenContext = []
         addMessage(role: .user, content: goal)
@@ -145,7 +146,7 @@ final class ForemanConversation: ObservableObject {
     }
 
     var effectiveGoal: String? {
-        runtimeState.effectiveGoal(fallbackGoal: goal)
+        runtimeState.effectiveGoal()
     }
 
     var narrationContext: ForemanNarrationContext {

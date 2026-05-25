@@ -40,6 +40,8 @@ struct AppDelegateGoalCommandTests {
         let savedGoal = await makePersistedGoalRuntime(dbURL: dbURL).goal(for: projectID)
         #expect(savedGoal?.goalText == "Ship the final goal-runtime hardening slice.")
         #expect(savedGoal?.status == .active)
+        #expect(await MainActor.run { store.conversation.goal } == nil)
+        #expect(await MainActor.run { store.conversation.effectiveGoal } == "Ship the final goal-runtime hardening slice.")
 
         appDelegate.sendChatMessage("/goal complete", store: store)
 
@@ -52,6 +54,8 @@ struct AppDelegateGoalCommandTests {
         let completedGoal = await makePersistedGoalRuntime(dbURL: dbURL).goal(for: projectID)
         #expect(completedGoal?.status == .completed)
         #expect(completedGoal?.lastEvidenceSnapshot == "Marked complete from the Foreman sidebar.")
+        #expect(await MainActor.run { store.conversation.goal } == nil)
+        #expect(await MainActor.run { store.conversation.effectiveGoal } == nil)
 
         appDelegate.sendChatMessage("/goal clear", store: store)
 
@@ -64,6 +68,62 @@ struct AppDelegateGoalCommandTests {
         let clearedGoal = await makePersistedGoalRuntime(dbURL: dbURL).goal(for: projectID)
         #expect(clearedGoal == nil)
         #expect(await MainActor.run { store.conversation.status } == .idle)
+        #expect(await MainActor.run { store.conversation.goal } == nil)
+        #expect(await MainActor.run { store.conversation.effectiveGoal } == nil)
+    }
+
+    @MainActor
+    @Test
+    func goalCommandsDoNotOverwriteExistingConversationGoal() async throws {
+        let appDelegate = try #require(NSApp.delegate as? AppDelegate)
+        let fileManager = FileManager.default
+        let root = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let dbURL = root.appendingPathComponent("foreman-memory.sqlite3")
+        let projectID = "/tmp/ghostty-session-goal-\(UUID().uuidString)"
+        let conversation = ForemanConversation()
+        let placeholderGoal = ForemanProjectGoal(
+            projectID: projectID,
+            objective: "Bootstrap the project goal."
+        )
+
+        await MainActor.run {
+            conversation.goal = "Keep the session goal."
+            conversation.runtimeState.setConversationGoal("Keep the session goal.")
+            conversation.runtimeState.setActiveProjectGoal(placeholderGoal)
+        }
+
+        let store = ForemanSidebarStore(conversation: conversation)
+        appDelegate.setForemanProjectGoalRuntimeForTests(makePersistedGoalRuntime(dbURL: dbURL))
+
+        defer {
+            conversation.runtimeState.setActiveProjectGoal(placeholderGoal)
+            appDelegate.setForemanProjectGoalRuntimeForTests(
+                ForemanProjectGoalRuntime(loadPersistedGoals: true)
+            )
+            try? fileManager.removeItem(at: root)
+        }
+
+        appDelegate.sendChatMessage("/goal set Save the project goal separately.", store: store)
+
+        try await waitForGoalCommand {
+            await MainActor.run {
+                store.runtimeState.activeProjectGoal?.goalText == "Save the project goal separately."
+            }
+        }
+
+        #expect(await MainActor.run { store.conversation.goal } == "Keep the session goal.")
+        #expect(await MainActor.run { store.conversation.effectiveGoal } == "Save the project goal separately.")
+
+        appDelegate.sendChatMessage("/goal clear", store: store)
+
+        try await waitForGoalCommand {
+            await MainActor.run {
+                store.runtimeState.activeProjectGoal == nil
+            }
+        }
+
+        #expect(await MainActor.run { store.conversation.goal } == "Keep the session goal.")
+        #expect(await MainActor.run { store.conversation.effectiveGoal } == "Keep the session goal.")
     }
 
     @MainActor

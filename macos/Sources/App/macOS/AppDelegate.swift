@@ -1666,7 +1666,6 @@ extension AppDelegate {
             let updatedGoal = await foremanProjectGoalRuntime.goal(for: projectID)
             await MainActor.run {
                 store.conversation.errorMessage = nil
-                store.conversation.goal = updatedGoal?.goalText
                 store.runtimeState.setActiveProjectGoal(updatedGoal)
                 store.conversation.addMessage(role: .agent, content: message)
                 if updatedGoal == nil {
@@ -2112,7 +2111,6 @@ extension AppDelegate {
         store: ForemanSidebarStore
     ) {
         store.conversation.errorMessage = nil
-        store.conversation.goal = updatedGoal?.goalText
         store.runtimeState.setActiveProjectGoal(updatedGoal)
         store.conversation.addMessage(role: .agent, content: message)
         if updatedGoal == nil {
