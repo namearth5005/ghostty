@@ -308,7 +308,7 @@ actor ForemanAgent {
                 title: "Needs direction",
                 description: message.isEmpty ? "The agent is waiting for your direction." : message,
                 detail: reason.isEmpty ? event.deltaText : reason,
-                actions: await makeRecommendationActions(for: event)
+                actions: []
             )
 
         case .noAction:
@@ -929,39 +929,6 @@ actor ForemanAgent {
         }
 
         return nil
-    }
-
-    private func makeRecommendationActions(
-        for event: AgentNeedsAttentionEvent
-    ) async -> [PendingAgentAction] {
-        let goal = await MainActor.run {
-            conversation.activeProjectGoal?.objective ?? conversation.goal
-        }
-        let title = "Ask \(event.agentIdentity.displayName ?? "the agent") to recommend next step"
-        let payload = recommendationPrompt(for: goal)
-        return [
-            .init(
-                id: "recommend_next_step",
-                title: title,
-                payload: payload,
-                style: .primary
-            ),
-        ]
-    }
-
-    private func recommendationPrompt(for goal: String?) -> String {
-        if let goal, !goal.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return """
-            The saved project goal for this repository is:
-            \(goal)
-
-            Please inspect the current project state and recommend the single most useful next step toward that goal. Explain why before making changes.
-            """
-        }
-
-        return """
-        Please inspect the current project state and recommend the single most useful next step. Explain why before making changes.
-        """
     }
 
     private func evaluateProjectGoal(

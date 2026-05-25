@@ -1072,7 +1072,7 @@ struct ForemanAgentTests {
     }
 
     @Test
-    func draftPendingAttentionForAskHumanShowsClickableFallbackAction() async throws {
+    func draftPendingAttentionForAskHumanDoesNotInventFallbackWorkerPrompt() async throws {
         let conversation = await MainActor.run { ForemanConversation() }
         let client = ScriptedForemanClient(replyDrafts: [
             try makeReplyDraftResponse(
@@ -1106,16 +1106,12 @@ struct ForemanAgentTests {
         )
 
         let commands = await commandRecorder.recordedCommands()
-        let action = try #require(attention?.actions.first)
         #expect(commands.isEmpty)
         #expect(attention?.terminalID == "term-1")
         #expect(attention?.title == "Needs direction")
         #expect(attention?.description == "What should Kimi do in the mend directory?")
         #expect(attention?.detail == "Kimi is asking for the next task and Foreman has no active user goal.")
-        #expect(attention?.actions.count == 1)
-        #expect(action.title == "Ask Kimi to recommend next step")
-        #expect(action.payload == "Please inspect the current project state and recommend the single most useful next step. Explain why before making changes.")
-        #expect(action.style == .primary)
+        #expect(attention?.actions.isEmpty == true)
     }
 
     @Test
@@ -1470,8 +1466,7 @@ struct ForemanAgentTests {
         #expect(signatures.first?.title == "Needs direction")
         #expect(signatures.first?.description == "What should Kimi do in the mend directory?")
         #expect(signatures.first?.detail == "Kimi is asking for the next task and Foreman has no active user goal.")
-        #expect(signatures.first?.actions.first?.title == "Ask Kimi to recommend next step")
-        #expect(signatures.first?.actions.first?.payload == goalAwareRecommendNextStepPrompt(goal: projectGoal))
+        #expect(signatures.first?.actions.isEmpty == true)
     }
 
     @Test
@@ -1518,8 +1513,7 @@ struct ForemanAgentTests {
         #expect(signatures.first?.title == "Needs direction")
         #expect(signatures.first?.description == "What should Codex do in this project?")
         #expect(signatures.first?.detail == "Codex is asking for the next task and Foreman has no active user goal.")
-        #expect(signatures.first?.actions.first?.title == "Ask Codex to recommend next step")
-        #expect(signatures.first?.actions.first?.payload == goalAwareRecommendNextStepPrompt(goal: projectGoal))
+        #expect(signatures.first?.actions.isEmpty == true)
     }
 
     @Test
@@ -1755,7 +1749,7 @@ struct ForemanAgentTests {
         #expect(signatures.dropFirst().allSatisfy { $0 == signatures.first })
         #expect(signatures.first?.title == "Needs direction")
         #expect(signatures.first?.description == "What should Codex do in this project?")
-        #expect(signatures.first?.actions.first?.payload == goalAwareRecommendNextStepPrompt(goal: projectGoal))
+        #expect(signatures.first?.actions.isEmpty == true)
         #expect(goal?.status == .active)
         #expect(goal?.completedAt == nil)
         #expect(goal?.lastEvaluatedAt != nil)
@@ -1806,8 +1800,7 @@ struct ForemanAgentTests {
         #expect(signatures.first?.title == "Needs direction")
         #expect(signatures.first?.description == "What should Claude Code do in this project?")
         #expect(signatures.first?.detail == "Claude Code is asking for the next task and Foreman has no active user goal.")
-        #expect(signatures.first?.actions.first?.title == "Ask Claude Code to recommend next step")
-        #expect(signatures.first?.actions.first?.payload == goalAwareRecommendNextStepPrompt(goal: projectGoal))
+        #expect(signatures.first?.actions.isEmpty == true)
     }
 
     @Test
@@ -3020,15 +3013,6 @@ private func kimiQuestionRecord(question: String) -> KimiWireRecord {
             )
         )
     )
-}
-
-private func goalAwareRecommendNextStepPrompt(goal: String) -> String {
-    """
-    The saved project goal for this repository is:
-    \(goal)
-
-    Please inspect the current project state and recommend the single most useful next step toward that goal. Explain why before making changes.
-    """
 }
 
 private actor FastPathRecordingForemanClient: ForemanLLMClient {
