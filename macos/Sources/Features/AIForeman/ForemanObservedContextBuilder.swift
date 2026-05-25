@@ -76,7 +76,10 @@ struct ForemanObservedContextBuilder {
                 importantDetails: understanding.importantDetails,
                 evidence: understanding.evidence,
                 suggestedNextActions: understanding.suggestedNextActions,
-                agentInteractionContext: understanding.agentInteractionContext,
+                agentInteractionContext: authoritativeInteractionContext(
+                    for: understanding,
+                    workerSnapshot: workerSnapshot
+                ),
                 workerSnapshot: workerSnapshot
             )
         }
@@ -96,5 +99,39 @@ struct ForemanObservedContextBuilder {
             understandingsByTerminalID: understandingsByTerminalID,
             runtimeEntriesByTerminalID: runtimeEntriesByTerminalID
         )
+    }
+
+    private func authoritativeInteractionContext(
+        for understanding: TerminalUnderstanding,
+        workerSnapshot: TerminalWorkerSnapshot
+    ) -> AgentInteractionContext {
+        switch workerSnapshot.state.attention {
+        case .replyRequired, .choiceRequired, .approvalRequired, .error:
+            return understanding.agentInteractionContext
+
+        case .none:
+            switch workerSnapshot.state.lifecycle {
+            case .running:
+                return .running(
+                    stepDescription: workerSnapshot.state.summary,
+                    sessionID: workerSnapshot.workerSessionID,
+                    revision: workerSnapshot.revision
+                )
+            case .completed:
+                return .completed(
+                    summary: workerSnapshot.state.summary,
+                    sessionID: workerSnapshot.workerSessionID,
+                    revision: workerSnapshot.revision
+                )
+            case .failed:
+                return .error(
+                    description: workerSnapshot.state.summary,
+                    sessionID: workerSnapshot.workerSessionID,
+                    revision: workerSnapshot.revision
+                )
+            case .idle, .blocked:
+                return understanding.agentInteractionContext
+            }
+        }
     }
 }
