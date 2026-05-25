@@ -248,8 +248,9 @@ struct ForemanAgentTests {
         #expect(overviews.count == 1)
         #expect(overviews.first?.summary.contains("term-1") == true)
         #expect(overviews.first?.summary.contains("hfind") == true)
-        let lastOverview = await MainActor.run { conversation.lastOverview }
-        let lastUnderstandings = await MainActor.run { conversation.lastUnderstandings }
+        let runtimeState = await MainActor.run { conversation.runtimeState }
+        let lastOverview = await MainActor.run { runtimeState.lastOverview }
+        let lastUnderstandings = await MainActor.run { runtimeState.lastUnderstandings }
         #expect(lastOverview?.summary.contains("term-1") == true)
         #expect(lastUnderstandings.first?.state == .failed)
         let messages = await MainActor.run { conversation.messages }
@@ -339,7 +340,8 @@ struct ForemanAgentTests {
         let forwarded = try #require(payloads.first?.first)
         #expect(forwarded.agentInteractionContext == .waitingText(question: "What should I do here?"))
         #expect(forwarded.lastMeaningfulEvent == "What should I do here?")
-        let lastUnderstandings = await MainActor.run { conversation.lastUnderstandings }
+        let runtimeState = await MainActor.run { conversation.runtimeState }
+        let lastUnderstandings = await MainActor.run { runtimeState.lastUnderstandings }
         #expect(lastUnderstandings.first?.agentInteractionContext == .waitingText(question: "What should I do here?"))
     }
 
@@ -708,6 +710,7 @@ struct ForemanAgentTests {
     @Test
     func startingAndStoppingConversationClearsStructuredTerminalContext() async {
         let conversation = await MainActor.run { ForemanConversation() }
+        let runtimeState = await MainActor.run { conversation.runtimeState }
         let overview = TerminalOverview(
             summary: "term-1 failed",
             changedTerminalIDs: ["term-1"],
@@ -721,29 +724,36 @@ struct ForemanAgentTests {
             importantDetails: ["The typed command was `hfind . -print`."],
             suggestedNextActions: []
         )
+        let activeGoal = ForemanProjectGoal(
+            projectID: "/tmp/project",
+            objective: "Preserve this project goal."
+        )
 
         await MainActor.run {
-            conversation.updateTerminalContext(overview: overview, understandings: [understanding])
+            runtimeState.updateTerminalContext(overview: overview, understandings: [understanding])
+            runtimeState.setActiveProjectGoal(activeGoal)
             conversation.addHiddenContext("Hidden context from previous reactive event.")
             conversation.start(goal: "new session", mode: .interactive)
         }
 
         let clearedOnStart = await MainActor.run {
-            conversation.lastOverview == nil &&
-            conversation.lastUnderstandings.isEmpty &&
+            runtimeState.lastOverview == nil &&
+            runtimeState.lastUnderstandings.isEmpty &&
+            runtimeState.activeProjectGoal == activeGoal &&
             conversation.hiddenContext.isEmpty
         }
         #expect(clearedOnStart)
 
         await MainActor.run {
-            conversation.updateTerminalContext(overview: overview, understandings: [understanding])
+            runtimeState.updateTerminalContext(overview: overview, understandings: [understanding])
             conversation.addHiddenContext("Hidden context from stopped reactive event.")
             conversation.stop()
         }
 
         let clearedOnStop = await MainActor.run {
-            conversation.lastOverview == nil &&
-            conversation.lastUnderstandings.isEmpty &&
+            runtimeState.lastOverview == nil &&
+            runtimeState.lastUnderstandings.isEmpty &&
+            runtimeState.activeProjectGoal == activeGoal &&
             conversation.hiddenContext.isEmpty
         }
         #expect(clearedOnStop)
@@ -1897,7 +1907,8 @@ struct ForemanAgentTests {
         let forwarded = try #require(payloads.first?.first)
         #expect(forwarded.agentInteractionContext == .waitingText(question: "What should I do here?"))
         #expect(forwarded.lastMeaningfulEvent == "What should I do here?")
-        let lastUnderstandings = await MainActor.run { conversation.lastUnderstandings }
+        let runtimeState = await MainActor.run { conversation.runtimeState }
+        let lastUnderstandings = await MainActor.run { runtimeState.lastUnderstandings }
         #expect(lastUnderstandings.first?.agentInteractionContext == .waitingText(question: "What should I do here?"))
     }
 
@@ -2201,7 +2212,8 @@ struct ForemanAgentTests {
 
         let persistedGoal = await runtime.goal(for: "/tmp/project")
         #expect(persistedGoal?.status == .completed)
-        #expect(await MainActor.run { conversation.activeProjectGoal?.status } == .completed)
+        let runtimeState = await MainActor.run { conversation.runtimeState }
+        #expect(await MainActor.run { runtimeState.activeProjectGoal?.status } == .completed)
     }
 
     @Test

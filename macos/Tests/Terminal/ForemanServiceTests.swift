@@ -2,6 +2,7 @@ import Foundation
 import Testing
 @testable import Ghostty
 
+@MainActor
 struct ForemanServiceTests {
     @Test
     func plannerBuildsDraftsFromSummaries() async throws {

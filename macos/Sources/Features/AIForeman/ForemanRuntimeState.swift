@@ -8,11 +8,6 @@ final class ForemanRuntimeState: ObservableObject {
     @Published var lastWorkerSnapshots: [String: TerminalWorkerSnapshot] = [:]
     @Published private(set) var activeProjectGoal: ForemanProjectGoal?
 
-    func resetForNewConversation() {
-        resetObservedTerminalContext()
-        activeProjectGoal = nil
-    }
-
     func resetObservedTerminalContext() {
         lastOverview = nil
         lastUnderstandings = []

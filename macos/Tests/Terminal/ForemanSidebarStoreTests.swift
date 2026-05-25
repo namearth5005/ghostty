@@ -1300,7 +1300,7 @@ struct ForemanSidebarStoreTests {
     @Test
     func completedGoalSuppressesPendingAttentionActionRouting() {
         let conversation = ForemanConversation()
-        conversation.setActiveProjectGoal(
+        conversation.runtimeState.setActiveProjectGoal(
             ForemanProjectGoal(
                 projectID: "/tmp/project",
                 objective: "Ship the sidebar fix",
