@@ -338,11 +338,23 @@ class AppDelegate: NSObject,
                 )
                 let initialDecision = ForemanReactiveEventRouter.initialDecision(
                     for: event,
-                    understanding: understanding
+                    understanding: understanding,
+                    mode: store.conversation.mode,
+                    activeGoalStatus: store.runtimeState.activeProjectGoal?.status
                 )
 
                 if case .showPendingAttention(let attention) = initialDecision {
                     store.upsertPendingAttention(attention)
+                    return
+                }
+
+                if case .autoDispatchPendingAttention(let attention, let action) = initialDecision {
+                    store.upsertPendingAttention(attention)
+                    self.executePendingAttentionAction(
+                        attention,
+                        action: action,
+                        store: store
+                    )
                     return
                 }
 
@@ -1332,14 +1344,16 @@ extension AppDelegate {
             }
         }
 
+        let owningStore = terminalController(for: report.terminalID)?.foremanSidebarStore
+
         // Forward to the sidebar session that owns this terminal.
-        terminalController(for: report.terminalID)?
-            .foremanSidebarStore
-            .sidebarSession?
-            .receiveOutcome(report)
+        owningStore?.sidebarSession?.receiveOutcome(report)
 
         // Notify user of outcome change
-        foremanNotifier.observe(report: report)
+        foremanNotifier.observe(
+            report: report,
+            summaryOverride: owningStore?.rollupStatusText
+        )
 
         // Store in memory
         Task {

@@ -159,6 +159,16 @@ struct ForemanSidebarStoreTests {
 
         #expect(store.rollupStatusText == "term-1 failed and needs a rerun.")
         #expect(store.terminalRows[0].suggestedActions.isEmpty)
+
+        runtimeState.setActiveProjectGoal(
+            ForemanProjectGoal(
+                projectID: "/tmp/project",
+                objective: "Ship this cleanly.",
+                status: .active
+            )
+        )
+
+        #expect(store.terminalRows[0].suggestedActions.map(\.title) == ["Rerun tests"])
     }
 
     @MainActor

@@ -6,6 +6,11 @@ import UserNotifications
 class ForemanNotifier {
     static let shared = ForemanNotifier()
 
+    struct NotificationMessage: Equatable {
+        let title: String
+        let body: String
+    }
+
     private var lastOutcomes: [String: TerminalOutcome] = [:]
     private var authorized = false
 
@@ -20,44 +25,23 @@ class ForemanNotifier {
         }
     }
 
-    func observe(report: TerminalOutcomeReport) {
+    func observe(report: TerminalOutcomeReport, summaryOverride: String? = nil) {
         guard authorized else { return }
 
         let previous = lastOutcomes[report.terminalID]
         lastOutcomes[report.terminalID] = report.outcome
 
-        guard let previous = previous else { return }
-        guard previous != report.outcome else { return }
+        guard let message = Self.notificationMessage(
+            previous: previous,
+            report: report,
+            summaryOverride: summaryOverride
+        ) else { return }
+        guard !isAppFocusedAndSidebarVisible() else { return }
 
         let content = UNMutableNotificationContent()
+        content.title = message.title
+        content.body = message.body
         content.sound = .default
-
-        var shouldNotify = true
-        let terminalReference = report.terminalID
-
-        switch (previous, report.outcome) {
-        case (_, .failure):
-            content.title = "Foreman Update"
-            content.body = report.summary ?? "\(terminalReference): \(report.sentCommand) failed."
-
-        case (_, .success):
-            content.title = "Foreman Update"
-            content.body = report.summary ?? "\(terminalReference): \(report.sentCommand) completed successfully."
-
-        case (_, .needsInput):
-            content.title = "Foreman Update"
-            content.body = report.summary ?? "\(terminalReference): waiting for input."
-
-        case (_, .hung):
-            content.title = "Foreman Update"
-            content.body = report.summary ?? "\(terminalReference): \(report.sentCommand) appears to be hung."
-
-        default:
-            shouldNotify = false
-        }
-
-        guard shouldNotify else { return }
-        guard !isAppFocusedAndSidebarVisible() else { return }
 
         let request = UNNotificationRequest(
             identifier: "foreman-outcome-\(report.id.uuidString)",
@@ -78,5 +62,44 @@ class ForemanNotifier {
         // a Foreman-related view or if the sidebar is known to be open.
         // For simplicity, we suppress if Foreman is the focused app and any terminal window is key.
         return true
+    }
+
+    nonisolated static func notificationMessage(
+        previous: TerminalOutcome?,
+        report: TerminalOutcomeReport,
+        summaryOverride: String?
+    ) -> NotificationMessage? {
+        guard let previous else { return nil }
+        guard previous != report.outcome else { return nil }
+
+        let fallbackBody: String?
+        switch report.outcome {
+        case .failure:
+            fallbackBody = report.summary ?? "\(report.terminalID): \(report.sentCommand) failed."
+        case .success:
+            fallbackBody = report.summary ?? "\(report.terminalID): \(report.sentCommand) completed successfully."
+        case .needsInput:
+            fallbackBody = report.summary ?? "\(report.terminalID): waiting for input."
+        case .hung:
+            fallbackBody = report.summary ?? "\(report.terminalID): \(report.sentCommand) appears to be hung."
+        case .unknown, .stillRunning:
+            fallbackBody = nil
+        }
+
+        guard let body = summaryOverride?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+            ?? fallbackBody else {
+            return nil
+        }
+
+        return NotificationMessage(
+            title: "Foreman Update",
+            body: body
+        )
+    }
+}
+
+private extension String {
+    var nilIfEmpty: String? {
+        isEmpty ? nil : self
     }
 }

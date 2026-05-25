@@ -181,6 +181,9 @@ final class ForemanSidebarStore: ObservableObject {
     var onExecuteSuggestion: ((String, String) -> Void)?
     var onExecutePendingAttentionAction: ((PendingAgentAttention, PendingAgentAction) -> Void)?
 
+    private var latestSnapshots: [TerminalSnapshot] = []
+    private var latestSummariesByTerminalID: [String: TerminalSummary] = [:]
+    private var latestUnderstandingsByTerminalID: [String: TerminalUnderstanding] = [:]
     private var cancellables = Set<AnyCancellable>()
 
     @MainActor
@@ -224,11 +227,11 @@ final class ForemanSidebarStore: ObservableObject {
         self.runtimeState.objectWillChange.sink { [weak self] _ in
             self?.objectWillChange.send()
         }.store(in: &cancellables)
-        self.runtimeState.$activeProjectGoal.sink { [weak self] _ in
-            self?.refreshTerminalRowsForGoalState()
+        self.runtimeState.$activeProjectGoal.sink { [weak self] goal in
+            self?.refreshTerminalRowsForGoalState(goal)
         }.store(in: &cancellables)
 
-        refreshTerminalRowsForGoalState()
+        refreshTerminalRowsForGoalState(self.runtimeState.activeProjectGoal)
     }
 
     static var preview: ForemanSidebarStore {
@@ -581,6 +584,10 @@ final class ForemanSidebarStore: ObservableObject {
         summariesByTerminalID: [String: TerminalSummary] = [:],
         understandingsByTerminalID: [String: TerminalUnderstanding] = [:]
     ) {
+        latestSnapshots = snapshots
+        latestSummariesByTerminalID = summariesByTerminalID
+        latestUnderstandingsByTerminalID = understandingsByTerminalID
+
         reconcilePendingAttention(
             snapshots: snapshots,
             understandingsByTerminalID: understandingsByTerminalID
@@ -595,7 +602,45 @@ final class ForemanSidebarStore: ObservableObject {
             }
         )
 
-        terminalRows = snapshots.map { snapshot in
+        rebuildTerminalRowsFromCachedState(
+            suppressSuggestedActions: shouldSuppressSuggestedActionsForCompletedGoal
+        )
+    }
+
+    private func rebuildTerminalRowsFromCachedState(
+        suppressSuggestedActions: Bool = false
+    ) {
+        terminalRows = makeTerminalRows(
+            snapshots: latestSnapshots,
+            summariesByTerminalID: latestSummariesByTerminalID,
+            understandingsByTerminalID: latestUnderstandingsByTerminalID,
+            suppressSuggestedActions: suppressSuggestedActions
+        )
+
+        let nextPendingTerminalID = dispatchQueue.first(where: { $0.state == .pending })?.terminalID
+        let waitingTerminalID = terminalRows.first(where: {
+            !$0.isFocused && ($0.agentContextType == "waitingApproval" ||
+                             $0.agentContextType == "waitingChoice" ||
+                             $0.agentContextType == "waitingText")
+        })?.terminalID
+        let focusedTerminalID = latestSnapshots.first(where: { $0.isFocused })?.terminalID
+        let firstTerminalID = latestSnapshots.first?.terminalID
+
+        if let selectedTerminalID,
+           terminalRows.contains(where: { $0.terminalID == selectedTerminalID }) {
+            return
+        }
+
+        selectedTerminalID = nextPendingTerminalID ?? waitingTerminalID ?? focusedTerminalID ?? firstTerminalID
+    }
+
+    private func makeTerminalRows(
+        snapshots: [TerminalSnapshot],
+        summariesByTerminalID: [String: TerminalSummary],
+        understandingsByTerminalID: [String: TerminalUnderstanding],
+        suppressSuggestedActions: Bool
+    ) -> [TerminalSummaryRowModel] {
+        snapshots.map { snapshot in
             if let understanding = understandingsByTerminalID[snapshot.terminalID] {
                 let context = understanding.agentInteractionContext
                 return TerminalSummaryRowModel(
@@ -609,7 +654,10 @@ final class ForemanSidebarStore: ObservableObject {
                     supportLevel: understanding.supportLevel.rawValue,
                     evidenceSummary: understanding.evidence.first?.source.rawValue,
                     isFocused: snapshot.isFocused,
-                    suggestedActions: goalScopedSuggestedActions(suggestedActions(for: understanding)),
+                    suggestedActions: scopedSuggestedActions(
+                        suggestedActions(for: understanding),
+                        suppressSuggestedActions: suppressSuggestedActions
+                    ),
                     pendingAttention: pendingAttentionByTerminalID[snapshot.terminalID],
                     agentContextType: context.typeString,
                     agentContextTitle: context.titleString,
@@ -659,22 +707,6 @@ final class ForemanSidebarStore: ObservableObject {
                 agentContextDetail: nil
             )
         }
-
-        let nextPendingTerminalID = dispatchQueue.first(where: { $0.state == .pending })?.terminalID
-        let waitingTerminalID = terminalRows.first(where: {
-            !$0.isFocused && ($0.agentContextType == "waitingApproval" ||
-                             $0.agentContextType == "waitingChoice" ||
-                             $0.agentContextType == "waitingText")
-        })?.terminalID
-        let focusedTerminalID = snapshots.first(where: { $0.isFocused })?.terminalID
-        let firstTerminalID = snapshots.first?.terminalID
-
-        if let selectedTerminalID,
-           terminalRows.contains(where: { $0.terminalID == selectedTerminalID }) {
-            return
-        }
-
-        selectedTerminalID = nextPendingTerminalID ?? waitingTerminalID ?? focusedTerminalID ?? firstTerminalID
     }
 
     private func reconcilePendingAttention(
@@ -903,24 +935,25 @@ final class ForemanSidebarStore: ObservableObject {
         terminalRows[index].pendingAttention = pendingAttentionByTerminalID[terminalID]
     }
 
-    private func refreshTerminalRowsForGoalState() {
-        guard shouldSuppressSuggestedActionsForCompletedGoal else {
+    private func refreshTerminalRowsForGoalState(_ goal: ForemanProjectGoal?) {
+        guard goal != nil || !latestSnapshots.isEmpty else {
             return
         }
 
-        for index in terminalRows.indices where !terminalRows[index].suggestedActions.isEmpty {
-            terminalRows[index].suggestedActions = []
-        }
+        rebuildTerminalRowsFromCachedState(
+            suppressSuggestedActions: goal?.status == .completed
+        )
     }
 
     private var shouldSuppressSuggestedActionsForCompletedGoal: Bool {
         runtimeState.activeProjectGoal?.status == .completed
     }
 
-    private func goalScopedSuggestedActions(
-        _ actions: [TerminalSuggestedAction]
+    private func scopedSuggestedActions(
+        _ actions: [TerminalSuggestedAction],
+        suppressSuggestedActions: Bool
     ) -> [TerminalSuggestedAction] {
-        guard shouldSuppressSuggestedActionsForCompletedGoal else {
+        guard suppressSuggestedActions else {
             return actions
         }
 

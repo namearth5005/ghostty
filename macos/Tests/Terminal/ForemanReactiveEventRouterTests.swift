@@ -11,6 +11,7 @@ struct ForemanReactiveEventRouterTests {
     private struct InitialDecisionSignature: Equatable {
         enum Kind: Equatable {
             case showPendingAttention
+            case autoDispatchPendingAttention
             case draftWaitingText
             case react
         }
@@ -20,6 +21,7 @@ struct ForemanReactiveEventRouterTests {
         let description: String?
         let detail: String?
         let actions: [PendingAgentAction]
+        let dispatchPayload: String?
     }
 
     @Test
@@ -263,6 +265,144 @@ struct ForemanReactiveEventRouterTests {
     }
 
     @Test
+    func authoritativeAutonomousSuggestionDispatchesWorkerPayload() {
+        let snapshot = TerminalWorkerSnapshot(
+            schemaVersion: 1,
+            terminalID: "term-1",
+            workerSessionID: "codex-session-99",
+            revision: 99,
+            observedAt: Date(timeIntervalSince1970: 1_748_222_222),
+            ttlMilliseconds: 15_000,
+            workerGoal: "stabilize the API",
+            agent: .init(identity: .codex),
+            state: .init(
+                lifecycle: .running,
+                attention: .replyRequired,
+                summary: "Codex is waiting for a reply.",
+                details: ["Asked whether the API should stay stable."],
+                runtimeFlags: []
+            ),
+            request: .init(
+                id: "req-99",
+                kind: .reply,
+                prompt: "Should I preserve the API?",
+                options: []
+            ),
+            suggestions: [
+                .init(
+                    id: "preserve-api",
+                    kind: .reply,
+                    title: "Preserve the API",
+                    payload: .text("Preserve the current API and adapt the internals."),
+                    rationale: "Lowest migration risk.",
+                    recommended: true,
+                    execution: .autonomousOK,
+                    requestID: "req-99"
+                ),
+            ]
+        )
+        let understanding = TerminalUnderstanding.preview(
+            terminalID: "term-1",
+            state: .waiting,
+            shortExplanation: "Codex is waiting for a reply.",
+            lastMeaningfulEvent: "Should I preserve the API?",
+            importantDetails: [],
+            suggestedNextActions: [],
+            agentIdentity: .codex,
+            agentInteractionState: .waitingText,
+            workerSnapshot: snapshot
+        )
+        let event = AgentNeedsAttentionEvent(
+            terminalID: "term-1",
+            agentIdentity: .codex,
+            interactionState: .waitingText,
+            deltaText: "Should I preserve the API?",
+            timestamp: Date(timeIntervalSince1970: 1),
+            fingerprint: snapshot.attentionFingerprint
+        )
+
+        let decision = ForemanReactiveEventRouter.initialDecision(
+            for: event,
+            understanding: understanding,
+            mode: .autonomous
+        )
+
+        let decisionSignature = signature(decision)
+        #expect(decisionSignature.kind == .autoDispatchPendingAttention)
+        #expect(decisionSignature.title == "Suggested reply")
+        #expect(decisionSignature.dispatchPayload == "Preserve the current API and adapt the internals.")
+    }
+
+    @Test
+    func completedGoalPreventsAuthoritativeAutonomousDispatch() {
+        let snapshot = TerminalWorkerSnapshot(
+            schemaVersion: 1,
+            terminalID: "term-1",
+            workerSessionID: "codex-session-100",
+            revision: 100,
+            observedAt: Date(timeIntervalSince1970: 1_748_222_222),
+            ttlMilliseconds: 15_000,
+            workerGoal: "stabilize the API",
+            agent: .init(identity: .codex),
+            state: .init(
+                lifecycle: .running,
+                attention: .replyRequired,
+                summary: "Codex is waiting for a reply.",
+                details: ["Asked whether the API should stay stable."],
+                runtimeFlags: []
+            ),
+            request: .init(
+                id: "req-100",
+                kind: .reply,
+                prompt: "Should I preserve the API?",
+                options: []
+            ),
+            suggestions: [
+                .init(
+                    id: "preserve-api",
+                    kind: .reply,
+                    title: "Preserve the API",
+                    payload: .text("Preserve the current API and adapt the internals."),
+                    rationale: "Lowest migration risk.",
+                    recommended: true,
+                    execution: .autonomousOK,
+                    requestID: "req-100"
+                ),
+            ]
+        )
+        let understanding = TerminalUnderstanding.preview(
+            terminalID: "term-1",
+            state: .waiting,
+            shortExplanation: "Codex is waiting for a reply.",
+            lastMeaningfulEvent: "Should I preserve the API?",
+            importantDetails: [],
+            suggestedNextActions: [],
+            agentIdentity: .codex,
+            agentInteractionState: .waitingText,
+            workerSnapshot: snapshot
+        )
+        let event = AgentNeedsAttentionEvent(
+            terminalID: "term-1",
+            agentIdentity: .codex,
+            interactionState: .waitingText,
+            deltaText: "Should I preserve the API?",
+            timestamp: Date(timeIntervalSince1970: 1),
+            fingerprint: snapshot.attentionFingerprint
+        )
+
+        let decision = ForemanReactiveEventRouter.initialDecision(
+            for: event,
+            understanding: understanding,
+            mode: .autonomous,
+            activeGoalStatus: .completed
+        )
+
+        let decisionSignature = signature(decision)
+        #expect(decisionSignature.kind == .showPendingAttention)
+        #expect(decisionSignature.dispatchPayload == nil)
+    }
+
+    @Test
     func draftDecisionReturnsDraftedAttentionWhenPresent() {
         let attention = PendingAgentAttention(
             terminalID: "term-1",
@@ -315,7 +455,17 @@ struct ForemanReactiveEventRouterTests {
                 title: attention.title,
                 description: attention.description,
                 detail: attention.detail,
-                actions: attention.actions
+                actions: attention.actions,
+                dispatchPayload: nil
+            )
+        case .autoDispatchPendingAttention(let attention, let action):
+            InitialDecisionSignature(
+                kind: .autoDispatchPendingAttention,
+                title: attention.title,
+                description: attention.description,
+                detail: attention.detail,
+                actions: attention.actions,
+                dispatchPayload: action.payload
             )
         case .draftWaitingText:
             InitialDecisionSignature(
@@ -323,7 +473,8 @@ struct ForemanReactiveEventRouterTests {
                 title: nil,
                 description: nil,
                 detail: nil,
-                actions: []
+                actions: [],
+                dispatchPayload: nil
             )
         case .react:
             InitialDecisionSignature(
@@ -331,7 +482,8 @@ struct ForemanReactiveEventRouterTests {
                 title: nil,
                 description: nil,
                 detail: nil,
-                actions: []
+                actions: [],
+                dispatchPayload: nil
             )
         }
     }
