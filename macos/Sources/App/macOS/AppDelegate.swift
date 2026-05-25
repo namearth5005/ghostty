@@ -1580,7 +1580,8 @@ extension AppDelegate {
             store.conversation.errorMessage = nil
             store.sidebarSession?.receiveUserMessage(
                 message,
-                preferredTerminalID: terminalID
+                preferredTerminalID: terminalID,
+                bypassAuthoritativeWorker: true
             )
 
         case .sendTerminalReply(let terminalID, let fingerprint, let message):

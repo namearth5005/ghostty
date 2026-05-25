@@ -117,6 +117,7 @@ struct AppDelegateForemanSidebarSessionTests {
 
         #expect(spy.recordedMessages == ["What should I do here?"])
         #expect(spy.recordedPreferredTerminalIDs == ["term-2"])
+        #expect(spy.recordedBypassAuthoritativeWorker == [true])
     }
 
     @MainActor
@@ -273,12 +274,59 @@ struct AppDelegateForemanSidebarSessionTests {
             terminalID: "term-2"
         )
     }
+
+    @MainActor
+    @Test
+    func sidebarSessionTargetedGuidanceBypassesAuthoritativePause() async throws {
+        let conversation = ForemanConversation()
+        let client = GuidanceSessionClient()
+        let service = ForemanService(client: client)
+        let fileManager = FileManager.default
+        let root = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let dbURL = root.appendingPathComponent("foreman-memory.sqlite3")
+        let observedContext = makeAuthoritativeNeedsDirectionContext([
+            "term-1": "What should I do here?",
+        ])
+        let session = ForemanSidebarSession(
+            conversation: conversation,
+            foremanService: service,
+            goalRuntime: ForemanProjectGoalRuntime(memoryStore: ForemanMemoryStore(dbPath: dbURL)),
+            preferredTerminalID: { "term-1" },
+            captureSnapshots: { observedContext.terminals },
+            captureObservedContext: { observedContext },
+            onSendCommand: { _, _ in true }
+        )
+        defer { try? fileManager.removeItem(at: root) }
+
+        session.receiveUserMessage("start")
+        try await waitForAgentMessage(
+            conversation: conversation,
+            content: "Needs direction\n\nWhat should I do here?",
+            terminalID: "term-1"
+        )
+
+        session.receiveUserMessage(
+            "Give me project-level guidance for this worker.",
+            preferredTerminalID: "term-1",
+            bypassAuthoritativeWorker: true
+        )
+
+        try await waitForAgentMessage(
+            conversation: conversation,
+            content: "Guide the worker to inspect the auth flow first."
+        )
+
+        let messages = conversation.messages
+        #expect(messages.filter { $0.content == "Needs direction\n\nWhat should I do here?" }.count == 1)
+        #expect(await client.agentStepCallCount() == 1)
+    }
 }
 
 @MainActor
 private final class SidebarSessionSpy: ForemanSidebarSessionControlling {
     private(set) var recordedMessages: [String] = []
     private(set) var recordedPreferredTerminalIDs: [String?] = []
+    private(set) var recordedBypassAuthoritativeWorker: [Bool] = []
     private(set) var startedGoals: [String] = []
     private(set) var stopCallCount = 0
     private(set) var approvedCount = 0
@@ -289,9 +337,14 @@ private final class SidebarSessionSpy: ForemanSidebarSessionControlling {
         startedGoals.append(goal)
     }
 
-    func receiveUserMessage(_ text: String, preferredTerminalID: String?) {
+    func receiveUserMessage(
+        _ text: String,
+        preferredTerminalID: String?,
+        bypassAuthoritativeWorker: Bool
+    ) {
         recordedMessages.append(text)
         recordedPreferredTerminalIDs.append(preferredTerminalID)
+        recordedBypassAuthoritativeWorker.append(bypassAuthoritativeWorker)
     }
 
     func stop() {
@@ -378,6 +431,99 @@ private actor SessionTestClient: ForemanLLMClient {
     }
 }
 
+private actor GuidanceSessionClient: ForemanLLMClient {
+    private var stepCalls = 0
+
+    func summarize(snapshot: TerminalSnapshot) async throws -> TerminalSummary {
+        .init(
+            terminalID: snapshot.terminalID,
+            summary: "idle",
+            state: "idle",
+            confidence: 1.0,
+            needsUserAttention: false,
+            suggestedNextStep: ""
+        )
+    }
+
+    func planDispatch(instruction: String, summaries: [TerminalSummary]) async throws -> DispatchPlan {
+        .init(planSummary: "", drafts: [])
+    }
+
+    func agentStep(
+        narrationContext: ForemanNarrationContext,
+        terminals: [TerminalSnapshot],
+        understandings: [TerminalUnderstanding],
+        workerSnapshots: [String: TerminalWorkerSnapshot],
+        overview: TerminalOverview,
+        lastOutcome: TerminalOutcomeReport?
+    ) async throws -> AgentStepResponse {
+        stepCalls += 1
+        return AgentStepResponse(
+            thought: "Use project-level guidance.",
+            action: .respond(message: "Guide the worker to inspect the auth flow first.")
+        )
+    }
+
+    func agentStep(
+        narrationContext: ForemanNarrationContext,
+        terminals: [TerminalSnapshot],
+        understandings: [TerminalUnderstanding],
+        overview: TerminalOverview,
+        lastOutcome: TerminalOutcomeReport?
+    ) async throws -> AgentStepResponse {
+        stepCalls += 1
+        return AgentStepResponse(
+            thought: "Use project-level guidance.",
+            action: .respond(message: "Guide the worker to inspect the auth flow first.")
+        )
+    }
+
+    func agentStep(
+        narrationContext: ForemanNarrationContext,
+        terminals: [TerminalSnapshot],
+        lastOutcome: TerminalOutcomeReport?
+    ) async throws -> AgentStepResponse {
+        stepCalls += 1
+        return AgentStepResponse(
+            thought: "Use project-level guidance.",
+            action: .respond(message: "Guide the worker to inspect the auth flow first.")
+        )
+    }
+
+    func draftAgentReply(
+        narrationContext: ForemanNarrationContext,
+        event: AgentNeedsAttentionEvent,
+        terminals: [TerminalSnapshot],
+        understandings: [TerminalUnderstanding],
+        workerSnapshots: [String: TerminalWorkerSnapshot],
+        overview: TerminalOverview,
+        lastOutcome: TerminalOutcomeReport?
+    ) async throws -> AgentReplyDraftResponse {
+        .init(
+            thought: "No reply draft.",
+            suggestion: .noAction(reason: "unused", confidence: 1.0)
+        )
+    }
+
+    func draftAgentReply(
+        narrationContext: ForemanNarrationContext,
+        event: AgentNeedsAttentionEvent,
+        terminals: [TerminalSnapshot],
+        understandings: [TerminalUnderstanding],
+        overview: TerminalOverview,
+        lastOutcome: TerminalOutcomeReport?
+    ) async throws -> AgentReplyDraftResponse {
+        .init(
+            thought: "No reply draft.",
+            suggestion: .noAction(reason: "unused", confidence: 1.0)
+        )
+    }
+
+    func agentStepCallCount() -> Int {
+        stepCalls
+    }
+}
+
 private func waitForSessionMode(
     conversation: ForemanConversation,
     expectedMode: AgentMode,
@@ -418,7 +564,7 @@ private func waitForSessionStopped(
 private func waitForAgentMessage(
     conversation: ForemanConversation,
     content: String,
-    terminalID: String,
+    terminalID: String? = nil,
     timeoutNanoseconds: UInt64 = 3_000_000_000,
     pollIntervalNanoseconds: UInt64 = 50_000_000
 ) async throws {
@@ -428,14 +574,14 @@ private func waitForAgentMessage(
         if messages.contains(where: {
             $0.role == .agent &&
             $0.content == content &&
-            $0.terminalID == terminalID
+            (terminalID == nil || $0.terminalID == terminalID)
         }) {
             return
         }
         try await Task.sleep(nanoseconds: pollIntervalNanoseconds)
     }
 
-    Issue.record("Timed out waiting for agent message '\(content)' on \(terminalID).")
+    Issue.record("Timed out waiting for agent message '\(content)' on \(terminalID ?? "any terminal").")
     throw CancellationError()
 }
 

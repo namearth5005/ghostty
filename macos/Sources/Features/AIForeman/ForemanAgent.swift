@@ -44,6 +44,7 @@ actor ForemanAgent {
     private var previousSnapshotsByTerminalID: [String: TerminalSnapshot] = [:]
     private var previousUnderstandings: [TerminalUnderstanding] = []
     private var latestObservedContext: ForemanObservedTerminalContext?
+    private var pendingGuidanceBypassTerminalID: String?
 
     init(
         conversation: ForemanConversation,
@@ -75,6 +76,7 @@ actor ForemanAgent {
         previousSnapshotsByTerminalID = [:]
         previousUnderstandings = []
         latestObservedContext = nil
+        pendingGuidanceBypassTerminalID = nil
         cancelCurrentTask()
 
         currentTask = Task {
@@ -90,7 +92,10 @@ actor ForemanAgent {
             }
 
             do {
-                try await runLoop(captureSnapshots: captureSnapshots)
+                try await runLoop(
+                    captureSnapshots: captureSnapshots,
+                    bypassAuthoritativeWorkerFor: nil
+                )
             } catch {
                 await MainActor.run {
                     conversation.errorMessage = error.localizedDescription
@@ -102,11 +107,15 @@ actor ForemanAgent {
 
     func receiveUserMessage(
         _ text: String,
-        preferredTerminalID explicitPreferredTerminalID: String? = nil
+        preferredTerminalID explicitPreferredTerminalID: String? = nil,
+        bypassAuthoritativeWorker: Bool = false
     ) async {
         if let explicitPreferredTerminalID {
             preferredTerminalID = explicitPreferredTerminalID
         }
+        pendingGuidanceBypassTerminalID = bypassAuthoritativeWorker
+            ? (explicitPreferredTerminalID ?? preferredTerminalID)
+            : nil
         await MainActor.run {
             conversation.addMessage(role: .user, content: text)
         }
@@ -504,6 +513,8 @@ actor ForemanAgent {
         }
 
         cancelCurrentTask()
+        let bypassAuthoritativeWorkerFor = pendingGuidanceBypassTerminalID
+        pendingGuidanceBypassTerminalID = nil
         currentTask = Task {
             do {
                 await MainActor.run {
@@ -516,7 +527,10 @@ actor ForemanAgent {
                     await executeApprovedAction(action)
                 }
 
-                try await runLoop(captureSnapshots: captureSnapshots)
+                try await runLoop(
+                    captureSnapshots: captureSnapshots,
+                    bypassAuthoritativeWorkerFor: bypassAuthoritativeWorkerFor
+                )
             } catch {
                 await MainActor.run {
                     conversation.errorMessage = error.localizedDescription
@@ -527,7 +541,8 @@ actor ForemanAgent {
     }
 
     private func runLoop(
-        captureSnapshots: @escaping @MainActor () -> [TerminalSnapshot]
+        captureSnapshots: @escaping @MainActor () -> [TerminalSnapshot],
+        bypassAuthoritativeWorkerFor guidanceTerminalID: String? = nil
     ) async throws {
         while await !shouldStop() {
             // 1. Observe
@@ -569,12 +584,14 @@ actor ForemanAgent {
                 break
             }
 
-            if let runningAgent = runningAgentWithoutAttention(in: understandings) {
+            if guidanceTerminalID == nil,
+               let runningAgent = runningAgentWithoutAttention(in: understandings) {
                 await pauseUntilAgentNeedsAttention(runningAgent)
                 break
             }
 
-            if let ambiguousPause = ambiguousWorkerTargetPause(
+            if guidanceTerminalID == nil,
+               let ambiguousPause = ambiguousWorkerTargetPause(
                 for: preferredTerminalID,
                 understandings: understandings,
                 overview: overview
@@ -583,7 +600,8 @@ actor ForemanAgent {
                 break
             }
 
-            if let authoritativeDirective = authoritativeWorkerDirective(
+            if guidanceTerminalID == nil,
+               let authoritativeDirective = authoritativeWorkerDirective(
                 for: preferredTerminalID ?? overview.primaryTerminalID,
                 observedTerminals: observedTerminals
             ) {
@@ -600,7 +618,8 @@ actor ForemanAgent {
                 continue
             }
 
-            if let authoritativePause = authoritativeWorkerPause(
+            if guidanceTerminalID == nil,
+               let authoritativePause = authoritativeWorkerPause(
                 for: preferredTerminalID ?? overview.primaryTerminalID,
                 observedTerminals: observedTerminals
             ) {
@@ -611,7 +630,8 @@ actor ForemanAgent {
                 break
             }
 
-            if let firstClassPause = firstClassWorkerPauseWithoutSnapshot(
+            if guidanceTerminalID == nil,
+               let firstClassPause = firstClassWorkerPauseWithoutSnapshot(
                 for: preferredTerminalID ?? overview.primaryTerminalID,
                 observedTerminals: observedTerminals
             ) {

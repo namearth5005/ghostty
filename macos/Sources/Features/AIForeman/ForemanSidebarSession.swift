@@ -3,7 +3,11 @@ import Foundation
 @MainActor
 protocol ForemanSidebarSessionControlling: AnyObject {
     func start(goal: String, mode: AgentMode)
-    func receiveUserMessage(_ text: String, preferredTerminalID: String?)
+    func receiveUserMessage(
+        _ text: String,
+        preferredTerminalID: String?,
+        bypassAuthoritativeWorker: Bool
+    )
     func stop()
     func approvePendingAction()
     func skipPendingAction()
@@ -20,7 +24,19 @@ protocol ForemanSidebarSessionControlling: AnyObject {
 
 extension ForemanSidebarSessionControlling {
     func receiveUserMessage(_ text: String) {
-        receiveUserMessage(text, preferredTerminalID: nil)
+        receiveUserMessage(
+            text,
+            preferredTerminalID: nil,
+            bypassAuthoritativeWorker: false
+        )
+    }
+
+    func receiveUserMessage(_ text: String, preferredTerminalID: String?) {
+        receiveUserMessage(
+            text,
+            preferredTerminalID: preferredTerminalID,
+            bypassAuthoritativeWorker: false
+        )
     }
 }
 
@@ -69,7 +85,11 @@ final class ForemanSidebarSession: ForemanSidebarSessionControlling {
         }
     }
 
-    func receiveUserMessage(_ text: String, preferredTerminalID explicitPreferredTerminalID: String?) {
+    func receiveUserMessage(
+        _ text: String,
+        preferredTerminalID explicitPreferredTerminalID: String?,
+        bypassAuthoritativeWorker: Bool
+    ) {
         let resolvedPreferredTerminalID = explicitPreferredTerminalID ?? preferredTerminalID()
         guard let agent else {
             let agent = ensureAgent(preferredTerminalID: resolvedPreferredTerminalID)
@@ -81,10 +101,11 @@ final class ForemanSidebarSession: ForemanSidebarSessionControlling {
                     captureSnapshots: captureSnapshots,
                     captureObservedContext: captureObservedContext
                 )
-                if initialGoal != text {
+                if bypassAuthoritativeWorker || initialGoal != text {
                     await agent.receiveUserMessage(
                         text,
-                        preferredTerminalID: resolvedPreferredTerminalID
+                        preferredTerminalID: resolvedPreferredTerminalID,
+                        bypassAuthoritativeWorker: bypassAuthoritativeWorker
                     )
                 }
             }
@@ -94,7 +115,8 @@ final class ForemanSidebarSession: ForemanSidebarSessionControlling {
         Task {
             await agent.receiveUserMessage(
                 text,
-                preferredTerminalID: resolvedPreferredTerminalID
+                preferredTerminalID: resolvedPreferredTerminalID,
+                bypassAuthoritativeWorker: bypassAuthoritativeWorker
             )
         }
     }
