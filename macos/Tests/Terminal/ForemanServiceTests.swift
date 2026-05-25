@@ -632,6 +632,44 @@ struct ForemanServiceTests {
     }
 
     @Test
+    func openAIGuidanceOnlyPromptDisallowsSendCommand() async throws {
+        let transport = RecordingResponsesTransport(
+            payload: """
+            {"thought":"Guide the worker without dispatching.","action":{"type":"respond","message":"Tell the worker to inspect the auth flow first."}}
+            """
+        )
+        let client = OpenAIClient(apiKey: "test-key", transport: transport)
+        let narrationContext = ForemanNarrationContext(
+            goal: "guide the worker",
+            mode: .interactive,
+            iterationCount: 1,
+            messages: [
+                ConversationMessage(role: .user, content: "Give me project-level guidance for this worker."),
+            ],
+            hiddenContext: [],
+            stepPolicy: .guidanceOnly
+        )
+
+        _ = try await client.agentStep(
+            narrationContext: narrationContext,
+            terminals: sampleSnapshots(),
+            understandings: [],
+            workerSnapshots: [:],
+            overview: .init(summary: "term-1 waiting", changedTerminalIDs: ["term-1"], primaryTerminalID: "term-1"),
+            lastOutcome: nil
+        )
+
+        let request = try #require(await transport.lastRequest)
+        #expect(request.instructions.contains("Guidance-only turn: do not use send_command."))
+        #expect(request.instructions.contains("Available action types (use exact snake_case strings): respond, ask_user, declare_complete, declare_stuck."))
+        #expect(request.instructions.contains("Available action types (use exact snake_case strings): respond, send_command") == false)
+        let prompt = request.input[0].content[0].text
+        #expect(prompt.contains("\"type\": \"respond|ask_user|declare_complete|declare_stuck\""))
+        #expect(prompt.contains("\"terminal_id\": \"string (for send_command)\"") == false)
+        #expect(prompt.contains("\"command\": \"string (for send_command)\"") == false)
+    }
+
+    @Test
     func serviceForwardsNarrationContextToClient() async throws {
         let client = RecordingForemanClient()
         let service = ForemanService(client: client)
@@ -657,6 +695,34 @@ struct ForemanServiceTests {
 
         let recorded = await client.lastNarrationContext
         #expect(recorded == narrationContext)
+    }
+
+    @Test
+    func serviceSanitizesGuidanceOnlySendCommandResponses() async throws {
+        let client = GuidanceOnlyCommandClient()
+        let service = ForemanService(client: client)
+        let narrationContext = ForemanNarrationContext(
+            goal: "guide the worker",
+            mode: .interactive,
+            iterationCount: 1,
+            messages: [
+                ConversationMessage(role: .user, content: "Give me project-level guidance for this worker."),
+            ],
+            hiddenContext: [],
+            stepPolicy: .guidanceOnly
+        )
+
+        let response = try await service.agentStep(
+            narrationContext: narrationContext,
+            terminals: sampleSnapshots(),
+            understandings: [],
+            workerSnapshots: [:],
+            overview: .init(summary: "term-1 waiting", changedTerminalIDs: ["term-1"], primaryTerminalID: "term-1"),
+            lastOutcome: nil
+        )
+
+        #expect(response.thought == "Tried to dispatch a worker reply.")
+        #expect(response.action == .respond(message: "Guide the worker to inspect the auth flow first."))
     }
 }
 
@@ -736,6 +802,42 @@ private actor RecordingForemanClient: ForemanLLMClient {
                 confidence: 1.0
             )
         )
+    }
+}
+
+private actor GuidanceOnlyCommandClient: ForemanLLMClient {
+    func summarize(snapshot: TerminalSnapshot) async throws -> TerminalSummary {
+        throw RecordingForemanClientError.unexpectedCall
+    }
+
+    func planDispatch(instruction: String, summaries: [TerminalSummary]) async throws -> DispatchPlan {
+        throw RecordingForemanClientError.unexpectedCall
+    }
+
+    func agentStep(
+        narrationContext: ForemanNarrationContext,
+        terminals: [TerminalSnapshot],
+        understandings: [TerminalUnderstanding],
+        workerSnapshots: [String: TerminalWorkerSnapshot],
+        overview: TerminalOverview,
+        lastOutcome: TerminalOutcomeReport?
+    ) async throws -> AgentStepResponse {
+        try makeStepResponse(
+            thought: "Tried to dispatch a worker reply.",
+            action: .sendCommand(
+                terminalID: "term-1",
+                command: "Inspect the auth flow first.",
+                reason: "Guide the worker to inspect the auth flow first."
+            )
+        )
+    }
+
+    func agentStep(
+        narrationContext: ForemanNarrationContext,
+        terminals: [TerminalSnapshot],
+        lastOutcome: TerminalOutcomeReport?
+    ) async throws -> AgentStepResponse {
+        throw RecordingForemanClientError.unexpectedCall
     }
 }
 

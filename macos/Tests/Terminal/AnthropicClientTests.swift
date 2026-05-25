@@ -258,6 +258,44 @@ struct AnthropicClientTests {
         #expect(prompt.contains("\"preserve-api\""))
         #expect(prompt.contains("\"worker_goal\":\"stabilize the API\""))
     }
+
+    @Test
+    func anthropicGuidanceOnlyPromptDisallowsSendCommand() async throws {
+        let transport = RecordingAnthropicTransport(
+            payload: """
+            {"thought":"Guide the worker without dispatching.","action":{"type":"respond","message":"Tell the worker to inspect the auth flow first."}}
+            """
+        )
+        let client = AnthropicClient(apiKey: "test-key", transport: transport)
+        let narrationContext = ForemanNarrationContext(
+            goal: "guide the worker",
+            mode: .interactive,
+            iterationCount: 1,
+            messages: [
+                ConversationMessage(role: .user, content: "Give me project-level guidance for this worker."),
+            ],
+            hiddenContext: [],
+            stepPolicy: .guidanceOnly
+        )
+
+        _ = try await client.agentStep(
+            narrationContext: narrationContext,
+            terminals: sampleSnapshots(),
+            understandings: [],
+            workerSnapshots: [:],
+            overview: .init(summary: "term-1 waiting", changedTerminalIDs: ["term-1"], primaryTerminalID: "term-1"),
+            lastOutcome: nil
+        )
+
+        let request = try #require(await transport.lastRequest)
+        #expect(request.system.contains("Guidance-only turn: do not use send_command."))
+        #expect(request.system.contains("Available action types (use exact snake_case strings): respond, ask_user, declare_complete, declare_stuck."))
+        #expect(request.system.contains("Available action types (use exact snake_case strings): respond, send_command") == false)
+        let prompt = request.messages[0].content
+        #expect(prompt.contains("\"type\": \"respond|ask_user|declare_complete|declare_stuck\""))
+        #expect(prompt.contains("\"terminal_id\": \"string (for send_command)\"") == false)
+        #expect(prompt.contains("\"command\": \"string (for send_command)\"") == false)
+    }
 }
 
 @MainActor

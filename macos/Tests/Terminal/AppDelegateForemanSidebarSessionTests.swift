@@ -320,6 +320,58 @@ struct AppDelegateForemanSidebarSessionTests {
         #expect(messages.filter { $0.content == "Needs direction\n\nWhat should I do here?" }.count == 1)
         #expect(await client.agentStepCallCount() == 1)
     }
+
+    @MainActor
+    @Test
+    func sidebarSessionTargetedGuidanceSanitizesCommandResponses() async throws {
+        let conversation = ForemanConversation()
+        let client = GuidanceCommandSessionClient()
+        let service = ForemanService(client: client)
+        let commandRecorder = SentCommandRecorder()
+        let fileManager = FileManager.default
+        let root = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let dbURL = root.appendingPathComponent("foreman-memory.sqlite3")
+        let observedContext = makeAuthoritativeNeedsDirectionContext([
+            "term-1": "What should I do here?",
+        ])
+        let session = ForemanSidebarSession(
+            conversation: conversation,
+            foremanService: service,
+            goalRuntime: ForemanProjectGoalRuntime(memoryStore: ForemanMemoryStore(dbPath: dbURL)),
+            preferredTerminalID: { "term-1" },
+            captureSnapshots: { observedContext.terminals },
+            captureObservedContext: { observedContext },
+            onSendCommand: { terminalID, command in
+                commandRecorder.record(terminalID: terminalID, command: command)
+                return true
+            }
+        )
+        defer { try? fileManager.removeItem(at: root) }
+
+        session.receiveUserMessage("start")
+        try await waitForAgentMessage(
+            conversation: conversation,
+            content: "Needs direction\n\nWhat should I do here?",
+            terminalID: "term-1"
+        )
+
+        session.receiveUserMessage(
+            "Give me project-level guidance for this worker.",
+            preferredTerminalID: "term-1",
+            bypassAuthoritativeWorker: true
+        )
+
+        try await waitForAgentMessage(
+            conversation: conversation,
+            content: "Guide the worker to inspect the auth flow first."
+        )
+
+        let messages = conversation.messages
+        #expect(messages.contains { $0.content == "Guide the worker to inspect the auth flow first." })
+        #expect(messages.contains { $0.content.hasPrefix("▶️ Sent:") } == false)
+        #expect(commandRecorder.commandCount() == 0)
+        #expect(await client.agentStepCallCount() == 1)
+    }
 }
 
 @MainActor
@@ -521,6 +573,126 @@ private actor GuidanceSessionClient: ForemanLLMClient {
 
     func agentStepCallCount() -> Int {
         stepCalls
+    }
+}
+
+private actor GuidanceCommandSessionClient: ForemanLLMClient {
+    private var stepCalls = 0
+
+    func summarize(snapshot: TerminalSnapshot) async throws -> TerminalSummary {
+        .init(
+            terminalID: snapshot.terminalID,
+            summary: "idle",
+            state: "idle",
+            confidence: 1.0,
+            needsUserAttention: false,
+            suggestedNextStep: ""
+        )
+    }
+
+    func planDispatch(instruction: String, summaries: [TerminalSummary]) async throws -> DispatchPlan {
+        .init(planSummary: "", drafts: [])
+    }
+
+    func agentStep(
+        narrationContext: ForemanNarrationContext,
+        terminals: [TerminalSnapshot],
+        understandings: [TerminalUnderstanding],
+        workerSnapshots: [String: TerminalWorkerSnapshot],
+        overview: TerminalOverview,
+        lastOutcome: TerminalOutcomeReport?
+    ) async throws -> AgentStepResponse {
+        stepCalls += 1
+        return AgentStepResponse(
+            thought: "Use project-level guidance.",
+            action: .sendCommand(
+                terminalID: "term-1",
+                command: "Inspect the auth flow first.",
+                reason: "Guide the worker to inspect the auth flow first."
+            )
+        )
+    }
+
+    func agentStep(
+        narrationContext: ForemanNarrationContext,
+        terminals: [TerminalSnapshot],
+        understandings: [TerminalUnderstanding],
+        overview: TerminalOverview,
+        lastOutcome: TerminalOutcomeReport?
+    ) async throws -> AgentStepResponse {
+        try await agentStep(
+            narrationContext: narrationContext,
+            terminals: terminals,
+            understandings: understandings,
+            workerSnapshots: [:],
+            overview: overview,
+            lastOutcome: lastOutcome
+        )
+    }
+
+    func agentStep(
+        narrationContext: ForemanNarrationContext,
+        terminals: [TerminalSnapshot],
+        lastOutcome: TerminalOutcomeReport?
+    ) async throws -> AgentStepResponse {
+        try await agentStep(
+            narrationContext: narrationContext,
+            terminals: terminals,
+            understandings: [],
+            workerSnapshots: [:],
+            overview: .init(summary: "", changedTerminalIDs: [], primaryTerminalID: nil),
+            lastOutcome: lastOutcome
+        )
+    }
+
+    func draftAgentReply(
+        narrationContext: ForemanNarrationContext,
+        event: AgentNeedsAttentionEvent,
+        terminals: [TerminalSnapshot],
+        understandings: [TerminalUnderstanding],
+        workerSnapshots: [String: TerminalWorkerSnapshot],
+        overview: TerminalOverview,
+        lastOutcome: TerminalOutcomeReport?
+    ) async throws -> AgentReplyDraftResponse {
+        .init(
+            thought: "No reply draft.",
+            suggestion: .noAction(reason: "unused", confidence: 1.0)
+        )
+    }
+
+    func draftAgentReply(
+        narrationContext: ForemanNarrationContext,
+        event: AgentNeedsAttentionEvent,
+        terminals: [TerminalSnapshot],
+        understandings: [TerminalUnderstanding],
+        overview: TerminalOverview,
+        lastOutcome: TerminalOutcomeReport?
+    ) async throws -> AgentReplyDraftResponse {
+        .init(
+            thought: "No reply draft.",
+            suggestion: .noAction(reason: "unused", confidence: 1.0)
+        )
+    }
+
+    func agentStepCallCount() -> Int {
+        stepCalls
+    }
+}
+
+private final class SentCommandRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var commands: [(terminalID: String, command: String)] = []
+
+    func record(terminalID: String, command: String) {
+        lock.lock()
+        commands.append((terminalID, command))
+        lock.unlock()
+    }
+
+    func commandCount() -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return commands.count
     }
 }
 

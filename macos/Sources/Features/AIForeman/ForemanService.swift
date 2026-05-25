@@ -234,7 +234,7 @@ actor ForemanService {
         overview: TerminalOverview,
         lastOutcome: TerminalOutcomeReport?
     ) async throws -> AgentStepResponse {
-        try await client.agentStep(
+        let response = try await client.agentStep(
             narrationContext: narrationContext,
             terminals: terminals,
             understandings: understandings,
@@ -242,6 +242,8 @@ actor ForemanService {
             overview: overview,
             lastOutcome: lastOutcome
         )
+
+        return sanitize(response, for: narrationContext.stepPolicy)
     }
 
     func draftAgentReply(
@@ -261,6 +263,25 @@ actor ForemanService {
             workerSnapshots: workerSnapshots,
             overview: overview,
             lastOutcome: lastOutcome
+        )
+    }
+
+    private func sanitize(
+        _ response: AgentStepResponse,
+        for stepPolicy: ForemanStepPolicy
+    ) -> AgentStepResponse {
+        guard stepPolicy == .guidanceOnly else {
+            return response
+        }
+
+        guard case .sendCommand(_, let command, let reason) = response.action else {
+            return response
+        }
+
+        let message = reason.nilIfEmpty ?? command.nilIfEmpty ?? "Give project-level guidance before sending a terminal reply."
+        return AgentStepResponse(
+            thought: response.thought,
+            action: .respond(message: message)
         )
     }
 }

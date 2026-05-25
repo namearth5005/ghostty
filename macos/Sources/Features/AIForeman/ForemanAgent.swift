@@ -559,7 +559,12 @@ actor ForemanAgent {
             let deltaTerminals = makeDeltaTerminals(from: terminals)
 
             storeObservedTerminals(observedTerminals)
-            let narrationContext = await MainActor.run { conversation.narrationContext }
+            let narrationContext = await MainActor.run {
+                let context = conversation.narrationContext
+                return guidanceTerminalID == nil
+                    ? context
+                    : context.withStepPolicy(.guidanceOnly)
+            }
 
             await MainActor.run {
                 conversation.runtimeState.updateTerminalContext(
