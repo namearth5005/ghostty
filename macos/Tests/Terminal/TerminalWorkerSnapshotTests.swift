@@ -29,6 +29,16 @@ struct TerminalWorkerSnapshotTests {
             ),
             suggestions: [
                 .init(
+                    id: "s0",
+                    kind: .reply,
+                    title: "Break the API",
+                    payload: .text("Change the API now and accept migration work."),
+                    rationale: "Fastest route to the new internals.",
+                    recommended: false,
+                    execution: .manualOnly,
+                    requestID: "req-7"
+                ),
+                .init(
                     id: "s1",
                     kind: .reply,
                     title: "Preserve the API",
@@ -72,12 +82,24 @@ struct TerminalWorkerSnapshotTests {
                     .init(id: "break_api", label: "Allow breaking change", recommended: false),
                 ]
             ),
-            suggestions: []
+            suggestions: [
+                .init(
+                    id: "s2",
+                    kind: .choice,
+                    title: "Keep the current API",
+                    payload: .option("keep_api"),
+                    rationale: "Preserves compatibility while the refactor lands.",
+                    recommended: true,
+                    execution: .manualOnly,
+                    requestID: "req-12"
+                ),
+            ]
         )
 
         let data = try JSONEncoder().encode(snapshot)
         let decoded = try JSONDecoder().decode(TerminalWorkerSnapshot.self, from: data)
 
         #expect(decoded == snapshot)
+        #expect(decoded.suggestions.first?.payload == .option("keep_api"))
     }
 }
