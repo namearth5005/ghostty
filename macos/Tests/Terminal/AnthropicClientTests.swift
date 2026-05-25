@@ -180,6 +180,7 @@ struct AnthropicClientTests {
 
         let request = try #require(await transport.lastRequest)
         #expect(request.system.contains("reply_to_agent, ask_human, or no_action"))
+        #expect(request.system.contains("provides no suggested payload, use ask_human instead of inventing one"))
         let prompt = request.messages[0].content
         #expect(prompt.contains("Current waiting-text event:"))
         #expect(prompt.contains("What would you like me to do here?"))
@@ -248,6 +249,7 @@ struct AnthropicClientTests {
 
         let request = try #require(await transport.lastRequest)
         #expect(request.system.contains("do not invent a competing suggestion"))
+        #expect(request.system.contains("If a structured worker snapshot is waiting for direction but provides no suggested payload, do not invent one"))
         let prompt = request.messages[0].content
         #expect(prompt.contains("Structured worker snapshots:"))
         #expect(prompt.contains("\"preserve-api\""))

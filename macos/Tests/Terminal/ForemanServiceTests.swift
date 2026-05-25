@@ -226,6 +226,7 @@ struct ForemanServiceTests {
         let request = try #require(await transport.lastRequest)
         let prompt = request.input[0].content[0].text
         #expect(prompt.contains("reply_to_agent|ask_human|no_action"))
+        #expect(request.instructions.contains("provides no suggested payload, use ask_human instead of inventing one"))
         #expect(prompt.contains("Current waiting-text event:"))
         #expect(prompt.contains("What would you like me to do here?"))
         #expect(response.suggestion == .askHuman(
@@ -454,6 +455,7 @@ struct ForemanServiceTests {
         let request = try #require(await transport.lastRequest)
         let prompt = request.input[0].content[0].text
         #expect(request.instructions.contains("do not invent a competing suggestion"))
+        #expect(request.instructions.contains("If a structured worker snapshot is waiting for direction but provides no suggested payload, do not invent one"))
         #expect(prompt.contains("Structured worker snapshots:"))
         #expect(prompt.contains("\"preserve-api\""))
         #expect(prompt.contains("\"worker_goal\":\"stabilize the API\""))

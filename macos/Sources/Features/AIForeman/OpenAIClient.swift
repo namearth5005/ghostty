@@ -251,6 +251,7 @@ extension OpenAIClient {
         Treat the latest user message as the active turn. Earlier goal text is session context only and may be superseded by a follow-up.
         Use structured terminal understanding as your primary context. Use raw terminal snapshots only as supporting evidence.
         If a terminal-local worker already supplied a structured next-step suggestion, do not invent a competing suggestion.
+        If a structured worker snapshot is waiting for direction but provides no suggested payload, do not invent one. Ask the user or give project-level guidance instead.
         Prefer summarizing progress, asking the user to resolve ambiguity, or giving project-level guidance.
         Treat Active turn as the current task. If Active turn is a reactive terminal event, handle that event as the current task.
         Use respond for plain conversational replies that do not require terminal actions or a blocking follow-up.
@@ -272,6 +273,7 @@ extension OpenAIClient {
     Return JSON only. Do not wrap the JSON in markdown code blocks.
     Choose exactly one suggestion type: reply_to_agent, ask_human, or no_action.
     If a structured worker snapshot already includes a matching suggested reply or choice, follow that suggestion instead of inventing a competing one.
+    If a structured worker snapshot asks for a reply or choice but provides no suggested payload, use ask_human instead of inventing one.
     Use reply_to_agent when terminal history gives enough context to send a useful raw message to the AI agent.
     Use ask_human when the AI agent needs a real goal or choice that is absent from terminal history.
     Use no_action only when the waiting text is duplicate, cosmetic, or not actionable.
