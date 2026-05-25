@@ -1871,6 +1871,53 @@ struct ForemanAgentTests {
     }
 
     @Test
+    func reactAutonomousModePausesWhenWorkerSnapshotIsPlanning() async throws {
+        let conversation = await MainActor.run {
+            let c = ForemanConversation()
+            c.mode = .autonomous
+            return c
+        }
+        let client = ScriptedForemanClient(responses: [
+            try makeStepResponse(
+                thought: "Kimi already suggested the safest option.",
+                action: AgentAction.sendCommand(
+                    terminalID: "term-1",
+                    command: "1",
+                    reason: "Choose Keep current API."
+                )
+            ),
+        ])
+        let commandRecorder = CommandRecorder()
+        let agent = makeAgent(
+            conversation: conversation,
+            client: client,
+            commandRecorder: commandRecorder
+        )
+        let observedContext = planningChoiceObservedContext()
+        let event = AgentNeedsAttentionEvent(
+            terminalID: "term-1",
+            agentIdentity: .kimi,
+            interactionState: .waitingChoice,
+            deltaText: "Which direction should I take?",
+            timestamp: Date()
+        )
+
+        await agent.react(
+            to: event,
+            observedContext: observedContext,
+            captureSnapshots: { observedContext.terminals }
+        )
+
+        try await waitForStatus(.waitingForUser, in: conversation)
+
+        let commands = await commandRecorder.recordedCommands()
+        #expect(commands.isEmpty)
+
+        let messages = await MainActor.run { conversation.messages }
+        #expect(messages.contains { $0.role == .agent && $0.content == ForemanRuntimePolicy.planModeMessage })
+    }
+
+    @Test
     func reactInteractiveModePausesForApproval() async throws {
         let conversation = await MainActor.run { ForemanConversation() }
         let client = ScriptedForemanClient(responses: [
@@ -1903,6 +1950,142 @@ struct ForemanAgentTests {
         let messages = await MainActor.run { conversation.messages }
         #expect(messages.contains { $0.role == .agent && $0.content == "Approve Kimi's edit." })
         #expect(messages.first { $0.content == "Approve Kimi's edit." }?.terminalID == "term-1")
+    }
+
+    @Test
+    func genericUserMessageDoesNotReopenCompletedGoal() async throws {
+        let runtime = ForemanProjectGoalRuntime()
+        await runtime.saveGoal("Ship the evaluator slice.", for: "/tmp/project")
+        await runtime.recordEvaluation(
+            .init(
+                progress: .completed,
+                evidenceSnapshot: "The evaluator is already complete.",
+                evaluatedAt: Date(timeIntervalSince1970: 20)
+            ),
+            for: "/tmp/project"
+        )
+        let completedGoal = try #require(await runtime.goal(for: "/tmp/project"))
+        let conversation = await MainActor.run {
+            let c = ForemanConversation()
+            c.goal = completedGoal.goalText
+            c.setActiveProjectGoal(completedGoal)
+            return c
+        }
+        let client = ScriptedForemanClient()
+        let commandRecorder = CommandRecorder()
+        let agent = makeAgent(
+            conversation: conversation,
+            client: client,
+            commandRecorder: commandRecorder,
+            goalRuntime: runtime
+        )
+
+        await agent.receiveUserMessage("continue")
+
+        let persistedGoal = await runtime.goal(for: "/tmp/project")
+        #expect(persistedGoal?.status == .completed)
+        #expect(await MainActor.run { conversation.activeProjectGoal?.status } == .completed)
+    }
+
+    @Test
+    func draftPendingAttentionUsesWorkerSuggestionBeforeLLMReplyDraft() async throws {
+        let conversation = await MainActor.run { ForemanConversation() }
+        let client = FastPathRecordingForemanClient()
+        let service = ForemanService(client: client)
+        let commandRecorder = CommandRecorder()
+        let runtime = ForemanProjectGoalRuntime()
+        let agent = ForemanAgent(
+            conversation: conversation,
+            foremanService: service,
+            goalRuntime: runtime,
+            preferredTerminalID: "term-1",
+            onSendCommand: { terminalID, command in
+                await commandRecorder.record(terminalID: terminalID, command: command)
+                return true
+            },
+            onStatusChange: { _ in },
+            onAction: { _, _ in }
+        )
+
+        let event = AgentNeedsAttentionEvent(
+            terminalID: "term-1",
+            agentIdentity: .codex,
+            interactionState: .waitingText,
+            deltaText: "Should I preserve the API?",
+            timestamp: Date(),
+            fingerprint: "codex-session-1|7|req-7"
+        )
+        let terminalSnapshot = TerminalSnapshot.makePreview(
+            terminalID: "term-1",
+            windowID: "win-1",
+            tabID: "tab-1",
+            title: "Codex",
+            cwd: "/tmp/repo",
+            isFocused: true,
+            visibleText: "Should I preserve the API?",
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessName: "codex"
+        )
+        let workerSnapshot = TerminalWorkerSnapshot(
+            schemaVersion: 1,
+            terminalID: "term-1",
+            workerSessionID: "codex-session-1",
+            revision: 7,
+            observedAt: Date(timeIntervalSince1970: 1_748_444_444),
+            ttlMilliseconds: 15_000,
+            workerGoal: "stabilize the API",
+            agent: .init(identity: .codex),
+            state: .init(
+                lifecycle: .running,
+                attention: .replyRequired,
+                summary: "Codex is waiting for a reply.",
+                details: ["Asked whether the API should stay stable."],
+                runtimeFlags: []
+            ),
+            request: .init(
+                id: "req-7",
+                kind: .reply,
+                prompt: "Should I preserve the API?",
+                options: []
+            ),
+            suggestions: [
+                .init(
+                    id: "preserve-api",
+                    kind: .reply,
+                    title: "Preserve the API",
+                    payload: .text("Preserve the current API and adapt the internals."),
+                    rationale: "Lowest migration risk.",
+                    recommended: true,
+                    execution: .manualOnly,
+                    requestID: "req-7"
+                ),
+            ]
+        )
+        let understanding = TerminalUnderstanding.preview(
+            terminalID: "term-1",
+            state: .waiting,
+            shortExplanation: "Codex is waiting for a reply.",
+            lastMeaningfulEvent: "Should I preserve the API?",
+            importantDetails: [],
+            suggestedNextActions: [],
+            agentIdentity: .codex,
+            agentInteractionState: .waitingText,
+            workerSnapshot: workerSnapshot
+        )
+
+        let attention = try await agent.draftPendingAttention(
+            for: event,
+            observedContext: ForemanObservedTerminalContext(
+                terminals: [terminalSnapshot],
+                understandings: [understanding],
+                workerSnapshots: ["term-1": workerSnapshot]
+            ),
+            captureSnapshots: { [terminalSnapshot] }
+        )
+
+        #expect(attention?.actions.first?.title == "Preserve the API")
+        #expect(await client.draftReplyCallCount == 0)
     }
 }
 
@@ -2427,6 +2610,97 @@ private func kimiObservedWaitingTextContext(
     )
 }
 
+private func planningChoiceObservedContext() -> ForemanObservedTerminalContext {
+    let snapshots = [
+        TerminalSnapshot.makePreview(
+            terminalID: "term-1",
+            windowID: "win-1",
+            tabID: "tab-1",
+            title: "Kimi Code",
+            cwd: "/tmp/project",
+            isFocused: true,
+            visibleText: "Which direction should I take?",
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessName: "kimi",
+            cursorIsAtPrompt: true,
+            usingAlternateScreen: true
+        ),
+    ]
+    let workerSnapshot = TerminalWorkerSnapshot(
+        schemaVersion: 1,
+        terminalID: "term-1",
+        workerSessionID: "kimi-session-12",
+        revision: 12,
+        observedAt: Date(timeIntervalSince1970: 1_748_333_333),
+        ttlMilliseconds: 15_000,
+        workerGoal: "compare API directions",
+        agent: .init(identity: .kimi),
+        state: .init(
+            lifecycle: .running,
+            attention: .choiceRequired,
+            summary: "Kimi is waiting in plan mode.",
+            details: ["Two API directions are available."],
+            runtimeFlags: [.planning]
+        ),
+        request: .init(
+            id: "req-12",
+            kind: .choice,
+            prompt: "Which direction should I take?",
+            options: [
+                .init(id: "1", label: "Keep current API", recommended: true),
+                .init(id: "2", label: "Allow breaking change", recommended: false),
+            ]
+        ),
+        suggestions: [
+            .init(
+                id: "keep-api",
+                kind: .choice,
+                title: "Keep current API",
+                payload: .option("1"),
+                rationale: "Lowest migration risk.",
+                recommended: true,
+                execution: .autonomousOK,
+                requestID: "req-12"
+            ),
+        ]
+    )
+    let understanding = TerminalUnderstanding.preview(
+        terminalID: "term-1",
+        state: .waiting,
+        shortExplanation: "Kimi is waiting in plan mode.",
+        lastMeaningfulEvent: "Which direction should I take?",
+        importantDetails: ["Two API directions are available."],
+        suggestedNextActions: [
+            .init(
+                title: "Keep current API",
+                command: nil,
+                reason: "Lowest migration risk.",
+                isRecommended: true
+            ),
+        ],
+        agentIdentity: .kimi,
+        agentInteractionState: .waitingChoice,
+        supportLevel: .firstClass,
+        evidence: [.init(source: .runtime, detail: "authoritative_worker_snapshot", confidence: 1.0)],
+        agentInteractionContext: .waitingChoice(
+            question: "Which direction should I take?",
+            options: ["Keep current API", "Allow breaking change"],
+            requestID: "req-12",
+            sessionID: "kimi-session-12",
+            revision: 12,
+            isPlanning: true
+        ),
+        workerSnapshot: workerSnapshot
+    )
+
+    return ForemanObservedTerminalContext(
+        terminals: snapshots,
+        understandings: [understanding],
+        workerSnapshots: ["term-1": workerSnapshot]
+    )
+}
+
 private func codexReplySnapshots(
     terminalID: String,
     title: String,
@@ -2634,6 +2908,51 @@ private func goalAwareRecommendNextStepPrompt(goal: String) -> String {
 
     Please inspect the current project state and recommend the single most useful next step toward that goal. Explain why before making changes.
     """
+}
+
+private actor FastPathRecordingForemanClient: ForemanLLMClient {
+    private(set) var draftReplyCallCount = 0
+
+    func summarize(snapshot: TerminalSnapshot) async throws -> TerminalSummary {
+        throw ScriptedForemanClientError.unexpectedCall
+    }
+
+    func planDispatch(instruction: String, summaries: [TerminalSummary]) async throws -> DispatchPlan {
+        throw ScriptedForemanClientError.unexpectedCall
+    }
+
+    func agentStep(
+        conversation: ForemanConversation,
+        terminals: [TerminalSnapshot],
+        understandings: [TerminalUnderstanding],
+        overview: TerminalOverview,
+        lastOutcome: TerminalOutcomeReport?
+    ) async throws -> AgentStepResponse {
+        throw ScriptedForemanClientError.unexpectedCall
+    }
+
+    func agentStep(
+        conversation: ForemanConversation,
+        terminals: [TerminalSnapshot],
+        lastOutcome: TerminalOutcomeReport?
+    ) async throws -> AgentStepResponse {
+        throw ScriptedForemanClientError.unexpectedCall
+    }
+
+    func draftAgentReply(
+        conversation: ForemanConversation,
+        event: AgentNeedsAttentionEvent,
+        terminals: [TerminalSnapshot],
+        understandings: [TerminalUnderstanding],
+        overview: TerminalOverview,
+        lastOutcome: TerminalOutcomeReport?
+    ) async throws -> AgentReplyDraftResponse {
+        draftReplyCallCount += 1
+        return AgentReplyDraftResponse(
+            thought: "fallback",
+            suggestion: .noAction(reason: "should not be called", confidence: 0.0)
+        )
+    }
 }
 
 private enum ScriptedForemanClientError: Error {

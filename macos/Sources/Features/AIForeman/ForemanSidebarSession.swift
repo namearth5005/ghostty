@@ -29,7 +29,7 @@ final class ForemanSidebarSession: ForemanSidebarSessionControlling {
     private let onSendCommand: @MainActor (String, String) -> Bool
 
     private var agent: ForemanAgent?
-    private var preservedMode: AgentMode = .interactive
+    private var preservedMode: AgentMode
 
     init(
         conversation: ForemanConversation,
@@ -47,6 +47,7 @@ final class ForemanSidebarSession: ForemanSidebarSessionControlling {
         self.captureSnapshots = captureSnapshots
         self.captureObservedContext = captureObservedContext
         self.onSendCommand = onSendCommand
+        self.preservedMode = conversation.mode
     }
 
     func start(goal: String, mode: AgentMode) {

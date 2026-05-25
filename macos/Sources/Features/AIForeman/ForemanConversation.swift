@@ -68,7 +68,6 @@ final class ForemanConversation: ObservableObject {
         lastOverview = nil
         lastUnderstandings = []
         hiddenContext = []
-        activeProjectGoal = nil
     }
 
     func addMessage(

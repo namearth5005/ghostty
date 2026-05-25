@@ -26,6 +26,7 @@ actor ForemanAgent {
     private let understandingEngine = TerminalUnderstandingEngine()
     private var previousSnapshotsByTerminalID: [String: TerminalSnapshot] = [:]
     private var previousUnderstandings: [TerminalUnderstanding] = []
+    private var latestObservedContext: ForemanObservedTerminalContext?
 
     init(
         conversation: ForemanConversation,
@@ -56,6 +57,7 @@ actor ForemanAgent {
         pauseState = .none
         previousSnapshotsByTerminalID = [:]
         previousUnderstandings = []
+        latestObservedContext = nil
         cancelCurrentTask()
 
         currentTask = Task {
@@ -196,6 +198,14 @@ actor ForemanAgent {
         observedContext: ForemanObservedTerminalContext? = nil,
         captureSnapshots: @escaping @MainActor () -> [TerminalSnapshot]
     ) async throws -> PendingAgentAttention? {
+        if let authoritativeAttention = draftAuthoritativePendingAttention(
+            for: event,
+            observedContext: observedContext
+        ) {
+            DebugLogger.log("[ForemanAgent] draftPendingAttention authoritative terminal=\(event.terminalID.prefix(8)) title='\(authoritativeAttention.title)'")
+            return authoritativeAttention
+        }
+
         let contextMessage = makeContextMessage(for: event)
         DebugLogger.log("[ForemanAgent] draftPendingAttention start terminal=\(event.terminalID.prefix(8)) state=\(event.interactionState) delta='\(event.deltaText.prefix(160))'")
         await MainActor.run {
@@ -306,6 +316,31 @@ actor ForemanAgent {
         }
     }
 
+    private func draftAuthoritativePendingAttention(
+        for event: AgentNeedsAttentionEvent,
+        observedContext: ForemanObservedTerminalContext?
+    ) -> PendingAgentAttention? {
+        guard let observedContext,
+              let understanding = observedContext.understandings.first(where: { $0.terminalID == event.terminalID }),
+              let workerSnapshot = observedContext.workerSnapshots[event.terminalID] else {
+            return nil
+        }
+
+        let authoritativeEvent = AgentNeedsAttentionEvent(
+            terminalID: event.terminalID,
+            agentIdentity: event.agentIdentity,
+            interactionState: event.interactionState,
+            deltaText: event.deltaText,
+            timestamp: event.timestamp,
+            fingerprint: workerSnapshot.attentionFingerprint
+        )
+
+        return PendingAgentAttentionFactory.make(
+            from: authoritativeEvent,
+            understanding: understanding
+        )
+    }
+
     func receiveOutcome(_ report: TerminalOutcomeReport) {
         lastOutcome = report
     }
@@ -331,6 +366,9 @@ actor ForemanAgent {
         await MainActor.run {
             guard conversation.goal != nil else { return false }
             guard !conversation.isRunning else { return false }
+            if conversation.activeProjectGoal?.status == .completed {
+                return false
+            }
             switch conversation.status {
             case .idle, .complete, .stuck:
                 return true
@@ -552,6 +590,32 @@ actor ForemanAgent {
             return false
         }
 
+        let activeGoalStatus = await MainActor.run { conversation.activeProjectGoal?.status }
+        let selectedSnapshot =
+            latestObservedContext?.workerSnapshots[terminalID] ??
+            previousUnderstandings.first(where: { $0.terminalID == terminalID })?.workerSnapshot
+        let resolvedTarget = selectedSnapshot.map {
+            ForemanSidebarTarget.terminalReply(
+                terminalID: terminalID,
+                fingerprint: $0.attentionFingerprint
+            )
+        } ?? .project(projectID: nil)
+
+        switch runtimePolicy.continuationDecision(
+            mode: mode,
+            activeGoalStatus: activeGoalStatus,
+            resolvedTarget: resolvedTarget,
+            selectedSnapshot: selectedSnapshot
+        ) {
+        case .allowAutonomousDispatch:
+            break
+        case .requireUser(let message), .blockCompletedGoal(let message):
+            return try await handleAskUser(
+                question: message,
+                terminalID: messageTerminalID ?? terminalID
+            )
+        }
+
         // Autonomous mode: execute directly
         await setStatus(.executing)
         let sent = await onSendCommand(terminalID, command)
@@ -768,6 +832,7 @@ actor ForemanAgent {
     }
 
     private func storeObservedTerminals(_ observedTerminals: ForemanObservedTerminalContext) {
+        latestObservedContext = observedTerminals
         previousSnapshotsByTerminalID = Dictionary(
             uniqueKeysWithValues: observedTerminals.terminals.map { ($0.terminalID, $0) }
         )
