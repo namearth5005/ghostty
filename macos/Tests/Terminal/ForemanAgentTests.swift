@@ -1259,7 +1259,7 @@ struct ForemanAgentTests {
     }
 
     @Test
-    func draftPendingAttentionUsesSuppliedObservedContext() async throws {
+    func draftPendingAttentionUsesSuppliedObservedContextToEscalateFirstClassRepliesWithoutDrafting() async throws {
         let snapshots = kimiInputChromeSnapshots(
             terminalID: "kimi-observed",
             title: "Kimi Code",
@@ -1291,14 +1291,17 @@ struct ForemanAgentTests {
             )
         )
 
-        #expect(result.signature?.title == "Suggested reply")
+        #expect(result.signature?.title == "Needs direction")
+        #expect(result.signature?.description == "What should I do here?")
+        #expect(result.signature?.actions.isEmpty == true)
         #expect(result.understanding?.interactionContext == .waitingText(question: "What should I do here?"))
         #expect(result.understanding?.lastMeaningfulEvent == "What should I do here?")
         #expect(result.understanding?.shortExplanation == "Kimi is waiting for your response: What should I do here?")
+        #expect(result.replyDraftCallCount == 0)
     }
 
     @Test
-    func draftPendingAttentionWithObservedContextKeepsLaunchPathParity() async throws {
+    func draftPendingAttentionWithObservedContextKeepsFirstClassEscalationParity() async throws {
         let cases: [(terminalID: String, title: String, isFocused: Bool)] = [
             ("kimi-observed-existing", "shell", true),
             ("kimi-observed-new-tab", "nambouchara@Nams-MacBook-Pro:~", false),
@@ -1307,6 +1310,7 @@ struct ForemanAgentTests {
 
         var signatures: [PendingAttentionSignature] = []
         var forwardedUnderstandings: [UnderstandingSignature] = []
+        var draftCallCounts: [Int] = []
 
         for entry in cases {
             let snapshots = kimiInputChromeSnapshots(
@@ -1342,15 +1346,17 @@ struct ForemanAgentTests {
 
             signatures.append(try #require(result.signature))
             forwardedUnderstandings.append(try #require(result.understanding))
+            draftCallCounts.append(result.replyDraftCallCount)
         }
 
         #expect(signatures.dropFirst().allSatisfy { $0 == signatures.first })
         #expect(forwardedUnderstandings.dropFirst().allSatisfy { $0 == forwardedUnderstandings.first })
+        #expect(draftCallCounts.allSatisfy { $0 == 0 })
         #expect(forwardedUnderstandings.first?.interactionContext == .waitingText(question: "What should I do here?"))
         #expect(forwardedUnderstandings.first?.lastMeaningfulEvent == "What should I do here?")
-        #expect(signatures.first?.title == "Suggested reply")
-        #expect(signatures.first?.description == "The current wire-aware question is specific enough to answer directly.")
-        #expect(signatures.first?.actions.first?.title == "Summarize the repository first.")
+        #expect(signatures.first?.title == "Needs direction")
+        #expect(signatures.first?.description == "What should I do here?")
+        #expect(signatures.first?.actions.isEmpty == true)
     }
 
     @Test
@@ -2977,12 +2983,14 @@ private func draftPendingAttentionCase(
 
     let commands = await commandRecorder.recordedCommands()
     #expect(commands.isEmpty)
-    let understandings = await client.recordedUnderstandings()
+    let recordedUnderstandings = await client.recordedUnderstandings()
+    let runtimeUnderstandings = await MainActor.run { conversation.runtimeState.lastUnderstandings }
     let replyDraftCallCount = await client.replyDraftCallCount()
+    let understanding = recordedUnderstandings.first?.first ?? runtimeUnderstandings.first
 
     return (
         signature: pendingAttentionSignature(attention),
-        understanding: understandingSignature(understandings.first?.first),
+        understanding: understandingSignature(understanding),
         replyDraftCallCount: replyDraftCallCount
     )
 }

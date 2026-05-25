@@ -265,6 +265,13 @@ actor ForemanAgent {
             DebugLogger.log("[ForemanAgent] draftPendingAttention authoritative terminal=\(event.terminalID.prefix(8)) title='\(authoritativeAttention.title)'")
             return authoritativeAttention
         }
+        if let firstClassAttention = draftFirstClassPendingAttentionWithoutSnapshot(
+            for: event,
+            observedTerminals: observedTerminals
+        ) {
+            DebugLogger.log("[ForemanAgent] draftPendingAttention first-class-no-snapshot terminal=\(event.terminalID.prefix(8)) title='\(firstClassAttention.title)'")
+            return firstClassAttention
+        }
 
         let response = try await foremanService.draftAgentReply(
             narrationContext: narrationContext,
@@ -358,6 +365,46 @@ actor ForemanAgent {
             from: authoritativeEvent,
             understanding: understanding
         )
+    }
+
+    private func draftFirstClassPendingAttentionWithoutSnapshot(
+        for event: AgentNeedsAttentionEvent,
+        observedTerminals: ForemanObservedTerminalContext
+    ) -> PendingAgentAttention? {
+        guard observedTerminals.workerSnapshots[event.terminalID] == nil,
+              let understanding = observedTerminals.understandings.first(where: { $0.terminalID == event.terminalID }),
+              understanding.supportLevel == .firstClass else {
+            return nil
+        }
+
+        if let structuredAttention = PendingAgentAttentionFactory.make(
+            from: event,
+            understanding: understanding
+        ) {
+            return structuredAttention
+        }
+
+        switch understanding.agentInteractionState {
+        case .waitingText, .error:
+            let eventText = event.deltaText.trimmingCharacters(in: .whitespacesAndNewlines)
+            let description = understanding.agentInteractionContext.descriptionString ??
+                (eventText.isEmpty ? nil : eventText) ??
+                "The agent is waiting for your direction."
+
+            return PendingAgentAttention(
+                terminalID: event.terminalID,
+                agentIdentity: understanding.agentIdentity,
+                interactionState: understanding.agentInteractionState,
+                fingerprint: event.fingerprint,
+                title: "Needs direction",
+                description: description,
+                detail: understanding.agentInteractionContext.detailString,
+                actions: []
+            )
+
+        case .waitingApproval, .waitingChoice, .unknown, .running, .completed:
+            return nil
+        }
     }
 
     func receiveOutcome(_ report: TerminalOutcomeReport) {
