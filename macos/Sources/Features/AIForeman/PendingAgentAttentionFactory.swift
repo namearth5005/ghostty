@@ -68,11 +68,11 @@ enum PendingAgentAttentionFactory {
         let requestSuggestions = snapshot.suggestions.filter { suggestion in
             suggestion.requestID == nil || suggestion.requestID == request.id
         }
+        let requestActions = requestSuggestions.prefix(4).compactMap { makePendingAction(from: $0) }
 
         switch request.kind {
         case .reply:
-            let actions = requestSuggestions.prefix(4).map { makePendingAction(from: $0) }
-            if actions.isEmpty {
+            if requestActions.isEmpty {
                 return PendingAgentAttention(
                     terminalID: snapshot.terminalID,
                     agentIdentity: snapshot.agent.identity,
@@ -93,13 +93,13 @@ enum PendingAgentAttentionFactory {
                 title: "Suggested reply",
                 description: request.prompt,
                 detail: snapshot.state.details.joined(separator: "\n").nilIfEmpty,
-                actions: actions
+                actions: requestActions
             )
 
         case .choice:
-            let actions = requestSuggestions.isEmpty
+            let actions = requestActions.isEmpty
                 ? fallbackChoiceActions(for: request)
-                : requestSuggestions.prefix(4).map { makePendingAction(from: $0) }
+                : requestActions
             guard !actions.isEmpty else {
                 return nil
             }
@@ -116,9 +116,9 @@ enum PendingAgentAttentionFactory {
             )
 
         case .approval:
-            let actions = requestSuggestions.isEmpty
+            let actions = requestActions.isEmpty
                 ? approvalActions(for: event, understanding: understanding)
-                : requestSuggestions.prefix(4).map { makePendingAction(from: $0) }
+                : requestActions
             guard !actions.isEmpty else {
                 return nil
             }
@@ -289,21 +289,27 @@ enum PendingAgentAttentionFactory {
 
     private static func makePendingAction(
         from suggestion: TerminalWorkerSnapshot.Suggestion
-    ) -> PendingAgentAction {
+    ) -> PendingAgentAction? {
+        guard let payload = payloadText(from: suggestion.payload) else {
+            return nil
+        }
+
         PendingAgentAction(
             id: suggestion.id,
             title: suggestion.title,
-            payload: payloadText(from: suggestion.payload),
+            payload: payload,
             style: actionStyle(for: suggestion)
         )
     }
 
     private static func payloadText(
         from payload: TerminalWorkerSnapshot.Payload
-    ) -> String {
+    ) -> String? {
         switch payload {
-        case .text(let value), .command(let value), .option(let value), .approval(let value), .foremanPrompt(let value):
+        case .text(let value), .command(let value), .option(let value), .approval(let value):
             return value
+        case .foremanPrompt:
+            return nil
         }
     }
 
