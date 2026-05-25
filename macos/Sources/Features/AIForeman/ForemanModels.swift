@@ -362,6 +362,11 @@ struct AgentStepResponse: Codable, Equatable, Sendable {
         case action
     }
 
+    init(thought: String, action: AgentAction) {
+        self.thought = thought
+        self.action = action
+    }
+
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         self.thought = try container.decode(String.self, forKey: .thought)

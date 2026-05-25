@@ -15,6 +15,7 @@ actor ForemanAgent {
     private let onStatusChange: @MainActor (AgentStatus) -> Void
     private let onAction: @MainActor (AgentAction, String) -> Void
     private let goalEvaluator = ForemanProjectGoalEvaluator()
+    private let runtimePolicy = ForemanRuntimePolicy()
 
     private var currentTask: Task<Void, Never>?
     private let observedContextBuilder = ForemanObservedContextBuilder()
@@ -985,6 +986,7 @@ actor ForemanAgent {
     private func reopenCompletedGoalAfterUserMessageIfNeeded(_ text: String) async {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
+        guard runtimePolicy.shouldReopenCompletedGoal(for: trimmed) else { return }
 
         let completedGoal = await MainActor.run { conversation.activeProjectGoal }
         guard let completedGoal, completedGoal.status == .completed else { return }

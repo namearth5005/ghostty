@@ -29,6 +29,7 @@ final class ForemanSidebarSession: ForemanSidebarSessionControlling {
     private let onSendCommand: @MainActor (String, String) -> Bool
 
     private var agent: ForemanAgent?
+    private var preservedMode: AgentMode = .interactive
 
     init(
         conversation: ForemanConversation,
@@ -49,6 +50,7 @@ final class ForemanSidebarSession: ForemanSidebarSessionControlling {
     }
 
     func start(goal: String, mode: AgentMode) {
+        preservedMode = mode
         let agent = ensureAgent(preferredTerminalID: preferredTerminalID())
         Task {
             await agent.start(
@@ -67,7 +69,7 @@ final class ForemanSidebarSession: ForemanSidebarSessionControlling {
             Task {
                 await agent.start(
                     goal: initialGoal,
-                    mode: .interactive,
+                    mode: preservedMode,
                     captureSnapshots: captureSnapshots,
                     captureObservedContext: captureObservedContext
                 )
