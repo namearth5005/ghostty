@@ -315,6 +315,63 @@ struct PendingAgentAttentionFactoryTests {
     }
 
     @Test
+    func authoritativeCommandWithoutSuggestionEscalatesNeedsDirection() throws {
+        let snapshot = TerminalWorkerSnapshot(
+            schemaVersion: 1,
+            terminalID: "term-1",
+            workerSessionID: "codex-session-42",
+            revision: 52,
+            observedAt: Date(timeIntervalSince1970: 1_748_222_230),
+            ttlMilliseconds: 15_000,
+            workerGoal: "prepare the migration",
+            agent: .init(identity: .codex),
+            state: .init(
+                lifecycle: .running,
+                attention: .replyRequired,
+                summary: "Codex is waiting for command guidance.",
+                details: ["The worker needs direction before running the migration."],
+                runtimeFlags: []
+            ),
+            request: .init(
+                id: "req-52",
+                kind: .command,
+                prompt: "Should I run the migration now?",
+                options: []
+            ),
+            suggestions: []
+        )
+        let understanding = TerminalUnderstanding.preview(
+            terminalID: "term-1",
+            state: .waiting,
+            shortExplanation: "Codex is waiting for command guidance.",
+            lastMeaningfulEvent: "Should I run the migration now?",
+            importantDetails: [],
+            suggestedNextActions: [],
+            agentIdentity: .codex,
+            agentInteractionState: .waitingText,
+            workerSnapshot: snapshot
+        )
+        let event = AgentNeedsAttentionEvent(
+            terminalID: "term-1",
+            agentIdentity: .codex,
+            interactionState: .waitingText,
+            deltaText: "Should I run the migration now?",
+            timestamp: Date(),
+            fingerprint: snapshot.attentionFingerprint
+        )
+
+        let attention = try #require(
+            PendingAgentAttentionFactory.make(from: event, understanding: understanding)
+        )
+
+        #expect(attention.title == "Needs direction")
+        #expect(attention.description == "Should I run the migration now?")
+        #expect(attention.detail == "The worker needs direction before running the migration.")
+        #expect(attention.actions.isEmpty)
+        #expect(attention.fingerprint == snapshot.attentionFingerprint)
+    }
+
+    @Test
     func authoritativeReplyIgnoresSuggestionsFromOlderRequests() throws {
         let snapshot = TerminalWorkerSnapshot(
             schemaVersion: 1,

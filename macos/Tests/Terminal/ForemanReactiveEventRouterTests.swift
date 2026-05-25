@@ -265,6 +265,64 @@ struct ForemanReactiveEventRouterTests {
     }
 
     @Test
+    func authoritativeCommandWithoutPayloadShowsPendingAttention() {
+        let snapshot = TerminalWorkerSnapshot(
+            schemaVersion: 1,
+            terminalID: "term-1",
+            workerSessionID: "codex-session-52",
+            revision: 52,
+            observedAt: Date(timeIntervalSince1970: 1_748_222_230),
+            ttlMilliseconds: 15_000,
+            workerGoal: "prepare the migration",
+            agent: .init(identity: .codex),
+            state: .init(
+                lifecycle: .running,
+                attention: .replyRequired,
+                summary: "Codex is waiting for command guidance.",
+                details: ["The worker needs direction before running the migration."],
+                runtimeFlags: []
+            ),
+            request: .init(
+                id: "req-52",
+                kind: .command,
+                prompt: "Should I run the migration now?",
+                options: []
+            ),
+            suggestions: []
+        )
+        let understanding = TerminalUnderstanding.preview(
+            terminalID: "term-1",
+            state: .waiting,
+            shortExplanation: "Codex is waiting for command guidance.",
+            lastMeaningfulEvent: "Should I run the migration now?",
+            importantDetails: [],
+            suggestedNextActions: [],
+            agentIdentity: .codex,
+            agentInteractionState: .waitingText,
+            workerSnapshot: snapshot
+        )
+        let event = AgentNeedsAttentionEvent(
+            terminalID: "term-1",
+            agentIdentity: .codex,
+            interactionState: .waitingText,
+            deltaText: "Should I run the migration now?",
+            timestamp: Date(timeIntervalSince1970: 1),
+            fingerprint: snapshot.attentionFingerprint
+        )
+
+        let decision = ForemanReactiveEventRouter.initialDecision(
+            for: event,
+            understanding: understanding
+        )
+
+        #expect(signature(decision).kind == .showPendingAttention)
+        #expect(signature(decision).title == "Needs direction")
+        #expect(signature(decision).description == "Should I run the migration now?")
+        #expect(signature(decision).detail == "The worker needs direction before running the migration.")
+        #expect(signature(decision).actions.isEmpty)
+    }
+
+    @Test
     func authoritativeAutonomousSuggestionDispatchesWorkerPayload() {
         let snapshot = TerminalWorkerSnapshot(
             schemaVersion: 1,

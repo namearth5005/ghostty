@@ -78,7 +78,7 @@ enum PendingAgentAttentionFactory {
                     fingerprint: event.fingerprint,
                     title: "Needs direction",
                     description: request.prompt,
-                    detail: replyDetail(for: snapshot, request: request),
+                    detail: requestDetail(for: snapshot, request: request),
                     actions: []
                 )
             }
@@ -90,7 +90,7 @@ enum PendingAgentAttentionFactory {
                 fingerprint: event.fingerprint,
                 title: "Suggested reply",
                 description: request.prompt,
-                detail: snapshot.state.details.joined(separator: "\n").nilIfEmpty,
+                detail: requestDetail(for: snapshot, request: request),
                 actions: requestActions
             )
 
@@ -136,7 +136,29 @@ enum PendingAgentAttentionFactory {
             )
 
         case .command:
-            return nil
+            if requestActions.isEmpty {
+                return PendingAgentAttention(
+                    terminalID: snapshot.terminalID,
+                    agentIdentity: snapshot.agent.identity,
+                    interactionState: understanding.agentInteractionState,
+                    fingerprint: event.fingerprint,
+                    title: "Needs direction",
+                    description: request.prompt,
+                    detail: requestDetail(for: snapshot, request: request),
+                    actions: []
+                )
+            }
+
+            return PendingAgentAttention(
+                terminalID: snapshot.terminalID,
+                agentIdentity: snapshot.agent.identity,
+                interactionState: understanding.agentInteractionState,
+                fingerprint: event.fingerprint,
+                title: "Suggested command",
+                description: request.prompt,
+                detail: requestDetail(for: snapshot, request: request),
+                actions: requestActions
+            )
         }
     }
 
@@ -322,7 +344,7 @@ enum PendingAgentAttentionFactory {
         return suggestion.recommended ? .primary : .secondary
     }
 
-    private static func replyDetail(
+    private static func requestDetail(
         for snapshot: TerminalWorkerSnapshot,
         request: TerminalWorkerSnapshot.Request
     ) -> String? {

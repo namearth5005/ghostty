@@ -327,6 +327,38 @@ struct ForemanAgentTests {
     }
 
     @Test
+    func loopPausesAuthoritativeCommandRequestWithoutPayloadDuringStart() async throws {
+        let observedContext = authoritativeCommandObservedContextWithoutPayload()
+        let result = try await startWithObservedContextPauseCase(
+            snapshots: observedContext.terminals,
+            observedContext: observedContext,
+            response: try makeStepResponse(
+                thought: "Foreman should not plan this authoritative worker command request.",
+                action: .respond(message: "This should never be used.")
+            )
+        )
+
+        let understanding = try #require(result.understanding)
+        #expect(result.stepCallCount == 0)
+        #expect(result.status == .waitingForUser)
+        #expect(
+            result.agentMessage ==
+            "Needs direction\n\nShould I run the migration now?\n\nThe worker needs direction before running the migration."
+        )
+        #expect(
+            understanding.interactionContext ==
+            .waitingText(
+                question: "Should I run the migration now?",
+                requestID: "req-52",
+                sessionID: "codex-session-52",
+                revision: 52,
+                isPlanning: false
+            )
+        )
+        #expect(understanding.lastMeaningfulEvent == "Should I run the migration now?")
+    }
+
+    @Test
     func startRequiresExplicitTargetWhenMultipleAuthoritativeWorkersNeedAttention() async throws {
         let observedContext = ambiguousAuthoritativeWorkerObservedContext()
         let result = try await startWithObservedContextPauseCase(
@@ -3385,6 +3417,75 @@ private func kimiObservedWaitingTextContext(
             ),
         ],
         workerSnapshots: [:]
+    )
+}
+
+private func authoritativeCommandObservedContextWithoutPayload() -> ForemanObservedTerminalContext {
+    let snapshots = [
+        TerminalSnapshot.makePreview(
+            terminalID: "term-1",
+            windowID: "win-1",
+            tabID: "tab-1",
+            title: "Codex",
+            cwd: "/tmp/project",
+            isFocused: true,
+            visibleText: "Should I run the migration now?",
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessName: "codex",
+            cursorIsAtPrompt: true,
+            usingAlternateScreen: true
+        ),
+    ]
+    let workerSnapshot = TerminalWorkerSnapshot(
+        schemaVersion: 1,
+        terminalID: "term-1",
+        workerSessionID: "codex-session-52",
+        revision: 52,
+        observedAt: Date(timeIntervalSince1970: 1_748_222_230),
+        ttlMilliseconds: 15_000,
+        workerGoal: "prepare the migration",
+        agent: .init(identity: .codex),
+        state: .init(
+            lifecycle: .running,
+            attention: .replyRequired,
+            summary: "Codex is waiting for command guidance.",
+            details: ["The worker needs direction before running the migration."],
+            runtimeFlags: []
+        ),
+        request: .init(
+            id: "req-52",
+            kind: .command,
+            prompt: "Should I run the migration now?",
+            options: []
+        ),
+        suggestions: []
+    )
+    let understanding = TerminalUnderstanding.preview(
+        terminalID: "term-1",
+        state: .waiting,
+        shortExplanation: "Codex is waiting for command guidance.",
+        lastMeaningfulEvent: "Should I run the migration now?",
+        importantDetails: ["The worker needs direction before running the migration."],
+        suggestedNextActions: [],
+        agentIdentity: .codex,
+        agentInteractionState: .waitingText,
+        supportLevel: .firstClass,
+        evidence: [.init(source: .runtime, detail: "authoritative_worker_snapshot", confidence: 1.0)],
+        agentInteractionContext: .waitingText(
+            question: "Should I run the migration now?",
+            requestID: "req-52",
+            sessionID: "codex-session-52",
+            revision: 52,
+            isPlanning: false
+        ),
+        workerSnapshot: workerSnapshot
+    )
+
+    return ForemanObservedTerminalContext(
+        terminals: snapshots,
+        understandings: [understanding],
+        workerSnapshots: ["term-1": workerSnapshot]
     )
 }
 
