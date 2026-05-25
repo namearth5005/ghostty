@@ -93,7 +93,61 @@ struct TerminalWorkerSnapshotTests {
         )
 
         #expect(snapshot.recommendedSuggestion?.id == "s1")
+        #expect(snapshot.preferredSuggestion?.id == "s1")
         #expect(snapshot.attentionFingerprint == "codex-session-1|7|req-7")
+    }
+
+    @Test
+    func preferredSuggestionIgnoresRecommendedEntriesFromOlderRequests() throws {
+        let snapshot = TerminalWorkerSnapshot(
+            schemaVersion: 1,
+            terminalID: "term-3",
+            workerSessionID: "codex-session-3",
+            revision: 9,
+            observedAt: Date(timeIntervalSince1970: 1_748_333_333),
+            ttlMilliseconds: 15_000,
+            workerGoal: "respond to the latest worker question",
+            agent: .init(identity: .codex),
+            state: .init(
+                lifecycle: .blocked,
+                attention: .replyRequired,
+                summary: "Codex is waiting for a reply.",
+                details: ["A previous suggestion should no longer apply."],
+                runtimeFlags: []
+            ),
+            request: .init(
+                id: "req-current",
+                kind: .reply,
+                prompt: "What should I do next?",
+                options: []
+            ),
+            suggestions: [
+                .init(
+                    id: "stale",
+                    kind: .reply,
+                    title: "Follow the old plan",
+                    payload: .text("Use the previous migration path."),
+                    rationale: "This belongs to the old request.",
+                    recommended: true,
+                    execution: .manualOnly,
+                    requestID: "req-old"
+                ),
+                .init(
+                    id: "current",
+                    kind: .reply,
+                    title: "Answer the current question",
+                    payload: .text("Use the current migration path."),
+                    rationale: "Matches the live request.",
+                    recommended: false,
+                    execution: .manualOnly,
+                    requestID: "req-current"
+                ),
+            ]
+        )
+
+        #expect(snapshot.requestSuggestions.map(\.id) == ["current"])
+        #expect(snapshot.recommendedSuggestion == nil)
+        #expect(snapshot.preferredSuggestion?.id == "current")
     }
 
     @Test

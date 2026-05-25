@@ -978,7 +978,7 @@ actor ForemanAgent {
         for candidateTerminalID in candidateTerminalIDs {
             guard let workerSnapshot = observedTerminals.workerSnapshots[candidateTerminalID],
                   hasAuthoritativeRuntimeIdentity(workerSnapshot),
-                  let suggestion = workerSnapshot.recommendedSuggestion ?? workerSnapshot.suggestions.first,
+                  let suggestion = workerSnapshot.preferredSuggestion,
                   let payload = payloadString(for: suggestion.payload) else {
                 continue
             }

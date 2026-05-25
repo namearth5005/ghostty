@@ -361,8 +361,7 @@ final class ForemanSidebarStore: ObservableObject {
     }
 
     var selectedTerminalSuggestedWorkerAction: TerminalWorkerSnapshot.Suggestion? {
-        selectedTerminalWorkerSnapshot?.recommendedSuggestion
-            ?? selectedTerminalWorkerSnapshot?.suggestions.first
+        selectedTerminalWorkerSnapshot?.preferredSuggestion
     }
 
     var selectedTerminalSuggestionProvenance: String? {

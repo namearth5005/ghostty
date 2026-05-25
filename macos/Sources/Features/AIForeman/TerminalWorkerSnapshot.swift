@@ -258,8 +258,22 @@ struct TerminalWorkerSnapshot: Codable, Equatable, Sendable {
         }
     }
 
+    var requestSuggestions: [Suggestion] {
+        guard let request else {
+            return suggestions
+        }
+
+        return suggestions.filter { suggestion in
+            suggestion.requestID == nil || suggestion.requestID == request.id
+        }
+    }
+
     var recommendedSuggestion: Suggestion? {
-        suggestions.first(where: \.recommended)
+        requestSuggestions.first(where: \.recommended)
+    }
+
+    var preferredSuggestion: Suggestion? {
+        recommendedSuggestion ?? requestSuggestions.first
     }
 
     var attentionFingerprint: String {
