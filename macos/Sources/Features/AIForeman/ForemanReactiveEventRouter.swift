@@ -51,13 +51,11 @@ enum ForemanReactiveEventRouter {
         runtimePolicy: ForemanRuntimePolicy
     ) -> InitialDecision? {
         guard let snapshot = understanding?.workerSnapshot,
-              let request = snapshot.request else {
+              snapshot.request != nil else {
             return nil
         }
 
-        let requestSuggestions = snapshot.suggestions.filter { suggestion in
-            suggestion.requestID == nil || suggestion.requestID == request.id
-        }
+        let requestSuggestions = snapshot.requestSuggestions
         guard let suggestion = requestSuggestions.first(where: \.recommended) ?? requestSuggestions.first else {
             return nil
         }

@@ -334,6 +334,75 @@ struct ForemanReactiveEventRouterTests {
     }
 
     @Test
+    func staleAuthoritativeSuggestionDoesNotAutodispatchAfterRequestChanges() {
+        let snapshot = TerminalWorkerSnapshot(
+            schemaVersion: 1,
+            terminalID: "term-1",
+            workerSessionID: "codex-session-101",
+            revision: 101,
+            observedAt: Date(timeIntervalSince1970: 1_748_222_223),
+            ttlMilliseconds: 15_000,
+            workerGoal: "stabilize the API",
+            agent: .init(identity: .codex),
+            state: .init(
+                lifecycle: .running,
+                attention: .replyRequired,
+                summary: "Codex is waiting for a reply.",
+                details: ["The old recommendation should not be auto-dispatched."],
+                runtimeFlags: []
+            ),
+            request: .init(
+                id: "req-current",
+                kind: .reply,
+                prompt: "Should I preserve the API?",
+                options: []
+            ),
+            suggestions: [
+                .init(
+                    id: "stale",
+                    kind: .reply,
+                    title: "Follow the old plan",
+                    payload: .text("Use the previous migration path."),
+                    rationale: "This suggestion belongs to the old request.",
+                    recommended: true,
+                    execution: .autonomousOK,
+                    requestID: "req-old"
+                ),
+            ]
+        )
+        let understanding = TerminalUnderstanding.preview(
+            terminalID: "term-1",
+            state: .waiting,
+            shortExplanation: "Codex is waiting for a reply.",
+            lastMeaningfulEvent: "Should I preserve the API?",
+            importantDetails: [],
+            suggestedNextActions: [],
+            agentIdentity: .codex,
+            agentInteractionState: .waitingText,
+            workerSnapshot: snapshot
+        )
+        let event = AgentNeedsAttentionEvent(
+            terminalID: "term-1",
+            agentIdentity: .codex,
+            interactionState: .waitingText,
+            deltaText: "Should I preserve the API?",
+            timestamp: Date(timeIntervalSince1970: 1),
+            fingerprint: snapshot.attentionFingerprint
+        )
+
+        let decision = ForemanReactiveEventRouter.initialDecision(
+            for: event,
+            understanding: understanding,
+            mode: .autonomous
+        )
+
+        let decisionSignature = signature(decision)
+        #expect(decisionSignature.kind == .showPendingAttention)
+        #expect(decisionSignature.title == "Needs direction")
+        #expect(decisionSignature.dispatchPayload == nil)
+    }
+
+    @Test
     func completedGoalPreventsAuthoritativeAutonomousDispatch() {
         let snapshot = TerminalWorkerSnapshot(
             schemaVersion: 1,

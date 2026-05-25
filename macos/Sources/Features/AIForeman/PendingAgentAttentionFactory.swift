@@ -65,9 +65,7 @@ enum PendingAgentAttentionFactory {
             return nil
         }
 
-        let requestSuggestions = snapshot.suggestions.filter { suggestion in
-            suggestion.requestID == nil || suggestion.requestID == request.id
-        }
+        let requestSuggestions = snapshot.requestSuggestions
         let requestActions = requestSuggestions.prefix(4).compactMap { makePendingAction(from: $0) }
 
         switch request.kind {

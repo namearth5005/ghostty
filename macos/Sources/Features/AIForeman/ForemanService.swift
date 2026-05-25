@@ -161,9 +161,7 @@ extension ForemanLLMClient {
             return nil
         }
 
-        let requestSuggestions = snapshot.suggestions.filter { suggestion in
-            suggestion.requestID == nil || suggestion.requestID == request.id
-        }
+        let requestSuggestions = snapshot.requestSuggestions
 
         if let suggestion = requestSuggestions.first(where: \.recommended) ?? requestSuggestions.first {
             let payload = payloadString(for: suggestion.payload)

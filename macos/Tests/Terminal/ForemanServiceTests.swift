@@ -497,6 +497,77 @@ struct ForemanServiceTests {
     }
 
     @Test
+    func serviceGenericReplyDraftFallbackIgnoresSuggestionsFromOlderRequests() async throws {
+        let client = LegacyAgentStepOnlyClient()
+        let service = ForemanService(client: client)
+        let conversation = await MainActor.run { ForemanConversation() }
+        let event = AgentNeedsAttentionEvent(
+            terminalID: "term-1",
+            agentIdentity: .codex,
+            interactionState: .waitingText,
+            deltaText: "Should I preserve the API?",
+            timestamp: Date(timeIntervalSince1970: 1)
+        )
+        let workerSnapshot = TerminalWorkerSnapshot(
+            schemaVersion: 1,
+            terminalID: "term-1",
+            workerSessionID: "codex-session-7",
+            revision: 8,
+            observedAt: Date(timeIntervalSince1970: 1_748_444_445),
+            ttlMilliseconds: 15_000,
+            workerGoal: "stabilize the API",
+            agent: .init(identity: .codex),
+            state: .init(
+                lifecycle: .running,
+                attention: .replyRequired,
+                summary: "Codex is waiting for a reply.",
+                details: ["The old recommendation should not be used."],
+                runtimeFlags: []
+            ),
+            request: .init(
+                id: "req-current",
+                kind: .reply,
+                prompt: "Should I preserve the API?",
+                options: []
+            ),
+            suggestions: [
+                .init(
+                    id: "stale",
+                    kind: .reply,
+                    title: "Follow the old plan",
+                    payload: .text("Use the previous migration path."),
+                    rationale: "This suggestion belongs to the old request.",
+                    recommended: true,
+                    execution: .manualOnly,
+                    requestID: "req-old"
+                ),
+            ]
+        )
+        let narrationContext = await MainActor.run { conversation.narrationContext }
+
+        let response = try await service.draftAgentReply(
+            narrationContext: narrationContext,
+            event: event,
+            terminals: sampleSnapshots(),
+            understandings: [],
+            workerSnapshots: ["term-1": workerSnapshot],
+            overview: .init(summary: "term-1 waiting", changedTerminalIDs: ["term-1"], primaryTerminalID: "term-1"),
+            lastOutcome: nil
+        )
+
+        #expect(await client.genericStepCallCount() == 0)
+        #expect(response.thought == "Codex is waiting for a reply.")
+        #expect(
+            response.suggestion == .askHuman(
+                terminalID: "term-1",
+                message: "Should I preserve the API?",
+                reason: "The structured worker snapshot needs direction and did not provide a suggested reply.",
+                confidence: 1.0
+            )
+        )
+    }
+
+    @Test
     func openAIPromptIncludesWorkerSnapshotsAndNarratorConstraint() async throws {
         let transport = RecordingResponsesTransport(
             payload: """

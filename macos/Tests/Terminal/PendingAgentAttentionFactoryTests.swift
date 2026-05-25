@@ -315,6 +315,73 @@ struct PendingAgentAttentionFactoryTests {
     }
 
     @Test
+    func authoritativeReplyIgnoresSuggestionsFromOlderRequests() throws {
+        let snapshot = TerminalWorkerSnapshot(
+            schemaVersion: 1,
+            terminalID: "term-1",
+            workerSessionID: "codex-session-42",
+            revision: 43,
+            observedAt: Date(timeIntervalSince1970: 1_748_222_224),
+            ttlMilliseconds: 15_000,
+            workerGoal: "stabilize the API",
+            agent: .init(identity: .codex),
+            state: .init(
+                lifecycle: .running,
+                attention: .replyRequired,
+                summary: "Codex is waiting for your reply.",
+                details: ["A stale recommendation should not be used."],
+                runtimeFlags: []
+            ),
+            request: .init(
+                id: "req-current",
+                kind: .reply,
+                prompt: "Should I preserve the API?",
+                options: []
+            ),
+            suggestions: [
+                .init(
+                    id: "stale",
+                    kind: .reply,
+                    title: "Follow the old plan",
+                    payload: .text("Use the previous migration path."),
+                    rationale: "This suggestion belongs to the old request.",
+                    recommended: true,
+                    execution: .manualOnly,
+                    requestID: "req-old"
+                ),
+            ]
+        )
+        let understanding = TerminalUnderstanding.preview(
+            terminalID: "term-1",
+            state: .waiting,
+            shortExplanation: "Codex is waiting for your reply.",
+            lastMeaningfulEvent: "Should I preserve the API?",
+            importantDetails: [],
+            suggestedNextActions: [],
+            agentIdentity: .codex,
+            agentInteractionState: .waitingText,
+            workerSnapshot: snapshot
+        )
+        let event = AgentNeedsAttentionEvent(
+            terminalID: "term-1",
+            agentIdentity: .codex,
+            interactionState: .waitingText,
+            deltaText: "Should I preserve the API?",
+            timestamp: Date(),
+            fingerprint: snapshot.attentionFingerprint
+        )
+
+        let attention = try #require(
+            PendingAgentAttentionFactory.make(from: event, understanding: understanding)
+        )
+
+        #expect(attention.title == "Needs direction")
+        #expect(attention.description == "Should I preserve the API?")
+        #expect(attention.detail == "A stale recommendation should not be used.")
+        #expect(attention.actions.isEmpty)
+    }
+
+    @Test
     func authoritativeReplyForemanPromptSuggestionEscalatesNeedsDirection() throws {
         let snapshot = TerminalWorkerSnapshot(
             schemaVersion: 1,
