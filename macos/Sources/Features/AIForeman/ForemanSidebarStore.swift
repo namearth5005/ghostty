@@ -973,14 +973,15 @@ final class ForemanSidebarStore: ObservableObject {
         if let workerSnapshot = understanding.workerSnapshot,
            !workerSnapshot.requestSuggestions.isEmpty {
             return workerSnapshot.requestSuggestions.map { suggestion in
+                let command = snapshotCommand(for: suggestion.payload)
                 let authoritativePayload = snapshotReplyPayload(for: suggestion.payload)
                 let guidancePrompt = snapshotGuidancePrompt(for: suggestion.payload)
                 return TerminalSuggestedAction(
                     title: suggestion.title,
-                    command: snapshotCommand(for: suggestion.payload),
+                    command: command,
                     reason: suggestion.rationale,
                     isRecommended: suggestion.recommended,
-                    authoritativeFingerprint: authoritativePayload == nil && guidancePrompt == nil ? nil : workerSnapshot.attentionFingerprint,
+                    authoritativeFingerprint: command == nil && authoritativePayload == nil && guidancePrompt == nil ? nil : workerSnapshot.attentionFingerprint,
                     authoritativePayload: authoritativePayload,
                     guidancePrompt: guidancePrompt
                 )

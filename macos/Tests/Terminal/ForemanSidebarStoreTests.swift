@@ -1092,6 +1092,71 @@ struct ForemanSidebarStoreTests {
 
     @MainActor
     @Test
+    func applySnapshotsPreservesFingerprintForAuthoritativeCommandSuggestions() {
+        let store = ForemanSidebarStore(selectedTerminalID: "term-1")
+        let snapshot = makeWorkerTerminalSnapshot(terminalID: "term-1", title: "Codex")
+        let workerSnapshot = makeWorkerSnapshot(
+            terminalID: "term-1",
+            workerSessionID: "codex-session-42",
+            revision: 42,
+            workerGoal: "inspect the TODO list",
+            identity: .codex,
+            attention: .replyRequired,
+            summary: "Codex is waiting for a reply.",
+            details: ["Asked whether to inspect the TODO list."],
+            request: .init(
+                id: "req-42",
+                kind: .reply,
+                prompt: "Should I inspect the TODO list?",
+                options: []
+            ),
+            suggestions: [
+                .init(
+                    id: "inspect-todo",
+                    kind: .command,
+                    title: "Inspect the TODO list",
+                    payload: .command("rg -n TODO ."),
+                    rationale: "Quickest way to find the remaining work items.",
+                    recommended: true,
+                    execution: .manualOnly,
+                    requestID: "req-42"
+                ),
+            ]
+        )
+        let understanding = makeWorkerUnderstanding(
+            terminalID: "term-1",
+            shortExplanation: "Codex is waiting for a reply.",
+            lastMeaningfulEvent: "Should I inspect the TODO list?",
+            agentIdentity: .codex,
+            interactionState: .waitingText,
+            workerSnapshot: workerSnapshot
+        )
+
+        store.applySnapshots([snapshot], understandingsByTerminalID: ["term-1": understanding])
+
+        let action = try! #require(store.terminalRows.first?.suggestedActions.first)
+        #expect(action.command == "rg -n TODO .")
+        #expect(action.authoritativeFingerprint == workerSnapshot.attentionFingerprint)
+
+        var dispatchedIntent: ForemanSidebarIntent?
+        store.onDispatchSidebarIntent = { intent in
+            dispatchedIntent = intent
+        }
+
+        store.executeSuggestion(terminalID: "term-1", action: action)
+
+        #expect(
+            dispatchedIntent ==
+            .sendPendingAttentionAction(
+                terminalID: "term-1",
+                fingerprint: workerSnapshot.attentionFingerprint,
+                payload: "rg -n TODO ."
+            )
+        )
+    }
+
+    @MainActor
+    @Test
     func selectedWorkerSuggestionIgnoresRecommendedEntriesFromOlderRequests() {
         let store = ForemanSidebarStore(selectedTerminalID: "term-1")
         let snapshot = makeWorkerTerminalSnapshot(terminalID: "term-1", title: "Codex")
