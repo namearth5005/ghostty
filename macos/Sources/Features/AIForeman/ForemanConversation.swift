@@ -58,7 +58,7 @@ final class ForemanConversation: ObservableObject {
         self.status = .observing
         self.iterationCount = 0
         self.errorMessage = nil
-        runtimeState.resetObservedTerminalContext()
+        runtimeState.resetForNewConversation()
         self.hiddenContext = []
         addMessage(role: .user, content: goal)
     }
@@ -108,13 +108,49 @@ final class ForemanConversation: ObservableObject {
         iterationCount += 1
     }
 
+    func updateTerminalContext(
+        overview: TerminalOverview,
+        understandings: [TerminalUnderstanding],
+        workerSnapshots: [String: TerminalWorkerSnapshot] = [:]
+    ) {
+        runtimeState.updateTerminalContext(
+            overview: overview,
+            understandings: understandings,
+            workerSnapshots: workerSnapshots
+        )
+    }
+
+    func setActiveProjectGoal(_ goal: ForemanProjectGoal?) {
+        runtimeState.setActiveProjectGoal(goal)
+    }
+
     var hasReachedMaxIterations: Bool {
         iterationCount >= maxIterations
     }
 
+    var lastOverview: TerminalOverview? {
+        runtimeState.lastOverview
+    }
+
+    var lastUnderstandings: [TerminalUnderstanding] {
+        runtimeState.lastUnderstandings
+    }
+
+    var lastWorkerSnapshots: [String: TerminalWorkerSnapshot] {
+        runtimeState.lastWorkerSnapshots
+    }
+
+    var activeProjectGoal: ForemanProjectGoal? {
+        runtimeState.activeProjectGoal
+    }
+
+    var effectiveGoal: String? {
+        runtimeState.effectiveGoal(fallbackGoal: goal)
+    }
+
     var narrationContext: ForemanNarrationContext {
         ForemanNarrationContext(
-            goal: runtimeState.effectiveGoal(fallbackGoal: goal),
+            goal: effectiveGoal,
             mode: mode,
             iterationCount: iterationCount,
             messages: messages,
