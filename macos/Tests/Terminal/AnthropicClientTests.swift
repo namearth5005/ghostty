@@ -108,6 +108,9 @@ struct AnthropicClientTests {
 
         let request = try #require(await transport.lastRequest)
         #expect(request.system.contains("Use structured terminal understanding as your primary context"))
+        #expect(request.system.contains("Do not infer or replace the user's broader goal from terminal history alone."))
+        #expect(request.system.contains("If a structured worker snapshot does not include a sendable payload, ask the user or give project-level guidance instead of drafting a worker-local reply."))
+        #expect(request.system.contains("infer the user's goal") == false)
         let prompt = request.messages[0].content
         #expect(prompt.contains("Structured terminal overview:"))
         #expect(prompt.contains("Hidden reactive context:"))

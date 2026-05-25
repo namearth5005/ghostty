@@ -262,9 +262,9 @@ extension OpenAIClient {
         When an AI agent is waiting for text input (waitingText), send_command sends a raw message to the agent — NOT a shell command.
         Do NOT wrap agent messages in printf, echo, or any shell syntax. Send the raw text only.
         Do NOT echo text you see in the terminal output back to the agent.
-        When an AI agent is waiting for text input, read the full terminal output to understand the conversation history and infer the user's goal.
-        If the context is clear from the terminal history, generate an appropriate response directly.
-        Only ask the user if the terminal history does not provide enough context to determine what to send next.
+        When an AI agent is waiting for text input, read the terminal history only to understand the worker's immediate request, current options, and what has already been said.
+        Do not infer or replace the user's broader goal from terminal history alone.
+        If a structured worker snapshot does not include a sendable payload, ask the user or give project-level guidance instead of drafting a worker-local reply.
         """
     }
 

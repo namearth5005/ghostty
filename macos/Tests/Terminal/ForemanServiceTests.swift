@@ -121,6 +121,9 @@ struct ForemanServiceTests {
         )
 
         let request = try #require(await transport.lastRequest)
+        #expect(request.instructions.contains("Do not infer or replace the user's broader goal from terminal history alone."))
+        #expect(request.instructions.contains("If a structured worker snapshot does not include a sendable payload, ask the user or give project-level guidance instead of drafting a worker-local reply."))
+        #expect(request.instructions.contains("infer the user's goal") == false)
         let prompt = request.input[0].content[0].text
         #expect(prompt.contains("Structured terminal overview:"))
         #expect(prompt.contains("term-1 failed because `hfind` is not installed."))
