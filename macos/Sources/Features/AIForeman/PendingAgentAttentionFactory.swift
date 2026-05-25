@@ -72,8 +72,17 @@ enum PendingAgentAttentionFactory {
         switch request.kind {
         case .reply:
             let actions = requestSuggestions.prefix(4).map { makePendingAction(from: $0) }
-            guard !actions.isEmpty else {
-                return nil
+            if actions.isEmpty {
+                return PendingAgentAttention(
+                    terminalID: snapshot.terminalID,
+                    agentIdentity: snapshot.agent.identity,
+                    interactionState: understanding.agentInteractionState,
+                    fingerprint: event.fingerprint,
+                    title: "Needs direction",
+                    description: request.prompt,
+                    detail: replyDetail(for: snapshot, request: request),
+                    actions: []
+                )
             }
 
             return PendingAgentAttention(
@@ -307,6 +316,16 @@ enum PendingAgentAttentionFactory {
         }
 
         return suggestion.recommended ? .primary : .secondary
+    }
+
+    private static func replyDetail(
+        for snapshot: TerminalWorkerSnapshot,
+        request: TerminalWorkerSnapshot.Request
+    ) -> String? {
+        snapshot.state.details
+            .filter { $0 != request.prompt }
+            .joined(separator: "\n")
+            .nilIfEmpty
     }
 }
 
