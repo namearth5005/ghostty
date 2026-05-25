@@ -607,7 +607,8 @@ actor ForemanAgent {
             mode: mode,
             activeGoalStatus: activeGoalStatus,
             resolvedTarget: resolvedTarget,
-            selectedSnapshot: selectedSnapshot
+            selectedSnapshot: selectedSnapshot,
+            proposedPayload: command
         ) {
         case .allowAutonomousDispatch:
             break

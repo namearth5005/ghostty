@@ -2007,7 +2007,10 @@ struct ForemanAgentTests {
             client: client,
             commandRecorder: commandRecorder
         )
-        let observedContext = planningChoiceObservedContext()
+        let observedContext = choiceObservedContext(
+            isPlanning: true,
+            execution: .autonomousOK
+        )
         let event = AgentNeedsAttentionEvent(
             terminalID: "term-1",
             agentIdentity: .kimi,
@@ -2029,6 +2032,106 @@ struct ForemanAgentTests {
 
         let messages = await MainActor.run { conversation.messages }
         #expect(messages.contains { $0.role == .agent && $0.content == ForemanRuntimePolicy.planModeMessage })
+    }
+
+    @Test
+    func reactAutonomousModePausesWhenWorkerSuggestionNeedsManualReview() async throws {
+        let conversation = await MainActor.run {
+            let c = ForemanConversation()
+            c.mode = .autonomous
+            return c
+        }
+        let client = ScriptedForemanClient(responses: [
+            try makeStepResponse(
+                thought: "Kimi suggested the safest option.",
+                action: AgentAction.sendCommand(
+                    terminalID: "term-1",
+                    command: "1",
+                    reason: "Choose Keep current API."
+                )
+            ),
+        ])
+        let commandRecorder = CommandRecorder()
+        let agent = makeAgent(
+            conversation: conversation,
+            client: client,
+            commandRecorder: commandRecorder
+        )
+        let observedContext = choiceObservedContext(
+            isPlanning: false,
+            execution: .manualOnly
+        )
+        let event = AgentNeedsAttentionEvent(
+            terminalID: "term-1",
+            agentIdentity: .kimi,
+            interactionState: .waitingChoice,
+            deltaText: "Which direction should I take?",
+            timestamp: Date()
+        )
+
+        await agent.react(
+            to: event,
+            observedContext: observedContext,
+            captureSnapshots: { observedContext.terminals }
+        )
+
+        try await waitForStatus(.waitingForUser, in: conversation)
+
+        let commands = await commandRecorder.recordedCommands()
+        #expect(commands.isEmpty)
+
+        let messages = await MainActor.run { conversation.messages }
+        #expect(messages.contains { $0.role == .agent && $0.content == ForemanRuntimePolicy.manualReviewMessage })
+    }
+
+    @Test
+    func reactAutonomousModeExecutesWorkerAuthorizedSuggestion() async throws {
+        let conversation = await MainActor.run {
+            let c = ForemanConversation()
+            c.mode = .autonomous
+            return c
+        }
+        let client = ScriptedForemanClient(responses: [
+            try makeStepResponse(
+                thought: "Kimi already suggested the safest option.",
+                action: AgentAction.sendCommand(
+                    terminalID: "term-1",
+                    command: "1",
+                    reason: "Choose Keep current API."
+                )
+            ),
+        ])
+        let commandRecorder = CommandRecorder()
+        let agent = makeAgent(
+            conversation: conversation,
+            client: client,
+            commandRecorder: commandRecorder
+        )
+        let observedContext = choiceObservedContext(
+            isPlanning: false,
+            execution: .autonomousOK
+        )
+        let event = AgentNeedsAttentionEvent(
+            terminalID: "term-1",
+            agentIdentity: .kimi,
+            interactionState: .waitingChoice,
+            deltaText: "Which direction should I take?",
+            timestamp: Date()
+        )
+
+        await agent.react(
+            to: event,
+            observedContext: observedContext,
+            captureSnapshots: { observedContext.terminals }
+        )
+
+        try await waitFor {
+            let commands = await commandRecorder.recordedCommands()
+            return commands.contains { $0.terminalID == "term-1" && $0.command == "1" }
+        }
+
+        let messages = await MainActor.run { conversation.messages }
+        #expect(messages.contains { $0.role == .agent && $0.content == "▶️ Sent: 1" })
     }
 
     @Test
@@ -2724,7 +2827,10 @@ private func kimiObservedWaitingTextContext(
     )
 }
 
-private func planningChoiceObservedContext() -> ForemanObservedTerminalContext {
+private func choiceObservedContext(
+    isPlanning: Bool,
+    execution: TerminalWorkerSuggestionExecution
+) -> ForemanObservedTerminalContext {
     let snapshots = [
         TerminalSnapshot.makePreview(
             terminalID: "term-1",
@@ -2753,9 +2859,9 @@ private func planningChoiceObservedContext() -> ForemanObservedTerminalContext {
         state: .init(
             lifecycle: .running,
             attention: .choiceRequired,
-            summary: "Kimi is waiting in plan mode.",
+            summary: isPlanning ? "Kimi is waiting in plan mode." : "Kimi suggested the safest option.",
             details: ["Two API directions are available."],
-            runtimeFlags: [.planning]
+            runtimeFlags: isPlanning ? [.planning] : []
         ),
         request: .init(
             id: "req-12",
@@ -2774,7 +2880,7 @@ private func planningChoiceObservedContext() -> ForemanObservedTerminalContext {
                 payload: .option("1"),
                 rationale: "Lowest migration risk.",
                 recommended: true,
-                execution: .autonomousOK,
+                execution: execution,
                 requestID: "req-12"
             ),
         ]
@@ -2782,7 +2888,7 @@ private func planningChoiceObservedContext() -> ForemanObservedTerminalContext {
     let understanding = TerminalUnderstanding.preview(
         terminalID: "term-1",
         state: .waiting,
-        shortExplanation: "Kimi is waiting in plan mode.",
+        shortExplanation: isPlanning ? "Kimi is waiting in plan mode." : "Kimi suggested the safest option.",
         lastMeaningfulEvent: "Which direction should I take?",
         importantDetails: ["Two API directions are available."],
         suggestedNextActions: [
@@ -2803,7 +2909,7 @@ private func planningChoiceObservedContext() -> ForemanObservedTerminalContext {
             requestID: "req-12",
             sessionID: "kimi-session-12",
             revision: 12,
-            isPlanning: true
+            isPlanning: isPlanning
         ),
         workerSnapshot: workerSnapshot
     )

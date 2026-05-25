@@ -3,10 +3,11 @@ import Testing
 @testable import Ghostty
 
 struct ForemanRuntimePolicyTests {
-    @Test
-    func planningSnapshotBlocksAutonomousContinuation() {
-        let policy = ForemanRuntimePolicy()
-        let snapshot = TerminalWorkerSnapshot(
+    private func makeChoiceSnapshot(
+        execution: TerminalWorkerSuggestionExecution = .autonomousOK,
+        isPlanning: Bool = false
+    ) -> TerminalWorkerSnapshot {
+        TerminalWorkerSnapshot(
             schemaVersion: 1,
             terminalID: "term-1",
             workerSessionID: "kimi-session-12",
@@ -18,9 +19,9 @@ struct ForemanRuntimePolicyTests {
             state: .init(
                 lifecycle: .running,
                 attention: .choiceRequired,
-                summary: "Kimi is waiting in plan mode.",
+                summary: isPlanning ? "Kimi is waiting in plan mode." : "Kimi suggested a next step.",
                 details: ["Two API directions are available."],
-                runtimeFlags: [.planning]
+                runtimeFlags: isPlanning ? [.planning] : []
             ),
             request: .init(
                 id: "req-12",
@@ -39,20 +40,75 @@ struct ForemanRuntimePolicyTests {
                     payload: .option("1"),
                     rationale: "Lowest migration risk.",
                     recommended: true,
-                    execution: .autonomousOK,
+                    execution: execution,
                     requestID: "req-12"
                 ),
             ]
         )
+    }
+
+    @Test
+    func planningSnapshotBlocksAutonomousContinuation() {
+        let policy = ForemanRuntimePolicy()
+        let snapshot = makeChoiceSnapshot(isPlanning: true)
 
         let decision = policy.continuationDecision(
             mode: .autonomous,
             activeGoalStatus: .active,
             resolvedTarget: .terminalReply(terminalID: "term-1", fingerprint: snapshot.attentionFingerprint),
-            selectedSnapshot: snapshot
+            selectedSnapshot: snapshot,
+            proposedPayload: "1"
         )
 
         #expect(decision == .requireUser(ForemanRuntimePolicy.planModeMessage))
+    }
+
+    @Test
+    func matchingAutonomousWorkerSuggestionAllowsAutonomousContinuation() {
+        let policy = ForemanRuntimePolicy()
+        let snapshot = makeChoiceSnapshot(execution: .autonomousOK)
+
+        let decision = policy.continuationDecision(
+            mode: .autonomous,
+            activeGoalStatus: .active,
+            resolvedTarget: .terminalReply(terminalID: "term-1", fingerprint: snapshot.attentionFingerprint),
+            selectedSnapshot: snapshot,
+            proposedPayload: "1"
+        )
+
+        #expect(decision == .allowAutonomousDispatch)
+    }
+
+    @Test
+    func manualOnlyWorkerSuggestionRequiresUserReview() {
+        let policy = ForemanRuntimePolicy()
+        let snapshot = makeChoiceSnapshot(execution: .manualOnly)
+
+        let decision = policy.continuationDecision(
+            mode: .autonomous,
+            activeGoalStatus: .active,
+            resolvedTarget: .terminalReply(terminalID: "term-1", fingerprint: snapshot.attentionFingerprint),
+            selectedSnapshot: snapshot,
+            proposedPayload: "1"
+        )
+
+        #expect(decision == .requireUser(ForemanRuntimePolicy.manualReviewMessage))
+    }
+
+    @Test
+    func competingPayloadRequiresUserReviewWhenWorkerAlreadySuggestedSomething() {
+        let policy = ForemanRuntimePolicy()
+        let snapshot = makeChoiceSnapshot(execution: .autonomousOK)
+
+        let decision = policy.continuationDecision(
+            mode: .autonomous,
+            activeGoalStatus: .active,
+            resolvedTarget: .terminalReply(terminalID: "term-1", fingerprint: snapshot.attentionFingerprint),
+            selectedSnapshot: snapshot,
+            proposedPayload: "2"
+        )
+
+        #expect(decision == .requireUser(ForemanRuntimePolicy.unsuggestedActionMessage))
     }
 
     @Test
