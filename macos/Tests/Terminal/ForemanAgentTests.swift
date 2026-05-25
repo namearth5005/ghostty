@@ -2556,6 +2556,65 @@ struct ForemanAgentTests {
     }
 
     @Test
+    func userMessageResumesLoopFromActiveProjectGoalWhenConversationGoalIsNil() async throws {
+        let conversation = await MainActor.run { ForemanConversation() }
+        let client = ScriptedForemanClient(responses: [
+            try makeStepResponse(
+                thought: "Initial observation complete.",
+                action: .respond(message: "Initial pass complete.")
+            ),
+            try makeStepResponse(
+                thought: "Saved project goal is still active.",
+                action: .respond(message: "Resumed from the saved goal.")
+            ),
+        ])
+        let commandRecorder = CommandRecorder()
+        let agent = makeAgent(
+            conversation: conversation,
+            client: client,
+            commandRecorder: commandRecorder
+        )
+
+        await agent.start(
+            goal: "Initial goal",
+            mode: .interactive,
+            captureSnapshots: sampleSnapshots
+        )
+
+        try await waitFor {
+            await MainActor.run {
+                conversation.messages.contains { $0.content == "Initial pass complete." } &&
+                conversation.isRunning == false
+            }
+        }
+
+        await MainActor.run {
+            conversation.goal = nil
+            conversation.runtimeState.setActiveProjectGoal(
+                ForemanProjectGoal(
+                    projectID: "/tmp/project",
+                    objective: "Resume from the saved goal."
+                )
+            )
+        }
+
+        await agent.receiveUserMessage("continue")
+
+        try await waitFor {
+            await MainActor.run {
+                conversation.messages.contains { $0.content == "Resumed from the saved goal." } &&
+                conversation.isRunning == false
+            }
+        }
+
+        let stepCalls = await client.agentStepCallCount()
+        let messages = await MainActor.run { conversation.messages }
+
+        #expect(stepCalls == 2)
+        #expect(messages.contains { $0.role == .agent && $0.content == "Resumed from the saved goal." })
+    }
+
+    @Test
     func draftPendingAttentionUsesWorkerSuggestionBeforeLLMReplyDraft() async throws {
         let conversation = await MainActor.run { ForemanConversation() }
         let client = FastPathRecordingForemanClient()

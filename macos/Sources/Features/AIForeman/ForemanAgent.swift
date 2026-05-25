@@ -377,7 +377,7 @@ actor ForemanAgent {
 
     private func shouldResumeAfterUserMessage() async -> Bool {
         await MainActor.run {
-            guard conversation.goal != nil else { return false }
+            guard conversation.effectiveGoal != nil else { return false }
             guard !conversation.isRunning else { return false }
             if conversation.runtimeState.activeProjectGoal?.status == .completed {
                 return false

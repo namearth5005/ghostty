@@ -379,7 +379,7 @@ struct ForemanChatView: View {
 
     private var inputPhase: ConversationUIPhase {
         ConversationUIPhase.resolve(
-            goal: store.conversation.goal,
+            goal: store.conversation.effectiveGoal,
             isRunning: store.conversation.isRunning,
             status: store.conversation.status,
             lastAction: store.visibleConversationMessages.last?.action,
