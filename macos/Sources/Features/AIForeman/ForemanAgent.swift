@@ -68,7 +68,7 @@ actor ForemanAgent {
             let initialSnapshots = await captureSnapshots()
             if let projectGoal = await saveProjectGoal(goal, from: initialSnapshots) {
                 await MainActor.run {
-                    conversation.setActiveProjectGoal(projectGoal)
+                    conversation.runtimeState.setActiveProjectGoal(projectGoal)
                 }
             }
 
@@ -219,7 +219,7 @@ actor ForemanAgent {
         storeObservedTerminals(observedTerminals)
 
         await MainActor.run {
-            conversation.updateTerminalContext(
+            conversation.runtimeState.updateTerminalContext(
                 overview: overview,
                 understandings: understandings,
                 workerSnapshots: observedTerminals.workerSnapshots
@@ -366,7 +366,7 @@ actor ForemanAgent {
         await MainActor.run {
             guard conversation.goal != nil else { return false }
             guard !conversation.isRunning else { return false }
-            if conversation.activeProjectGoal?.status == .completed {
+            if conversation.runtimeState.activeProjectGoal?.status == .completed {
                 return false
             }
             switch conversation.status {
@@ -430,7 +430,7 @@ actor ForemanAgent {
             storeObservedTerminals(observedTerminals)
 
             await MainActor.run {
-                conversation.updateTerminalContext(
+                conversation.runtimeState.updateTerminalContext(
                     overview: overview,
                     understandings: understandings,
                     workerSnapshots: observedTerminals.workerSnapshots
@@ -592,7 +592,7 @@ actor ForemanAgent {
             return false
         }
 
-        let activeGoalStatus = await MainActor.run { conversation.activeProjectGoal?.status }
+        let activeGoalStatus = await MainActor.run { conversation.runtimeState.activeProjectGoal?.status }
         let selectedSnapshot =
             latestObservedContext?.workerSnapshots[terminalID] ??
             previousUnderstandings.first(where: { $0.terminalID == terminalID })?.workerSnapshot
@@ -728,7 +728,7 @@ actor ForemanAgent {
         storeObservedTerminals(observedTerminals)
 
         await MainActor.run {
-            conversation.updateTerminalContext(
+            conversation.runtimeState.updateTerminalContext(
                 overview: overview,
                 understandings: understandings,
                 workerSnapshots: observedTerminals.workerSnapshots
@@ -888,7 +888,7 @@ actor ForemanAgent {
         )
 
         await MainActor.run {
-            conversation.setActiveProjectGoal(projectGoal)
+            conversation.runtimeState.setActiveProjectGoal(projectGoal)
         }
 
         return projectGoal
@@ -949,7 +949,7 @@ actor ForemanAgent {
         // agent outcome or the user reopens/replaces the goal.
         if goal.status.suppressesRecommendations, recommendationOutcome == nil {
             await MainActor.run {
-                conversation.setActiveProjectGoal(goal)
+                conversation.runtimeState.setActiveProjectGoal(goal)
             }
             return goal
         }
@@ -968,7 +968,7 @@ actor ForemanAgent {
 
         let refreshedGoal = await goalRuntime.goal(for: goal.projectID)
         await MainActor.run {
-            conversation.setActiveProjectGoal(refreshedGoal)
+            conversation.runtimeState.setActiveProjectGoal(refreshedGoal)
         }
 
         return refreshedGoal
@@ -1025,7 +1025,7 @@ actor ForemanAgent {
         guard !trimmed.isEmpty else { return }
         guard runtimePolicy.shouldReopenCompletedGoal(for: trimmed) else { return }
 
-        let completedGoal = await MainActor.run { conversation.activeProjectGoal }
+        let completedGoal = await MainActor.run { conversation.runtimeState.activeProjectGoal }
         guard let completedGoal, completedGoal.status == .completed else { return }
 
         await goalRuntime.setStatus(
@@ -1035,7 +1035,7 @@ actor ForemanAgent {
         )
         let reopenedGoal = await goalRuntime.goal(for: completedGoal.projectID)
         await MainActor.run {
-            conversation.setActiveProjectGoal(reopenedGoal)
+            conversation.runtimeState.setActiveProjectGoal(reopenedGoal)
         }
     }
 }

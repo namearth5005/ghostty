@@ -96,6 +96,73 @@ struct ForemanSidebarStoreTests {
 
     @MainActor
     @Test
+    func runtimeStateDrivesRollupAndCompletedGoalSuppression() {
+        let runtimeState = ForemanRuntimeState()
+        let conversation = ForemanConversation(runtimeState: runtimeState)
+        let store = ForemanSidebarStore(
+            conversation: conversation,
+            runtimeState: runtimeState
+        )
+        let snapshots = [
+            TerminalSnapshot.makePreview(
+                terminalID: "term-1",
+                windowID: "win-1",
+                tabID: "tab-1",
+                title: "tests",
+                cwd: "/tmp/project",
+                isFocused: true,
+                visibleText: "Tests failed.",
+                recentScrollbackLines: [],
+                lastInputPreview: "xcodebuild test"
+            ),
+        ]
+        let understanding = TerminalUnderstanding.preview(
+            terminalID: "term-1",
+            state: .failed,
+            shortExplanation: "Tests failed.",
+            lastMeaningfulEvent: "Tests failed.",
+            importantDetails: ["Tests failed."],
+            suggestedNextActions: [
+                .init(
+                    title: "Rerun tests",
+                    command: "xcodebuild test",
+                    reason: "Verify the fix.",
+                    isRecommended: true
+                ),
+            ]
+        )
+        let overview = TerminalOverview(
+            summary: "term-1 failed and needs a rerun.",
+            changedTerminalIDs: ["term-1"],
+            primaryTerminalID: "term-1"
+        )
+
+        store.applySnapshots(
+            snapshots,
+            understandingsByTerminalID: ["term-1": understanding]
+        )
+
+        #expect(store.runtimeState === runtimeState)
+        #expect(store.terminalRows[0].suggestedActions.map(\.title) == ["Rerun tests"])
+
+        runtimeState.updateTerminalContext(
+            overview: overview,
+            understandings: [understanding]
+        )
+        runtimeState.setActiveProjectGoal(
+            ForemanProjectGoal(
+                projectID: "/tmp/project",
+                objective: "Ship this cleanly.",
+                status: .completed
+            )
+        )
+
+        #expect(store.rollupStatusText == "term-1 failed and needs a rerun.")
+        #expect(store.terminalRows[0].suggestedActions.isEmpty)
+    }
+
+    @MainActor
+    @Test
     func visibleConversationMessagesKeepsGlobalMessagesAndSelectedTerminalThread() {
         let conversation = ForemanConversation()
         conversation.addMessage(role: .user, content: "Coordinate these terminals.")

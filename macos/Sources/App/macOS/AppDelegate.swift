@@ -1664,7 +1664,7 @@ extension AppDelegate {
             await MainActor.run {
                 store.conversation.errorMessage = nil
                 store.conversation.goal = updatedGoal?.goalText
-                store.conversation.setActiveProjectGoal(updatedGoal)
+                store.runtimeState.setActiveProjectGoal(updatedGoal)
                 store.conversation.addMessage(role: .agent, content: message)
                 if updatedGoal == nil {
                     store.conversation.setStatus(.idle)
@@ -2000,7 +2000,7 @@ extension AppDelegate {
 
     @MainActor
     private func resolveForemanProjectID(for store: ForemanSidebarStore) -> String? {
-        if let projectID = store.conversation.activeProjectGoal?.projectID {
+        if let projectID = store.runtimeState.activeProjectGoal?.projectID {
             return projectID
         }
 
@@ -2078,7 +2078,7 @@ extension AppDelegate {
     ) {
         store.conversation.errorMessage = nil
         store.conversation.goal = updatedGoal?.goalText
-        store.conversation.setActiveProjectGoal(updatedGoal)
+        store.runtimeState.setActiveProjectGoal(updatedGoal)
         store.conversation.addMessage(role: .agent, content: message)
         if updatedGoal == nil {
             store.conversation.setStatus(.idle)

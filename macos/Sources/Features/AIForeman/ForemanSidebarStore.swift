@@ -165,6 +165,7 @@ final class ForemanSidebarStore: ObservableObject {
 
     // Agentic conversation state
     @Published var conversation: ForemanConversation
+    @Published var runtimeState: ForemanRuntimeState
     @Published var chatInput: String = ""
     @Published var isAgentRunning: Bool = false
     @Published var agentReadiness: [(AgentIdentity, AgentReadinessState)] = []
@@ -195,8 +196,13 @@ final class ForemanSidebarStore: ObservableObject {
         isGeneratingDrafts: Bool = false,
         activityLog: [DispatchActivityLogEntry] = [],
         lastActionMessage: String? = nil,
-        conversation: ForemanConversation? = nil
+        conversation: ForemanConversation? = nil,
+        runtimeState: ForemanRuntimeState? = nil
     ) {
+        let resolvedRuntimeState = runtimeState ?? conversation?.runtimeState ?? ForemanRuntimeState()
+        let resolvedConversation = conversation ?? ForemanConversation(runtimeState: resolvedRuntimeState)
+        assert(conversation == nil || runtimeState == nil || conversation!.runtimeState === resolvedRuntimeState)
+
         self.terminalRows = terminalRows
         self.dispatchQueue = dispatchQueue
         self.userInstruction = userInstruction
@@ -208,13 +214,17 @@ final class ForemanSidebarStore: ObservableObject {
         self.isGeneratingDrafts = isGeneratingDrafts
         self.activityLog = activityLog
         self.lastActionMessage = lastActionMessage
-        self.conversation = conversation ?? ForemanConversation()
+        self.conversation = resolvedConversation
+        self.runtimeState = resolvedRuntimeState
 
         // Forward conversation changes so SwiftUI re-renders the sidebar
         self.conversation.objectWillChange.sink { [weak self] _ in
             self?.objectWillChange.send()
         }.store(in: &cancellables)
-        self.conversation.$activeProjectGoal.sink { [weak self] _ in
+        self.runtimeState.objectWillChange.sink { [weak self] _ in
+            self?.objectWillChange.send()
+        }.store(in: &cancellables)
+        self.runtimeState.$activeProjectGoal.sink { [weak self] _ in
             self?.refreshTerminalRowsForGoalState()
         }.store(in: &cancellables)
 
@@ -383,7 +393,7 @@ final class ForemanSidebarStore: ObservableObject {
 
     var rollupStatusText: String? {
         let summary = attentionSummaryText
-            ?? conversation.lastOverview?.summary
+            ?? runtimeState.lastOverview?.summary
             ?? selectedTerminalWorkerSnapshot?.state.summary
 
         guard let summary, !summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
@@ -725,12 +735,12 @@ final class ForemanSidebarStore: ObservableObject {
             preferredTarget: preferredSidebarTarget,
             pendingAttentionByTerminalID: pendingAttentionByTerminalID,
             terminalRows: terminalRows,
-            activeProjectGoal: conversation.activeProjectGoal
+            activeProjectGoal: runtimeState.activeProjectGoal
         )
     }
 
     private func resolvedProjectID() -> String? {
-        if let projectID = conversation.activeProjectGoal?.projectID {
+        if let projectID = runtimeState.activeProjectGoal?.projectID {
             return projectID
         }
 
@@ -904,7 +914,7 @@ final class ForemanSidebarStore: ObservableObject {
     }
 
     private var shouldSuppressSuggestedActionsForCompletedGoal: Bool {
-        conversation.activeProjectGoal?.status == .completed
+        runtimeState.activeProjectGoal?.status == .completed
     }
 
     private func goalScopedSuggestedActions(

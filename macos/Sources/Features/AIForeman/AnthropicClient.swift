@@ -187,9 +187,9 @@ struct AnthropicClient: ForemanLLMClient, Sendable {
         terminals: [TerminalSnapshot],
         lastOutcome: TerminalOutcomeReport?
     ) async throws -> AgentStepResponse {
-        let overview = await MainActor.run { conversation.lastOverview } ?? Self.fallbackOverview(for: terminals)
-        let understandings = await MainActor.run { conversation.lastUnderstandings }
-        let workerSnapshots = await MainActor.run { conversation.lastWorkerSnapshots }
+        let overview = await MainActor.run { conversation.runtimeState.lastOverview } ?? Self.fallbackOverview(for: terminals)
+        let understandings = await MainActor.run { conversation.runtimeState.lastUnderstandings }
+        let workerSnapshots = await MainActor.run { conversation.runtimeState.lastWorkerSnapshots }
         return try await agentStep(
             conversation: conversation,
             terminals: terminals,

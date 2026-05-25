@@ -413,11 +413,11 @@ struct ForemanChatView: View {
             return store.workerSnapshotsByTerminalID[terminalID]?.state.summary
                 ?? store.terminalRows.first(where: { $0.terminalID == terminalID })?.summary
         case .project:
-            return store.conversation.activeProjectGoal?.objective
+            return store.runtimeState.activeProjectGoal?.objective
         case .ambiguous:
             return "Several terminals are waiting. Pick one or switch to project guidance."
         case .completedGoal:
-            return store.conversation.activeProjectGoal?.objective
+            return store.runtimeState.activeProjectGoal?.objective
         }
     }
 

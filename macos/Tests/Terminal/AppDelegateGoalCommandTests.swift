@@ -17,12 +17,12 @@ struct AppDelegateGoalCommandTests {
             projectID: projectID,
             objective: "Bootstrap the project goal."
         )
-        conversation.setActiveProjectGoal(placeholderGoal)
+        conversation.runtimeState.setActiveProjectGoal(placeholderGoal)
         let store = ForemanSidebarStore(conversation: conversation)
         appDelegate.setForemanProjectGoalRuntimeForTests(makePersistedGoalRuntime(dbURL: dbURL))
 
         defer {
-            conversation.setActiveProjectGoal(placeholderGoal)
+            conversation.runtimeState.setActiveProjectGoal(placeholderGoal)
             appDelegate.setForemanProjectGoalRuntimeForTests(
                 ForemanProjectGoalRuntime(loadPersistedGoals: true)
             )
@@ -33,7 +33,7 @@ struct AppDelegateGoalCommandTests {
 
         try await waitForGoalCommand {
             await MainActor.run {
-                store.conversation.activeProjectGoal?.goalText == "Ship the final goal-runtime hardening slice."
+                store.runtimeState.activeProjectGoal?.goalText == "Ship the final goal-runtime hardening slice."
             }
         }
 
@@ -45,7 +45,7 @@ struct AppDelegateGoalCommandTests {
 
         try await waitForGoalCommand {
             await MainActor.run {
-                store.conversation.activeProjectGoal?.status == .completed
+                store.runtimeState.activeProjectGoal?.status == .completed
             }
         }
 
@@ -57,7 +57,7 @@ struct AppDelegateGoalCommandTests {
 
         try await waitForGoalCommand {
             await MainActor.run {
-                store.conversation.activeProjectGoal == nil
+                store.runtimeState.activeProjectGoal == nil
             }
         }
 
@@ -76,12 +76,12 @@ struct AppDelegateGoalCommandTests {
         let projectID = "/tmp/ghostty-goal-rehydrate-\(UUID().uuidString)"
         let setupConversation = ForemanConversation()
         let setupGoal = ForemanProjectGoal(projectID: projectID, objective: "Seed a completed goal.")
-        setupConversation.setActiveProjectGoal(setupGoal)
+        setupConversation.runtimeState.setActiveProjectGoal(setupGoal)
         let setupStore = ForemanSidebarStore(conversation: setupConversation)
         appDelegate.setForemanProjectGoalRuntimeForTests(makePersistedGoalRuntime(dbURL: dbURL))
 
         defer {
-            setupConversation.setActiveProjectGoal(setupGoal)
+            setupConversation.runtimeState.setActiveProjectGoal(setupGoal)
             appDelegate.setForemanProjectGoalRuntimeForTests(
                 ForemanProjectGoalRuntime(loadPersistedGoals: true)
             )
@@ -91,14 +91,14 @@ struct AppDelegateGoalCommandTests {
         appDelegate.sendChatMessage("/goal set Verify the rehydrated goal command path.", store: setupStore)
         try await waitForGoalCommand {
             await MainActor.run {
-                setupStore.conversation.activeProjectGoal?.goalText == "Verify the rehydrated goal command path."
+                setupStore.runtimeState.activeProjectGoal?.goalText == "Verify the rehydrated goal command path."
             }
         }
 
         appDelegate.sendChatMessage("/goal complete", store: setupStore)
         try await waitForGoalCommand {
             await MainActor.run {
-                setupStore.conversation.activeProjectGoal?.status == .completed
+                setupStore.runtimeState.activeProjectGoal?.status == .completed
             }
         }
 
@@ -106,7 +106,7 @@ struct AppDelegateGoalCommandTests {
         #expect(restoredGoal.status == .completed)
 
         let reopenedConversation = ForemanConversation()
-        reopenedConversation.setActiveProjectGoal(restoredGoal)
+        reopenedConversation.runtimeState.setActiveProjectGoal(restoredGoal)
         let reopenedStore = ForemanSidebarStore(conversation: reopenedConversation)
 
         appDelegate.sendChatMessage("/goal reopen", store: reopenedStore)
@@ -115,7 +115,7 @@ struct AppDelegateGoalCommandTests {
             failureContext: {
                 let persistedGoal = await makePersistedGoalRuntime(dbURL: dbURL).goal(for: projectID)
                 return await MainActor.run {
-                    let activeStatus = reopenedStore.conversation.activeProjectGoal?.status
+                    let activeStatus = reopenedStore.runtimeState.activeProjectGoal?.status
                     let lastMessage = reopenedStore.conversation.messages.last?.content ?? "<none>"
                     let errorMessage = reopenedStore.conversation.errorMessage ?? "<none>"
                     return """
@@ -128,7 +128,7 @@ struct AppDelegateGoalCommandTests {
             }
         ) {
             await MainActor.run {
-                reopenedStore.conversation.activeProjectGoal?.status == .active
+                reopenedStore.runtimeState.activeProjectGoal?.status == .active
             }
         }
 
@@ -147,12 +147,12 @@ struct AppDelegateGoalCommandTests {
         let projectID = "/tmp/ghostty-goal-suppression-\(UUID().uuidString)"
         let setupConversation = ForemanConversation()
         let setupGoal = ForemanProjectGoal(projectID: projectID, objective: "Seed a completed goal.")
-        setupConversation.setActiveProjectGoal(setupGoal)
+        setupConversation.runtimeState.setActiveProjectGoal(setupGoal)
         let setupStore = ForemanSidebarStore(conversation: setupConversation)
         appDelegate.setForemanProjectGoalRuntimeForTests(makePersistedGoalRuntime(dbURL: dbURL))
 
         defer {
-            setupConversation.setActiveProjectGoal(setupGoal)
+            setupConversation.runtimeState.setActiveProjectGoal(setupGoal)
             appDelegate.setForemanProjectGoalRuntimeForTests(
                 ForemanProjectGoalRuntime(loadPersistedGoals: true)
             )
@@ -162,20 +162,20 @@ struct AppDelegateGoalCommandTests {
         appDelegate.sendChatMessage("/goal set Verify completed-goal row suppression.", store: setupStore)
         try await waitForGoalCommand {
             await MainActor.run {
-                setupStore.conversation.activeProjectGoal?.goalText == "Verify completed-goal row suppression."
+                setupStore.runtimeState.activeProjectGoal?.goalText == "Verify completed-goal row suppression."
             }
         }
 
         appDelegate.sendChatMessage("/goal complete", store: setupStore)
         try await waitForGoalCommand {
             await MainActor.run {
-                setupStore.conversation.activeProjectGoal?.status == .completed
+                setupStore.runtimeState.activeProjectGoal?.status == .completed
             }
         }
 
         let restoredGoal = try #require(await makePersistedGoalRuntime(dbURL: dbURL).goal(for: projectID))
         let restoredConversation = ForemanConversation()
-        restoredConversation.setActiveProjectGoal(restoredGoal)
+        restoredConversation.runtimeState.setActiveProjectGoal(restoredGoal)
         let restoredStore = ForemanSidebarStore(conversation: restoredConversation)
 
         let snapshots = [
@@ -220,7 +220,7 @@ struct AppDelegateGoalCommandTests {
         appDelegate.sendChatMessage("/goal reopen", store: restoredStore)
         try await waitForGoalCommand {
             await MainActor.run {
-                restoredStore.conversation.activeProjectGoal?.status == .active
+                restoredStore.runtimeState.activeProjectGoal?.status == .active
             }
         }
 

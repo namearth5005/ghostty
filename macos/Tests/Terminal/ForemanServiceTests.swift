@@ -72,6 +72,49 @@ struct ForemanServiceTests {
     }
 
     @Test
+    func openAIClientLegacyAgentStepReadsObservedContextFromRuntimeState() async throws {
+        let transport = RecordingResponsesTransport(
+            payload: """
+            {"thought":"Using runtime state.","action":{"type":"respond","message":"term-1 failed because `hfind` is not installed."}}
+            """
+        )
+        let client = OpenAIClient(apiKey: "test-key", transport: transport)
+        let runtimeState = await MainActor.run { ForemanRuntimeState() }
+        let conversation = await MainActor.run { ForemanConversation(runtimeState: runtimeState) }
+        let understanding = TerminalUnderstanding.preview(
+            terminalID: "term-1",
+            state: .failed,
+            shortExplanation: "The command failed because `hfind` is not installed.",
+            lastMeaningfulEvent: "zsh: command not found: hfind",
+            importantDetails: ["The typed command was `hfind . -print`."],
+            suggestedNextActions: []
+        )
+
+        await MainActor.run {
+            runtimeState.updateTerminalContext(
+                overview: .init(
+                    summary: "term-1 failed because `hfind` is not installed.",
+                    changedTerminalIDs: ["term-1"],
+                    primaryTerminalID: "term-1"
+                ),
+                understandings: [understanding]
+            )
+        }
+
+        _ = try await client.agentStep(
+            conversation: conversation,
+            terminals: sampleSnapshots(),
+            lastOutcome: nil
+        )
+
+        let request = try #require(await transport.lastRequest)
+        let prompt = request.input[0].content[0].text
+        #expect(prompt.contains("Structured terminal overview:"))
+        #expect(prompt.contains("term-1 failed because `hfind` is not installed."))
+        #expect(prompt.contains("\"terminalID\":\"term-1\""))
+    }
+
+    @Test
     func openAIPromptIncludesHiddenReactiveContext() async throws {
         let transport = RecordingResponsesTransport(
             payload: """
