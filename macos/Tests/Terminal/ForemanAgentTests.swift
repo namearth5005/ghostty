@@ -327,6 +327,46 @@ struct ForemanAgentTests {
     }
 
     @Test
+    func startRequiresExplicitTargetWhenMultipleAuthoritativeWorkersNeedAttention() async throws {
+        let observedContext = ambiguousAuthoritativeWorkerObservedContext()
+        let result = try await startWithObservedContextPauseCase(
+            snapshots: observedContext.terminals,
+            observedContext: observedContext,
+            response: try makeStepResponse(
+                thought: "Foreman should not plan or auto-pick a worker here.",
+                action: .respond(message: "This should never be used.")
+            )
+        )
+
+        #expect(result.stepCallCount == 0)
+        #expect(result.status == .waitingForUser)
+        #expect(
+            result.agentMessage ==
+            "2 terminals need attention: term-1 reply required; term-2 choice required.\n\n\(ForemanRuntimePolicy.ambiguousTargetMessage)"
+        )
+    }
+
+    @Test
+    func startRequiresExplicitTargetWhenMultipleFirstClassWorkersWaitWithoutSnapshots() async throws {
+        let observedContext = ambiguousFirstClassWaitingObservedContextWithoutSnapshots()
+        let result = try await startWithObservedContextPauseCase(
+            snapshots: observedContext.terminals,
+            observedContext: observedContext,
+            response: try makeStepResponse(
+                thought: "Foreman should not plan or auto-pick a worker here.",
+                action: .respond(message: "This should never be used.")
+            )
+        )
+
+        #expect(result.stepCallCount == 0)
+        #expect(result.status == .waitingForUser)
+        #expect(
+            result.agentMessage ==
+            "2 terminals need attention: term-1 reply required; term-2 reply required.\n\n\(ForemanRuntimePolicy.ambiguousTargetMessage)"
+        )
+    }
+
+    @Test
     func approvalResumeUsesSuppliedObservedContextProviderForGenericContext() async throws {
         let conversation = await MainActor.run { ForemanConversation() }
         let client = ScriptedForemanClient(
@@ -3342,6 +3382,260 @@ private func kimiObservedWaitingTextContext(
                 supportLevel: .firstClass,
                 evidence: [.init(source: .wireSignal, detail: "Wire record: QuestionRequest", confidence: 0.98)],
                 agentInteractionContext: .waitingText(question: "What should I do here?")
+            ),
+        ],
+        workerSnapshots: [:]
+    )
+}
+
+private func ambiguousAuthoritativeWorkerObservedContext() -> ForemanObservedTerminalContext {
+    let snapshots = [
+        TerminalSnapshot.makePreview(
+            terminalID: "term-1",
+            windowID: "win-1",
+            tabID: "tab-1",
+            title: "Kimi Code",
+            cwd: "/tmp/project",
+            isFocused: true,
+            visibleText: "What should I do here?",
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessName: "kimi",
+            cursorIsAtPrompt: true,
+            usingAlternateScreen: true
+        ),
+        TerminalSnapshot.makePreview(
+            terminalID: "term-2",
+            windowID: "win-1",
+            tabID: "tab-1",
+            title: "Codex",
+            cwd: "/tmp/project",
+            isFocused: false,
+            visibleText: "Which direction should I take?",
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessName: "codex",
+            cursorIsAtPrompt: true,
+            usingAlternateScreen: true
+        ),
+    ]
+
+    let workerOne = TerminalWorkerSnapshot(
+        schemaVersion: 1,
+        terminalID: "term-1",
+        workerSessionID: "kimi-session-41",
+        revision: 41,
+        observedAt: Date(timeIntervalSince1970: 1_748_333_341),
+        ttlMilliseconds: 15_000,
+        workerGoal: "inspect the project",
+        agent: .init(identity: .kimi),
+        state: .init(
+            lifecycle: .running,
+            attention: .replyRequired,
+            summary: "Kimi is waiting for a reply.",
+            details: ["The worker asked what to do next."],
+            runtimeFlags: []
+        ),
+        request: .init(
+            id: "req-41",
+            kind: .reply,
+            prompt: "What should I do here?",
+            options: []
+        ),
+        suggestions: [
+            .init(
+                id: "reply-kimi",
+                kind: .reply,
+                title: "Inspect the auth flow",
+                payload: .text("Inspect the auth flow"),
+                rationale: "Reply with the next task for Kimi.",
+                recommended: true,
+                execution: .manualOnly,
+                requestID: "req-41"
+            ),
+        ]
+    )
+    let workerTwo = TerminalWorkerSnapshot(
+        schemaVersion: 1,
+        terminalID: "term-2",
+        workerSessionID: "codex-session-17",
+        revision: 17,
+        observedAt: Date(timeIntervalSince1970: 1_748_333_342),
+        ttlMilliseconds: 15_000,
+        workerGoal: "choose an implementation path",
+        agent: .init(identity: .codex),
+        state: .init(
+            lifecycle: .running,
+            attention: .choiceRequired,
+            summary: "Codex is waiting for a choice.",
+            details: ["Two implementation paths are available."],
+            runtimeFlags: []
+        ),
+        request: .init(
+            id: "req-17",
+            kind: .choice,
+            prompt: "Which direction should I take?",
+            options: [
+                .init(id: "1", label: "Safe refactor", recommended: true),
+                .init(id: "2", label: "Fast patch", recommended: false),
+            ]
+        ),
+        suggestions: [
+            .init(
+                id: "choice-codex",
+                kind: .choice,
+                title: "Safe refactor",
+                payload: .option("1"),
+                rationale: "Choose the lower-risk implementation path.",
+                recommended: true,
+                execution: .manualOnly,
+                requestID: "req-17"
+            ),
+        ]
+    )
+
+    let understandings = [
+        TerminalUnderstanding.preview(
+            terminalID: "term-1",
+            state: .waiting,
+            shortExplanation: "Kimi is waiting for your response.",
+            lastMeaningfulEvent: "What should I do here?",
+            importantDetails: ["The worker asked what to do next."],
+            suggestedNextActions: [
+                .init(
+                    title: "Inspect the auth flow",
+                    command: nil,
+                    reason: "Reply with the next task for Kimi.",
+                    isRecommended: true
+                ),
+            ],
+            agentIdentity: .kimi,
+            agentInteractionState: .waitingText,
+            supportLevel: .firstClass,
+            evidence: [.init(source: .runtime, detail: "authoritative_worker_snapshot", confidence: 1.0)],
+            agentInteractionContext: .waitingText(
+                question: "What should I do here?",
+                requestID: "req-41",
+                sessionID: "kimi-session-41",
+                revision: 41,
+                isPlanning: false
+            ),
+            workerSnapshot: workerOne
+        ),
+        TerminalUnderstanding.preview(
+            terminalID: "term-2",
+            state: .waiting,
+            shortExplanation: "Codex is waiting for a choice.",
+            lastMeaningfulEvent: "Which direction should I take?",
+            importantDetails: ["Two implementation paths are available."],
+            suggestedNextActions: [
+                .init(
+                    title: "Safe refactor",
+                    command: nil,
+                    reason: "Choose the lower-risk implementation path.",
+                    isRecommended: true
+                ),
+            ],
+            agentIdentity: .codex,
+            agentInteractionState: .waitingChoice,
+            supportLevel: .firstClass,
+            evidence: [.init(source: .runtime, detail: "authoritative_worker_snapshot", confidence: 1.0)],
+            agentInteractionContext: .waitingChoice(
+                question: "Which direction should I take?",
+                options: ["Safe refactor", "Fast patch"],
+                requestID: "req-17",
+                sessionID: "codex-session-17",
+                revision: 17,
+                isPlanning: false
+            ),
+            workerSnapshot: workerTwo
+        ),
+    ]
+
+    return ForemanObservedTerminalContext(
+        terminals: snapshots,
+        understandings: understandings,
+        workerSnapshots: [
+            "term-1": workerOne,
+            "term-2": workerTwo,
+        ]
+    )
+}
+
+private func ambiguousFirstClassWaitingObservedContextWithoutSnapshots() -> ForemanObservedTerminalContext {
+    let snapshots = [
+        TerminalSnapshot.makePreview(
+            terminalID: "term-1",
+            windowID: "win-1",
+            tabID: "tab-1",
+            title: "Kimi Code",
+            cwd: "/tmp/project",
+            isFocused: true,
+            visibleText: "What should I do here?",
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessName: "kimi",
+            cursorIsAtPrompt: true,
+            usingAlternateScreen: true
+        ),
+        TerminalSnapshot.makePreview(
+            terminalID: "term-2",
+            windowID: "win-1",
+            tabID: "tab-1",
+            title: "Codex",
+            cwd: "/tmp/project",
+            isFocused: false,
+            visibleText: "What should I do on terminal two?",
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessName: "codex",
+            cursorIsAtPrompt: true,
+            usingAlternateScreen: true
+        ),
+    ]
+
+    return ForemanObservedTerminalContext(
+        terminals: snapshots,
+        understandings: [
+            .preview(
+                terminalID: "term-1",
+                state: .waiting,
+                shortExplanation: "Kimi is waiting for your response.",
+                lastMeaningfulEvent: "What should I do here?",
+                importantDetails: ["What should I do here?"],
+                suggestedNextActions: [
+                    .init(
+                        title: "Reply to Kimi",
+                        command: nil,
+                        reason: "What should I do here?",
+                        isRecommended: true
+                    ),
+                ],
+                agentIdentity: .kimi,
+                agentInteractionState: .waitingText,
+                supportLevel: .firstClass,
+                evidence: [.init(source: .wireSignal, detail: "Wire record: QuestionRequest", confidence: 0.98)],
+                agentInteractionContext: .waitingText(question: "What should I do here?")
+            ),
+            .preview(
+                terminalID: "term-2",
+                state: .waiting,
+                shortExplanation: "Codex is waiting for your response.",
+                lastMeaningfulEvent: "What should I do on terminal two?",
+                importantDetails: ["What should I do on terminal two?"],
+                suggestedNextActions: [
+                    .init(
+                        title: "Reply to Codex",
+                        command: nil,
+                        reason: "What should I do on terminal two?",
+                        isRecommended: true
+                    ),
+                ],
+                agentIdentity: .codex,
+                agentInteractionState: .waitingText,
+                supportLevel: .firstClass,
+                evidence: [.init(source: .wireSignal, detail: "Wire record: waitingText", confidence: 0.95)],
+                agentInteractionContext: .waitingText(question: "What should I do on terminal two?")
             ),
         ],
         workerSnapshots: [:]

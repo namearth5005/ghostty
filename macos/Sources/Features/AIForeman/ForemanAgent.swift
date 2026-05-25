@@ -13,6 +13,11 @@ actor ForemanAgent {
         let question: String
     }
 
+    private struct AmbiguousWorkerTargetPause {
+        let message: String
+        let question: String
+    }
+
     private enum PauseState {
         case none
         case awaitingApproval(AgentAction)
@@ -569,6 +574,15 @@ actor ForemanAgent {
                 break
             }
 
+            if let ambiguousPause = ambiguousWorkerTargetPause(
+                for: preferredTerminalID,
+                understandings: understandings,
+                overview: overview
+            ) {
+                await pauseForAmbiguousWorkerTargets(ambiguousPause)
+                break
+            }
+
             if let authoritativeDirective = authoritativeWorkerDirective(
                 for: preferredTerminalID ?? overview.primaryTerminalID,
                 observedTerminals: observedTerminals
@@ -1075,6 +1089,34 @@ actor ForemanAgent {
         }
     }
 
+    private func ambiguousWorkerTargetPause(
+        for terminalID: String?,
+        understandings: [TerminalUnderstanding],
+        overview: TerminalOverview
+    ) -> AmbiguousWorkerTargetPause? {
+        guard terminalID == nil else {
+            return nil
+        }
+
+        let waitingTerminalIDs = understandings.compactMap { understanding -> String? in
+            guard understanding.agentIdentity != .none,
+                  Self.needsHumanAttention(understanding) else {
+                return nil
+            }
+            return understanding.terminalID
+        }
+
+        guard waitingTerminalIDs.count > 1 else {
+            return nil
+        }
+
+        let question = ForemanRuntimePolicy.ambiguousTargetMessage
+        return AmbiguousWorkerTargetPause(
+            message: "\(overview.summary)\n\n\(question)",
+            question: question
+        )
+    }
+
     private func authoritativeWorkerDirective(
         for terminalID: String?,
         observedTerminals: ForemanObservedTerminalContext
@@ -1316,6 +1358,23 @@ actor ForemanAgent {
                     content: pause.message,
                     action: .askUser(question: pause.question),
                     terminalID: terminalID ?? pause.terminalID
+                )
+            }
+            conversation.setStatus(.waitingForUser)
+            conversation.isRunning = false
+        }
+        pauseState = .awaitingUserReply(question: pause.question)
+    }
+
+    private func pauseForAmbiguousWorkerTargets(
+        _ pause: AmbiguousWorkerTargetPause
+    ) async {
+        await MainActor.run {
+            if conversation.messages.last?.content != pause.message {
+                conversation.addMessage(
+                    role: .agent,
+                    content: pause.message,
+                    action: .askUser(question: pause.question)
                 )
             }
             conversation.setStatus(.waitingForUser)
