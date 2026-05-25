@@ -64,8 +64,11 @@ struct ForemanRuntimePolicy {
         for proposedPayload: String,
         snapshot: TerminalWorkerSnapshot
     ) -> ForemanContinuationDecision? {
-        let suggestions = snapshot.suggestions
+        let suggestions = snapshot.requestSuggestions
         guard !suggestions.isEmpty else {
+            if snapshot.request != nil {
+                return .requireUser(Self.unsuggestedActionMessage)
+            }
             return nil
         }
 
