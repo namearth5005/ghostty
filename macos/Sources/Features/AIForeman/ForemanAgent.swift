@@ -1,6 +1,12 @@
 import Foundation
 
 actor ForemanAgent {
+    private struct AuthoritativeWorkerDirective {
+        let terminalID: String
+        let payload: String
+        let rationale: String
+    }
+
     private enum PauseState {
         case none
         case awaitingApproval(AgentAction)
@@ -459,22 +465,16 @@ actor ForemanAgent {
                 break
             }
 
-            if let authoritativeResponse = authoritativeWorkerResponse(
+            if let authoritativeDirective = authoritativeWorkerDirective(
                 for: preferredTerminalID ?? overview.primaryTerminalID,
                 observedTerminals: observedTerminals
             ) {
                 await MainActor.run {
                     conversation.incrementIteration()
                 }
-                _ = await evaluateProjectGoal(
-                    for: preferredTerminalID ?? overview.primaryTerminalID,
-                    terminals: terminals,
-                    understandings: understandings,
-                    recommendationOutcome: .agentAction(authoritativeResponse.action)
-                )
 
-                let shouldContinue = try await executeAction(
-                    authoritativeResponse,
+                let shouldContinue = try await executeAuthoritativeWorkerDirective(
+                    authoritativeDirective,
                     terminalID: preferredTerminalID ?? overview.primaryTerminalID
                 )
                 try Task.checkCancellation()
@@ -590,6 +590,21 @@ actor ForemanAgent {
             }
             return false
         }
+    }
+
+    private func executeAuthoritativeWorkerDirective(
+        _ directive: AuthoritativeWorkerDirective,
+        terminalID messageTerminalID: String? = nil
+    ) async throws -> Bool {
+        DebugLogger.log(
+            "[ForemanAgent] authoritative worker directive terminal=\(directive.terminalID.prefix(8)) payload='\(directive.payload.prefix(160))' reason='\(directive.rationale.prefix(160))'"
+        )
+        return try await handleSendCommand(
+            terminalID: directive.terminalID,
+            command: directive.payload,
+            reason: directive.rationale,
+            messageTerminalID: messageTerminalID
+        )
     }
 
     private func handleSendCommand(
@@ -781,21 +796,18 @@ actor ForemanAgent {
             return
         }
 
-        if let authoritativeResponse = authoritativeWorkerResponse(
+        if let authoritativeDirective = authoritativeWorkerDirective(
             for: event.terminalID,
             observedTerminals: observedTerminals
         ) {
             await MainActor.run {
                 conversation.incrementIteration()
             }
-            _ = await evaluateProjectGoal(
-                for: event.terminalID,
-                terminals: terminals,
-                understandings: understandings,
-                recommendationOutcome: .agentAction(authoritativeResponse.action)
-            )
 
-            _ = try await executeAction(authoritativeResponse, terminalID: event.terminalID)
+            _ = try await executeAuthoritativeWorkerDirective(
+                authoritativeDirective,
+                terminalID: event.terminalID
+            )
             try Task.checkCancellation()
 
             await MainActor.run {
@@ -921,10 +933,10 @@ actor ForemanAgent {
         }
     }
 
-    private func authoritativeWorkerResponse(
+    private func authoritativeWorkerDirective(
         for terminalID: String?,
         observedTerminals: ForemanObservedTerminalContext
-    ) -> AgentStepResponse? {
+    ) -> AuthoritativeWorkerDirective? {
         let candidateTerminalIDs: [String]
         if let terminalID {
             candidateTerminalIDs = [terminalID]
@@ -940,13 +952,10 @@ actor ForemanAgent {
                 continue
             }
 
-            return AgentStepResponse(
-                thought: workerSnapshot.state.summary,
-                action: .sendCommand(
-                    terminalID: candidateTerminalID,
-                    command: payload,
-                    reason: suggestion.rationale
-                )
+            return AuthoritativeWorkerDirective(
+                terminalID: candidateTerminalID,
+                payload: payload,
+                rationale: suggestion.rationale
             )
         }
 

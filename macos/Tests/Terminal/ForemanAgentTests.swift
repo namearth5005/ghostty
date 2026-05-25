@@ -1480,17 +1480,15 @@ struct ForemanAgentTests {
     }
 
     @Test
-    func draftPendingAttentionForCodexAskHumanUsesSavedProjectGoalAcrossLaunchPaths() async throws {
+    func draftPendingAttentionForCodexAuthoritativeReplyEscalatesWithoutLLMDraftAcrossLaunchPaths() async throws {
         let cases: [(terminalID: String, snapshots: [TerminalSnapshot])] = [
             ("codex-existing", codexReplySnapshots(terminalID: "codex-existing", title: "shell", isFocused: true)),
             ("codex-new-tab", codexReplySnapshots(terminalID: "codex-new-tab", title: "nambouchara@Nams-MacBook-Pro:~")),
             ("codex-managed", codexReplySnapshots(terminalID: "codex-managed", title: "OpenAI Codex")),
         ]
-        let projectGoal = "Coordinate the next Foreman goal-runtime slice across agent terminals."
-        let runtime = ForemanProjectGoalRuntime()
-        await runtime.saveGoal(projectGoal, for: "/tmp/project")
 
         var signatures: [PendingAttentionSignature] = []
+        var draftCallCounts: [Int] = []
 
         for entry in cases {
             let result = try await draftPendingAttentionCase(
@@ -1504,25 +1502,18 @@ struct ForemanAgentTests {
                     timestamp: Date(timeIntervalSince1970: 1),
                     fingerprint: "\(entry.terminalID)|codex|waitingText|next"
                 ),
-                replyDraft: try makeReplyDraftResponse(
-                    thought: "The agent needs a goal from the human.",
-                    suggestion: .askHuman(
-                        terminalID: entry.terminalID,
-                        message: "What should Codex do in this project?",
-                        reason: "Codex is asking for the next task and Foreman has no active user goal.",
-                        confidence: 1.0
-                    )
-                ),
-                goalRuntime: runtime
+                replyDraft: nil
             )
 
             signatures.append(try #require(result.signature))
+            draftCallCounts.append(result.replyDraftCallCount)
         }
 
         #expect(signatures.dropFirst().allSatisfy { $0 == signatures.first })
+        #expect(draftCallCounts.allSatisfy { $0 == 0 })
         #expect(signatures.first?.title == "Needs direction")
-        #expect(signatures.first?.description == "What should Codex do in this project?")
-        #expect(signatures.first?.detail == "Codex is asking for the next task and Foreman has no active user goal.")
+        #expect(signatures.first?.description == "• Hello. What do you want to work on in ghostty?")
+        #expect(signatures.first?.detail == nil)
         #expect(signatures.first?.actions.isEmpty == true)
     }
 
@@ -1739,15 +1730,7 @@ struct ForemanAgentTests {
                     timestamp: Date(timeIntervalSince1970: 1),
                     fingerprint: "\(entry.terminalID)|codex|waitingText|blocked"
                 ),
-                replyDraft: try makeReplyDraftResponse(
-                    thought: "Codex is asking for the next task and needs human direction.",
-                    suggestion: .askHuman(
-                        terminalID: entry.terminalID,
-                        message: "What should Codex do in this project?",
-                        reason: "Codex is asking for the next task and Foreman needs human guidance.",
-                        confidence: 1.0
-                    )
-                ),
+                replyDraft: nil,
                 goalRuntime: runtime
             )
 
@@ -1758,26 +1741,24 @@ struct ForemanAgentTests {
 
         #expect(signatures.dropFirst().allSatisfy { $0 == signatures.first })
         #expect(signatures.first?.title == "Needs direction")
-        #expect(signatures.first?.description == "What should Codex do in this project?")
+        #expect(signatures.first?.description == "• Hello. What do you want to work on in ghostty?")
         #expect(signatures.first?.actions.isEmpty == true)
         #expect(goal?.status == .active)
         #expect(goal?.completedAt == nil)
         #expect(goal?.lastEvaluatedAt != nil)
-        #expect(goal?.lastEvidenceSnapshot?.contains("Foreman needs human guidance") == true)
+        #expect(goal?.lastEvidenceSnapshot?.contains("waiting for direction") == true)
     }
 
     @Test
-    func draftPendingAttentionForClaudeAskHumanUsesSavedProjectGoalAcrossLaunchPaths() async throws {
+    func draftPendingAttentionForClaudeAuthoritativeReplyEscalatesWithoutLLMDraftAcrossLaunchPaths() async throws {
         let cases: [(terminalID: String, snapshots: [TerminalSnapshot])] = [
             ("claude-existing", claudeReplySnapshots(terminalID: "claude-existing", title: "shell", isFocused: true)),
             ("claude-new-tab", claudeReplySnapshots(terminalID: "claude-new-tab", title: "nambouchara@Nams-MacBook-Pro:~")),
             ("claude-managed", claudeReplySnapshots(terminalID: "claude-managed", title: "Claude Code")),
         ]
-        let projectGoal = "Coordinate the next Foreman goal-runtime slice across agent terminals."
-        let runtime = ForemanProjectGoalRuntime()
-        await runtime.saveGoal(projectGoal, for: "/tmp/project")
 
         var signatures: [PendingAttentionSignature] = []
+        var draftCallCounts: [Int] = []
 
         for entry in cases {
             let result = try await draftPendingAttentionCase(
@@ -1791,30 +1772,23 @@ struct ForemanAgentTests {
                     timestamp: Date(timeIntervalSince1970: 1),
                     fingerprint: "\(entry.terminalID)|claude|waitingText|next"
                 ),
-                replyDraft: try makeReplyDraftResponse(
-                    thought: "The agent needs a goal from the human.",
-                    suggestion: .askHuman(
-                        terminalID: entry.terminalID,
-                        message: "What should Claude Code do in this project?",
-                        reason: "Claude Code is asking for the next task and Foreman has no active user goal.",
-                        confidence: 1.0
-                    )
-                ),
-                goalRuntime: runtime
+                replyDraft: nil
             )
 
             signatures.append(try #require(result.signature))
+            draftCallCounts.append(result.replyDraftCallCount)
         }
 
         #expect(signatures.dropFirst().allSatisfy { $0 == signatures.first })
+        #expect(draftCallCounts.allSatisfy { $0 == 0 })
         #expect(signatures.first?.title == "Needs direction")
-        #expect(signatures.first?.description == "What should Claude Code do in this project?")
-        #expect(signatures.first?.detail == "Claude Code is asking for the next task and Foreman has no active user goal.")
+        #expect(signatures.first?.description == "What should I do next?")
+        #expect(signatures.first?.detail == nil)
         #expect(signatures.first?.actions.isEmpty == true)
     }
 
     @Test
-    func draftPendingAttentionForCodexRepliesSharesParityAcrossLaunchPaths() async throws {
+    func draftPendingAttentionForCodexFirstClassRepliesDoNotInventSuggestedResponseAcrossLaunchPaths() async throws {
         let cases: [(terminalID: String, snapshots: [TerminalSnapshot])] = [
             ("codex-existing", codexReplySnapshots(terminalID: "codex-existing", title: "shell", isFocused: true)),
             ("codex-new-tab", codexReplySnapshots(terminalID: "codex-new-tab", title: "nambouchara@Nams-MacBook-Pro:~")),
@@ -1822,7 +1796,7 @@ struct ForemanAgentTests {
         ]
 
         var signatures: [PendingAttentionSignature] = []
-        var forwardedUnderstandings: [UnderstandingSignature] = []
+        var draftCallCounts: [Int] = []
 
         for entry in cases {
             let result = try await draftPendingAttentionCase(
@@ -1834,30 +1808,19 @@ struct ForemanAgentTests {
                     deltaText: "What should I work on next?",
                     timestamp: Date(timeIntervalSince1970: 1),
                     fingerprint: "\(entry.terminalID)|codex|waitingText|next"
-                ),
-                replyDraft: try makeReplyDraftResponse(
-                    thought: "Codex is asking what to work on next.",
-                    suggestion: .replyToAgent(
-                        terminalID: entry.terminalID,
-                        message: "Inspect the current files and summarize the next useful change.",
-                        reason: "Codex is asking for the next concrete task in this project.",
-                        confidence: 1.0
-                    )
                 )
             )
 
             signatures.append(try #require(result.signature))
-            forwardedUnderstandings.append(try #require(result.understanding))
+            draftCallCounts.append(result.replyDraftCallCount)
         }
 
         #expect(signatures.dropFirst().allSatisfy { $0 == signatures.first })
-        #expect(forwardedUnderstandings.dropFirst().allSatisfy { $0 == forwardedUnderstandings.first })
-        #expect(signatures.first?.title == "Suggested reply")
-        #expect(signatures.first?.description == "Codex is asking for the next concrete task in this project.")
-        #expect(signatures.first?.detail == "What should I work on next?")
-        #expect(signatures.first?.actions.first?.title == "Inspect the current files and summarize the next useful change.")
-        #expect(forwardedUnderstandings.first?.interactionState == .waitingText)
-        #expect(forwardedUnderstandings.first?.interactionContext == .waitingText(question: "• Hello. What do you want to work on in ghostty?"))
+        #expect(draftCallCounts.allSatisfy { $0 == 0 })
+        #expect(signatures.first?.title == "Needs direction")
+        #expect(signatures.first?.description == "• Hello. What do you want to work on in ghostty?")
+        #expect(signatures.first?.detail == nil)
+        #expect(signatures.first?.actions.isEmpty == true)
     }
 
     @Test
@@ -2184,6 +2147,57 @@ struct ForemanAgentTests {
     }
 
     @Test
+    func startInteractiveModeUsesWorkerSuggestionWithoutSynthesizingForemanAction() async throws {
+        let conversation = await MainActor.run { ForemanConversation() }
+        let client = ScriptedForemanClient(responses: [
+            try makeStepResponse(
+                thought: "Foreman should not need to plan this.",
+                action: AgentAction.sendCommand(
+                    terminalID: "term-1",
+                    command: "1",
+                    reason: "Choose Keep current API."
+                )
+            ),
+        ])
+        let commandRecorder = CommandRecorder()
+        let actionRecorder = ActionRecorder()
+        let observedContext = choiceObservedContext(
+            isPlanning: false,
+            execution: .manualOnly
+        )
+        let service = ForemanService(client: client)
+        let agent = ForemanAgent(
+            conversation: conversation,
+            foremanService: service,
+            goalRuntime: ForemanProjectGoalRuntime(),
+            onSendCommand: { terminalID, command in
+                await commandRecorder.record(terminalID: terminalID, command: command)
+                return true
+            },
+            onStatusChange: { _ in },
+            onAction: { action, thought in
+                Task {
+                    await actionRecorder.record(action: action, thought: thought)
+                }
+            }
+        )
+
+        await agent.start(
+            goal: "Continue the worker.",
+            mode: .interactive,
+            captureSnapshots: { observedContext.terminals },
+            captureObservedContext: { observedContext }
+        )
+
+        try await waitForStatus(.waitingForUser, in: conversation)
+
+        let commands = await commandRecorder.recordedCommands()
+        #expect(commands.isEmpty)
+        #expect(await client.agentStepCallCount() == 0)
+        #expect(await actionRecorder.recordedActions().isEmpty)
+    }
+
+    @Test
     func startAutonomousModeUsesWorkerSuggestionWithoutPlannerCall() async throws {
         let conversation = await MainActor.run { ForemanConversation() }
         let client = ScriptedForemanClient(responses: [
@@ -2233,6 +2247,64 @@ struct ForemanAgentTests {
         }
 
         #expect(await client.agentStepCallCount() == 0)
+    }
+
+    @Test
+    func startAutonomousModeUsesWorkerSuggestionWithoutSynthesizingForemanAction() async throws {
+        let conversation = await MainActor.run { ForemanConversation() }
+        let client = ScriptedForemanClient(responses: [
+            try makeStepResponse(
+                thought: "Foreman should not need to plan this.",
+                action: AgentAction.sendCommand(
+                    terminalID: "term-1",
+                    command: "1",
+                    reason: "Choose Keep current API."
+                )
+            ),
+        ])
+        let commandRecorder = CommandRecorder()
+        let actionRecorder = ActionRecorder()
+        let initialContext = choiceObservedContext(
+            isPlanning: false,
+            execution: .autonomousOK
+        )
+        let followupContext = runningObservedContextAfterSuggestedChoice()
+        let contextSource = await MainActor.run {
+            MutableObservedContextSource(initialContext)
+        }
+        let service = ForemanService(client: client)
+        let agent = ForemanAgent(
+            conversation: conversation,
+            foremanService: service,
+            goalRuntime: ForemanProjectGoalRuntime(),
+            onSendCommand: { terminalID, command in
+                await commandRecorder.record(terminalID: terminalID, command: command)
+                contextSource.current = followupContext
+                return true
+            },
+            onStatusChange: { _ in },
+            onAction: { action, thought in
+                Task {
+                    await actionRecorder.record(action: action, thought: thought)
+                }
+            }
+        )
+
+        await agent.start(
+            goal: "Continue the worker.",
+            mode: .autonomous,
+            captureSnapshots: { contextSource.current.terminals },
+            captureObservedContext: { contextSource.current }
+        )
+
+        try await waitFor {
+            let commands = await commandRecorder.recordedCommands()
+            let isRunning = await MainActor.run { conversation.isRunning }
+            return commands.contains { $0.terminalID == "term-1" && $0.command == "1" } && !isRunning
+        }
+
+        #expect(await client.agentStepCallCount() == 0)
+        #expect(await actionRecorder.recordedActions().isEmpty)
     }
 
     @Test
@@ -2593,6 +2665,23 @@ private actor CommandRecorder {
     }
 }
 
+private actor ActionRecorder {
+    struct RecordedAction: Equatable, Sendable {
+        let action: AgentAction
+        let thought: String
+    }
+
+    private var actions: [RecordedAction] = []
+
+    func record(action: AgentAction, thought: String) {
+        actions.append(.init(action: action, thought: thought))
+    }
+
+    func recordedActions() -> [RecordedAction] {
+        actions
+    }
+}
+
 private func pendingAttentionSignature(_ attention: PendingAgentAttention?) -> ForemanAgentTests.PendingAttentionSignature? {
     guard let attention else { return nil }
     return .init(
@@ -2626,14 +2715,15 @@ private func draftPendingAttentionCase(
     snapshots: [TerminalSnapshot],
     observedContext: ForemanObservedTerminalContext? = nil,
     event: AgentNeedsAttentionEvent,
-    replyDraft: AgentReplyDraftResponse,
+    replyDraft: AgentReplyDraftResponse? = nil,
     goalRuntime: ForemanProjectGoalRuntime = ForemanProjectGoalRuntime()
 ) async throws -> (
     signature: ForemanAgentTests.PendingAttentionSignature?,
-    understanding: ForemanAgentTests.UnderstandingSignature?
+    understanding: ForemanAgentTests.UnderstandingSignature?,
+    replyDraftCallCount: Int
 ) {
     let conversation = await MainActor.run { ForemanConversation() }
-    let client = ScriptedForemanClient(replyDrafts: [replyDraft])
+    let client = ScriptedForemanClient(replyDrafts: replyDraft.map { [$0] } ?? [])
     let commandRecorder = CommandRecorder()
     let agent = makeAgent(
         conversation: conversation,
@@ -2652,10 +2742,12 @@ private func draftPendingAttentionCase(
     let commands = await commandRecorder.recordedCommands()
     #expect(commands.isEmpty)
     let understandings = await client.recordedUnderstandings()
+    let replyDraftCallCount = await client.replyDraftCallCount()
 
     return (
         signature: pendingAttentionSignature(attention),
-        understanding: understandingSignature(understandings.first?.first)
+        understanding: understandingSignature(understandings.first?.first),
+        replyDraftCallCount: replyDraftCallCount
     )
 }
 
