@@ -11,9 +11,10 @@ struct ForemanSidebarView: View {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("AI Foreman")
                         .font(.system(size: 18, weight: .bold))
-                    Text("Summaries, queue state, and the next reviewed terminal drafts.")
+                    Text(store.rollupStatusText ?? "Summaries, queue state, and the next reviewed terminal drafts.")
                         .font(.system(size: 12))
                         .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
 
                 Spacer(minLength: 8)
@@ -59,6 +60,66 @@ struct ForemanSidebarView: View {
                             onLaunch: { identity in
                                 store.onLaunchAgent?(identity)
                             }
+                        )
+                    }
+
+                    if let attentionSummary = store.attentionSummaryText {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Attention Summary")
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(.secondary)
+                            Text(attentionSummary)
+                                .font(.system(size: 12))
+                                .foregroundStyle(.primary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        .padding(12)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .fill(Color.orange.opacity(0.08))
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .stroke(Color.orange.opacity(0.18), lineWidth: 1)
+                        )
+                    }
+
+                    if let suggestion = store.selectedTerminalSuggestedWorkerAction {
+                        VStack(alignment: .leading, spacing: 4) {
+                            if let provenance = store.selectedTerminalSuggestionProvenance {
+                                Text(provenance)
+                                    .font(.system(size: 11, weight: .semibold))
+                                    .foregroundStyle(.secondary)
+                            }
+
+                            Text(suggestion.title)
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(.primary)
+
+                            if !suggestion.rationale.isEmpty {
+                                Text(suggestion.rationale)
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+
+                            if let planningNotice = store.selectedTerminalPlanningNotice {
+                                Text(planningNotice)
+                                    .font(.system(size: 11, weight: .medium))
+                                    .foregroundStyle(.orange)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                        .padding(12)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .fill(Color.accentColor.opacity(0.08))
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .stroke(Color.accentColor.opacity(0.18), lineWidth: 1)
                         )
                     }
 
@@ -168,7 +229,12 @@ struct ForemanSidebarView: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
 
-                if let selectedTerminalID = store.selectedTerminalID {
+                if let rollupStatusText = store.rollupStatusText {
+                    Text(rollupStatusText)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else if let selectedTerminalID = store.selectedTerminalID {
                     Text("Next terminal: \(selectedTerminalID)")
                         .font(.system(size: 11, weight: .medium, design: .monospaced))
                         .foregroundStyle(.secondary)

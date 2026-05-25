@@ -33,30 +33,43 @@ struct TerminalUnderstandingTests {
         )
     }
 
-    private func makeWorkerSnapshot() -> TerminalWorkerSnapshot {
+    private func makeWorkerSnapshot(
+        terminalID: String = "term-worker",
+        workerSessionID: String = "worker-session-1",
+        revision: Int = 3,
+        workerGoal: String? = "confirm the API direction",
+        identity: AgentIdentity = .codex,
+        lifecycle: TerminalWorkerLifecycle = .running,
+        attention: TerminalWorkerAttention = .replyRequired,
+        summary: String = "Waiting for an API decision.",
+        details: [String] = ["The worker asked whether the API should remain stable."],
+        runtimeFlags: [TerminalWorkerRuntimeFlag] = [],
+        request: TerminalWorkerSnapshot.Request? = .init(
+            id: "req-3",
+            kind: .reply,
+            prompt: "Should I keep the current API?",
+            options: []
+        ),
+        suggestions: [TerminalWorkerSnapshot.Suggestion] = []
+    ) -> TerminalWorkerSnapshot {
         TerminalWorkerSnapshot(
             schemaVersion: 1,
-            terminalID: "term-worker",
-            workerSessionID: "worker-session-1",
-            revision: 3,
+            terminalID: terminalID,
+            workerSessionID: workerSessionID,
+            revision: revision,
             observedAt: Date(timeIntervalSince1970: 1_748_222_222),
             ttlMilliseconds: 12_000,
-            workerGoal: "confirm the API direction",
-            agent: .init(identity: .codex),
+            workerGoal: workerGoal,
+            agent: .init(identity: identity),
             state: .init(
-                lifecycle: .running,
-                attention: .replyRequired,
-                summary: "Waiting for an API decision.",
-                details: ["The worker asked whether the API should remain stable."],
-                runtimeFlags: []
+                lifecycle: lifecycle,
+                attention: attention,
+                summary: summary,
+                details: details,
+                runtimeFlags: runtimeFlags
             ),
-            request: .init(
-                id: "req-3",
-                kind: .reply,
-                prompt: "Should I keep the current API?",
-                options: []
-            ),
-            suggestions: []
+            request: request,
+            suggestions: suggestions
         )
     }
 
@@ -1490,6 +1503,68 @@ struct TerminalUnderstandingTests {
         #expect(overview.summary == "term-2 is no longer available.")
         #expect(overview.changedTerminalIDs == ["term-2"])
         #expect(overview.primaryTerminalID == "term-2")
+    }
+
+    @Test
+    func adaptiveOverviewNamesMultipleWaitingTerminalsInsteadOfCollapsingToOne() {
+        let engine = TerminalUnderstandingEngine()
+        let replySnapshot = makeWorkerSnapshot(
+            terminalID: "term-1",
+            workerSessionID: "codex-session-1",
+            identity: .codex,
+            attention: .replyRequired,
+            summary: "Codex is waiting for a reply.",
+            details: ["Reply needed before the API work can continue."]
+        )
+        let approvalSnapshot = makeWorkerSnapshot(
+            terminalID: "term-2",
+            workerSessionID: "kimi-session-2",
+            identity: .kimi,
+            attention: .approvalRequired,
+            summary: "Kimi needs approval.",
+            details: ["Approval is required before running the command."],
+            request: .init(
+                id: "req-9",
+                kind: .approval,
+                prompt: "Approve the proposed command?",
+                options: []
+            )
+        )
+        let current = [
+            TerminalUnderstanding.preview(
+                terminalID: "term-1",
+                state: .waiting,
+                shortExplanation: "Codex is waiting for a reply.",
+                lastMeaningfulEvent: "Reply needed.",
+                importantDetails: replySnapshot.state.details,
+                suggestedNextActions: [],
+                agentIdentity: .codex,
+                agentInteractionState: .waitingText,
+                supportLevel: .firstClass,
+                workerSnapshot: replySnapshot
+            ),
+            TerminalUnderstanding.preview(
+                terminalID: "term-2",
+                state: .waiting,
+                shortExplanation: "Kimi needs approval.",
+                lastMeaningfulEvent: "Approval needed.",
+                importantDetails: approvalSnapshot.state.details,
+                suggestedNextActions: [],
+                agentIdentity: .kimi,
+                agentInteractionState: .waitingApproval,
+                supportLevel: .firstClass,
+                workerSnapshot: approvalSnapshot
+            ),
+        ]
+
+        let overview = engine.makeOverview(current: current, previous: [])
+
+        #expect(
+            overview.summary ==
+            "2 terminals need attention: term-1 reply required; term-2 approval required."
+        )
+        #expect(overview.changedTerminalIDs == ["term-1", "term-2"])
+        #expect(overview.primaryTerminalID == nil)
     }
 
     @Test

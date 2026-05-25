@@ -83,6 +83,49 @@ struct ForemanChatView: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 8)
 
+            if let planningNotice = store.selectedTerminalPlanningNotice {
+                sidebarNotice(
+                    title: "Planning Mode",
+                    message: planningNotice,
+                    tint: .orange
+                )
+                .padding(.horizontal, 16)
+                .padding(.bottom, 10)
+            }
+
+            if let suggestion = store.selectedTerminalSuggestedWorkerAction {
+                VStack(alignment: .leading, spacing: 6) {
+                    if let provenance = store.selectedTerminalSuggestionProvenance {
+                        Text(provenance)
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Text(suggestion.title)
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(.primary)
+
+                    if !suggestion.rationale.isEmpty {
+                        Text(suggestion.rationale)
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .padding(12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(Color.accentColor.opacity(0.08))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .stroke(Color.accentColor.opacity(0.2), lineWidth: 1)
+                )
+                .padding(.horizontal, 16)
+                .padding(.bottom, 10)
+            }
+
             if !store.resolvedTargetOptions.isEmpty {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Choose where the next message goes")
@@ -367,7 +410,8 @@ struct ForemanChatView: View {
     private var contextSubtitle: String? {
         switch store.resolvedSidebarTarget {
         case .terminalReply(let terminalID, _):
-            return store.terminalRows.first(where: { $0.terminalID == terminalID })?.summary
+            return store.workerSnapshotsByTerminalID[terminalID]?.state.summary
+                ?? store.terminalRows.first(where: { $0.terminalID == terminalID })?.summary
         case .project:
             return store.conversation.activeProjectGoal?.objective
         case .ambiguous:
@@ -430,6 +474,36 @@ struct ForemanChatView: View {
         guard !goal.isEmpty else { return }
         store.sendChatMessage("/goal set \(goal)")
     }
+}
+
+@ViewBuilder
+private func sidebarNotice(title: String, message: String, tint: Color) -> some View {
+    HStack(alignment: .top, spacing: 8) {
+        Image(systemName: "exclamationmark.triangle.fill")
+            .font(.system(size: 12))
+            .foregroundStyle(tint)
+
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(tint)
+            Text(message)
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+
+        Spacer(minLength: 0)
+    }
+    .padding(12)
+    .background(
+        RoundedRectangle(cornerRadius: 12, style: .continuous)
+            .fill(tint.opacity(0.08))
+    )
+    .overlay(
+        RoundedRectangle(cornerRadius: 12, style: .continuous)
+            .stroke(tint.opacity(0.18), lineWidth: 1)
+    )
 }
 
 private struct FlowingTargetOptions: View {

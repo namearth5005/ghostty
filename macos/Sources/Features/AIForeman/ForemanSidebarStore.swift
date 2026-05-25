@@ -161,6 +161,7 @@ final class ForemanSidebarStore: ObservableObject {
     @Published var activityLog: [DispatchActivityLogEntry]
     @Published var lastActionMessage: String?
     @Published private(set) var pendingAttentionByTerminalID: [String: PendingAgentAttention] = [:]
+    @Published private(set) var workerSnapshotsByTerminalID: [String: TerminalWorkerSnapshot] = [:]
 
     // Agentic conversation state
     @Published var conversation: ForemanConversation
@@ -336,6 +337,60 @@ final class ForemanSidebarStore: ObservableObject {
 
     var visibleConversationMessages: [ConversationMessage] {
         conversation.visibleMessages(selectedTerminalID: resolvedConversationTerminalID)
+    }
+
+    var selectedTerminalWorkerSnapshot: TerminalWorkerSnapshot? {
+        guard let selectedTerminalID else {
+            return nil
+        }
+
+        return workerSnapshotsByTerminalID[selectedTerminalID]
+    }
+
+    var selectedTerminalSuggestedWorkerAction: TerminalWorkerSnapshot.Suggestion? {
+        selectedTerminalWorkerSnapshot?.recommendedSuggestion
+            ?? selectedTerminalWorkerSnapshot?.suggestions.first
+    }
+
+    var selectedTerminalSuggestionProvenance: String? {
+        guard let snapshot = selectedTerminalWorkerSnapshot,
+              selectedTerminalSuggestedWorkerAction != nil else {
+            return nil
+        }
+
+        return "Suggested by \(snapshot.agent.identity.displayName ?? "worker")"
+    }
+
+    var selectedTerminalPlanningNotice: String? {
+        guard selectedTerminalWorkerSnapshot?.state.runtimeFlags.contains(.planning) == true else {
+            return nil
+        }
+
+        return "This worker is in plan mode. Review the plan before continuing."
+    }
+
+    var attentionSummaryText: String? {
+        let fragments = terminalRows.compactMap { row -> String? in
+            attentionSummaryFragment(for: row)
+        }
+
+        guard fragments.count > 1 else {
+            return nil
+        }
+
+        return "\(fragments.count) terminals need attention: \(fragments.joined(separator: "; "))."
+    }
+
+    var rollupStatusText: String? {
+        let summary = attentionSummaryText
+            ?? conversation.lastOverview?.summary
+            ?? selectedTerminalWorkerSnapshot?.state.summary
+
+        guard let summary, !summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return nil
+        }
+
+        return summary
     }
 
     var resolvedSidebarTarget: ForemanSidebarTarget {
@@ -519,6 +574,15 @@ final class ForemanSidebarStore: ObservableObject {
         reconcilePendingAttention(
             snapshots: snapshots,
             understandingsByTerminalID: understandingsByTerminalID
+        )
+        workerSnapshotsByTerminalID = Dictionary(
+            uniqueKeysWithValues: understandingsByTerminalID.compactMap { terminalID, understanding in
+                guard let workerSnapshot = understanding.workerSnapshot else {
+                    return nil
+                }
+
+                return (terminalID, workerSnapshot)
+            }
         )
 
         terminalRows = snapshots.map { snapshot in
@@ -908,5 +972,55 @@ final class ForemanSidebarStore: ObservableObject {
 
     private static func snapshotSummary(for snapshot: TerminalSnapshot) -> String {
         TerminalContentAnalyzer.analyze(snapshot).summary
+    }
+
+    private func attentionSummaryFragment(for row: TerminalSummaryRowModel) -> String? {
+        if let workerSnapshot = workerSnapshotsByTerminalID[row.terminalID],
+           let attentionText = attentionText(for: workerSnapshot.state.attention) {
+            return "\(row.terminalID) \(attentionText)"
+        }
+
+        if let pendingAttention = row.pendingAttention,
+           let attentionText = attentionText(for: pendingAttention.interactionState) {
+            return "\(row.terminalID) \(attentionText)"
+        }
+
+        if let interactionState = row.agentInteractionState,
+           let parsedState = AgentInteractionState(rawValue: interactionState),
+           let attentionText = attentionText(for: parsedState) {
+            return "\(row.terminalID) \(attentionText)"
+        }
+
+        return nil
+    }
+
+    private func attentionText(for attention: TerminalWorkerAttention) -> String? {
+        switch attention {
+        case .replyRequired:
+            return "reply required"
+        case .choiceRequired:
+            return "choice required"
+        case .approvalRequired:
+            return "approval required"
+        case .error:
+            return "error requires review"
+        case .none:
+            return nil
+        }
+    }
+
+    private func attentionText(for interactionState: AgentInteractionState) -> String? {
+        switch interactionState {
+        case .waitingText:
+            return "reply required"
+        case .waitingChoice:
+            return "choice required"
+        case .waitingApproval:
+            return "approval required"
+        case .error:
+            return "error requires review"
+        case .unknown, .running, .completed:
+            return nil
+        }
     }
 }

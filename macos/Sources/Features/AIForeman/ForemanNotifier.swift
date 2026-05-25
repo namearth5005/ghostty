@@ -33,23 +33,24 @@ class ForemanNotifier {
         content.sound = .default
 
         var shouldNotify = true
+        let terminalReference = report.terminalID
 
         switch (previous, report.outcome) {
         case (_, .failure):
-            content.title = "Command Failed"
-            content.body = "\(report.sentCommand) failed in terminal."
+            content.title = "Foreman Update"
+            content.body = report.summary ?? "\(terminalReference): \(report.sentCommand) failed."
 
         case (_, .success):
-            content.title = "Command Succeeded"
-            content.body = "\(report.sentCommand) completed successfully."
+            content.title = "Foreman Update"
+            content.body = report.summary ?? "\(terminalReference): \(report.sentCommand) completed successfully."
 
         case (_, .needsInput):
-            content.title = "Input Required"
-            content.body = "Terminal is waiting for input."
+            content.title = "Foreman Update"
+            content.body = report.summary ?? "\(terminalReference): waiting for input."
 
         case (_, .hung):
-            content.title = "Command Stuck"
-            content.body = "\(report.sentCommand) appears to be hung."
+            content.title = "Foreman Update"
+            content.body = report.summary ?? "\(terminalReference): \(report.sentCommand) appears to be hung."
 
         default:
             shouldNotify = false

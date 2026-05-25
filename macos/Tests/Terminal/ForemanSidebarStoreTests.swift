@@ -959,6 +959,129 @@ struct ForemanSidebarStoreTests {
 
     @MainActor
     @Test
+    func applySnapshotsExposesSelectedWorkerSnapshotAndSuggestionProvenance() {
+        let store = ForemanSidebarStore(selectedTerminalID: "term-1")
+        let snapshot = makeWorkerTerminalSnapshot(terminalID: "term-1", title: "Codex")
+        let workerSnapshot = makeWorkerSnapshot(
+            terminalID: "term-1",
+            workerSessionID: "codex-session-41",
+            revision: 41,
+            workerGoal: "stabilize the API",
+            identity: .codex,
+            attention: .replyRequired,
+            summary: "Codex is waiting for a reply.",
+            details: ["Asked whether the API should stay stable."],
+            runtimeFlags: [.planning],
+            request: .init(
+                id: "req-41",
+                kind: .reply,
+                prompt: "Should I preserve the API?",
+                options: []
+            ),
+            suggestions: [
+                .init(
+                    id: "preserve-api",
+                    kind: .reply,
+                    title: "Preserve the API",
+                    payload: .text("Preserve the current API and adapt the internals."),
+                    rationale: "Lowest migration risk.",
+                    recommended: true,
+                    execution: .manualOnly,
+                    requestID: "req-41"
+                ),
+            ]
+        )
+        let understanding = makeWorkerUnderstanding(
+            terminalID: "term-1",
+            shortExplanation: "Codex is waiting for a reply.",
+            lastMeaningfulEvent: "Should I preserve the API?",
+            agentIdentity: .codex,
+            interactionState: .waitingText,
+            workerSnapshot: workerSnapshot
+        )
+
+        store.applySnapshots([snapshot], understandingsByTerminalID: ["term-1": understanding])
+
+        #expect(store.selectedTerminalWorkerSnapshot == workerSnapshot)
+        #expect(store.selectedTerminalSuggestedWorkerAction?.title == "Preserve the API")
+        #expect(store.selectedTerminalSuggestionProvenance == "Suggested by Codex")
+        #expect(
+            store.selectedTerminalPlanningNotice ==
+            "This worker is in plan mode. Review the plan before continuing."
+        )
+    }
+
+    @MainActor
+    @Test
+    func attentionSummaryTextNamesMultipleWaitingWorkers() {
+        let store = ForemanSidebarStore()
+        let replySnapshot = makeWorkerSnapshot(
+            terminalID: "term-1",
+            workerSessionID: "codex-session-41",
+            revision: 41,
+            workerGoal: "stabilize the API",
+            identity: .codex,
+            attention: .replyRequired,
+            summary: "Codex is waiting for a reply.",
+            details: ["Reply needed before the API work can continue."],
+            request: .init(
+                id: "req-41",
+                kind: .reply,
+                prompt: "Should I preserve the API?",
+                options: []
+            )
+        )
+        let approvalSnapshot = makeWorkerSnapshot(
+            terminalID: "term-2",
+            workerSessionID: "kimi-session-9",
+            revision: 9,
+            workerGoal: "verify the deployment step",
+            identity: .kimi,
+            attention: .approvalRequired,
+            summary: "Kimi needs approval.",
+            details: ["Approval is required before running the command."],
+            request: .init(
+                id: "req-9",
+                kind: .approval,
+                prompt: "Approve the proposed command?",
+                options: []
+            )
+        )
+        let understandingsByTerminalID = [
+            "term-1": makeWorkerUnderstanding(
+                terminalID: "term-1",
+                shortExplanation: "Codex is waiting for a reply.",
+                lastMeaningfulEvent: "Reply needed.",
+                agentIdentity: .codex,
+                interactionState: .waitingText,
+                workerSnapshot: replySnapshot
+            ),
+            "term-2": makeWorkerUnderstanding(
+                terminalID: "term-2",
+                shortExplanation: "Kimi needs approval.",
+                lastMeaningfulEvent: "Approval needed.",
+                agentIdentity: .kimi,
+                interactionState: .waitingApproval,
+                workerSnapshot: approvalSnapshot
+            ),
+        ]
+
+        store.applySnapshots(
+            [
+                makeWorkerTerminalSnapshot(terminalID: "term-1", title: "Codex", isFocused: true),
+                makeWorkerTerminalSnapshot(terminalID: "term-2", title: "Kimi", isFocused: false),
+            ],
+            understandingsByTerminalID: understandingsByTerminalID
+        )
+
+        #expect(
+            store.attentionSummaryText ==
+            "2 terminals need attention: term-1 reply required; term-2 approval required."
+        )
+    }
+
+    @MainActor
+    @Test
     func sendChatMessageRoutesTerminalRepliesThroughUnifiedIntent() {
         let store = ForemanSidebarStore(selectedTerminalID: "term-1")
         store.applySnapshots([
@@ -1168,6 +1291,81 @@ struct ForemanSidebarStoreTests {
             description: "Select the continue option.",
             detail: "1. Continue\n2. Stop",
             actions: actions
+        )
+    }
+
+    private func makeWorkerTerminalSnapshot(
+        terminalID: String,
+        title: String,
+        isFocused: Bool = true
+    ) -> TerminalSnapshot {
+        TerminalSnapshot.makePreview(
+            terminalID: terminalID,
+            windowID: "win-1",
+            tabID: "tab-\(terminalID)",
+            title: title,
+            cwd: "/tmp/project",
+            isFocused: isFocused,
+            visibleText: "Worker output",
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessName: title.lowercased()
+        )
+    }
+
+    private func makeWorkerSnapshot(
+        terminalID: String,
+        workerSessionID: String,
+        revision: Int,
+        workerGoal: String?,
+        identity: AgentIdentity,
+        attention: TerminalWorkerAttention,
+        summary: String,
+        details: [String],
+        runtimeFlags: [TerminalWorkerRuntimeFlag] = [],
+        request: TerminalWorkerSnapshot.Request?,
+        suggestions: [TerminalWorkerSnapshot.Suggestion] = []
+    ) -> TerminalWorkerSnapshot {
+        TerminalWorkerSnapshot(
+            schemaVersion: 1,
+            terminalID: terminalID,
+            workerSessionID: workerSessionID,
+            revision: revision,
+            observedAt: Date(timeIntervalSince1970: 1_748_222_222),
+            ttlMilliseconds: 15_000,
+            workerGoal: workerGoal,
+            agent: .init(identity: identity),
+            state: .init(
+                lifecycle: .blocked,
+                attention: attention,
+                summary: summary,
+                details: details,
+                runtimeFlags: runtimeFlags
+            ),
+            request: request,
+            suggestions: suggestions
+        )
+    }
+
+    private func makeWorkerUnderstanding(
+        terminalID: String,
+        shortExplanation: String,
+        lastMeaningfulEvent: String,
+        agentIdentity: AgentIdentity,
+        interactionState: AgentInteractionState,
+        workerSnapshot: TerminalWorkerSnapshot
+    ) -> TerminalUnderstanding {
+        TerminalUnderstanding.preview(
+            terminalID: terminalID,
+            state: .waiting,
+            shortExplanation: shortExplanation,
+            lastMeaningfulEvent: lastMeaningfulEvent,
+            importantDetails: workerSnapshot.state.details,
+            suggestedNextActions: [],
+            agentIdentity: agentIdentity,
+            agentInteractionState: interactionState,
+            supportLevel: .firstClass,
+            workerSnapshot: workerSnapshot
         )
     }
 
