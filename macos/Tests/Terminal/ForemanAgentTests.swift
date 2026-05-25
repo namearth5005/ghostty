@@ -1386,7 +1386,7 @@ struct ForemanAgentTests {
     }
 
     @Test
-    func draftPendingAttentionForKimiRepliesSharesParityAcrossLaunchPaths() async throws {
+    func draftPendingAttentionForKimiAuthoritativeReplyEscalatesWithoutLLMDraftAcrossLaunchPaths() async throws {
         let cases: [(terminalID: String, snapshots: [TerminalSnapshot])] = [
             ("kimi-existing", kimiReplySnapshots(terminalID: "kimi-existing", title: "shell", isFocused: true)),
             ("kimi-new-tab", kimiReplySnapshots(terminalID: "kimi-new-tab", title: "nambouchara@Nams-MacBook-Pro:~")),
@@ -1394,7 +1394,7 @@ struct ForemanAgentTests {
         ]
 
         var signatures: [PendingAttentionSignature] = []
-        var forwardedUnderstandings: [UnderstandingSignature] = []
+        var draftCallCounts: [Int] = []
 
         for entry in cases {
             let result = try await draftPendingAttentionCase(
@@ -1406,34 +1406,23 @@ struct ForemanAgentTests {
                     deltaText: "What would you like me to do here?",
                     timestamp: Date(timeIntervalSince1970: 1),
                     fingerprint: "\(entry.terminalID)|kimi|waitingText|next"
-                ),
-                replyDraft: try makeReplyDraftResponse(
-                    thought: "Kimi is asking what to do next.",
-                    suggestion: .replyToAgent(
-                        terminalID: entry.terminalID,
-                        message: "Read README.md and summarize what this project does.",
-                        reason: "Kimi has entered the mend repo and is asking for the next instruction.",
-                        confidence: 1.0
-                    )
                 )
             )
 
             signatures.append(try #require(result.signature))
-            forwardedUnderstandings.append(try #require(result.understanding))
+            draftCallCounts.append(result.replyDraftCallCount)
         }
 
         #expect(signatures.dropFirst().allSatisfy { $0 == signatures.first })
-        #expect(forwardedUnderstandings.dropFirst().allSatisfy { $0 == forwardedUnderstandings.first })
-        #expect(signatures.first?.title == "Suggested reply")
-        #expect(signatures.first?.description == "Kimi has entered the mend repo and is asking for the next instruction.")
-        #expect(signatures.first?.detail == "What would you like me to do here?")
-        #expect(signatures.first?.actions.first?.title == "Read README.md and summarize what this project does.")
-        #expect(forwardedUnderstandings.first?.interactionState == .waitingText)
-        #expect(forwardedUnderstandings.first?.interactionContext == .waitingText(question: "What would you like me to do here?"))
+        #expect(draftCallCounts.allSatisfy { $0 == 0 })
+        #expect(signatures.first?.title == "Needs direction")
+        #expect(signatures.first?.description == "What would you like me to do here?")
+        #expect(signatures.first?.detail == nil)
+        #expect(signatures.first?.actions.isEmpty == true)
     }
 
     @Test
-    func draftPendingAttentionForKimiAskHumanSharesParityAcrossLaunchPaths() async throws {
+    func draftPendingAttentionForKimiSavedGoalStillEscalatesAuthoritativeReplyAcrossLaunchPaths() async throws {
         let cases: [(terminalID: String, snapshots: [TerminalSnapshot])] = [
             ("kimi-existing", kimiReplySnapshots(terminalID: "kimi-existing", title: "shell", isFocused: true)),
             ("kimi-new-tab", kimiReplySnapshots(terminalID: "kimi-new-tab", title: "nambouchara@Nams-MacBook-Pro:~")),
@@ -1457,15 +1446,7 @@ struct ForemanAgentTests {
                     timestamp: Date(timeIntervalSince1970: 1),
                     fingerprint: "\(entry.terminalID)|kimi|waitingText|next"
                 ),
-                replyDraft: try makeReplyDraftResponse(
-                    thought: "The agent needs a goal from the human.",
-                    suggestion: .askHuman(
-                        terminalID: entry.terminalID,
-                        message: "What should Kimi do in the mend directory?",
-                        reason: "Kimi is asking for the next task and Foreman has no active user goal.",
-                        confidence: 1.0
-                    )
-                ),
+                replyDraft: nil,
                 goalRuntime: runtime
             )
 
@@ -1474,8 +1455,8 @@ struct ForemanAgentTests {
 
         #expect(signatures.dropFirst().allSatisfy { $0 == signatures.first })
         #expect(signatures.first?.title == "Needs direction")
-        #expect(signatures.first?.description == "What should Kimi do in the mend directory?")
-        #expect(signatures.first?.detail == "Kimi is asking for the next task and Foreman has no active user goal.")
+        #expect(signatures.first?.description == "What would you like me to do here?")
+        #expect(signatures.first?.detail == nil)
         #expect(signatures.first?.actions.isEmpty == true)
     }
 
