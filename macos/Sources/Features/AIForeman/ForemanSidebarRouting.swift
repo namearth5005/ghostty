@@ -191,25 +191,39 @@ struct ForemanSidebarRouter {
             )
         }
 
+        if let fingerprint = action.authoritativeFingerprint {
+            if let command = action.command {
+                return .init(
+                    target: target,
+                    outcome: .dispatch(
+                        .sendPendingAttentionAction(
+                            terminalID: terminalID,
+                            fingerprint: fingerprint,
+                            payload: command
+                        )
+                    )
+                )
+            }
+
+            if let payload = action.authoritativePayload {
+                return .init(
+                    target: target,
+                    outcome: .dispatch(
+                        .sendTerminalReply(
+                            terminalID: terminalID,
+                            fingerprint: fingerprint,
+                            message: payload
+                        )
+                    )
+                )
+            }
+        }
+
         if let command = action.command {
             return .init(
                 target: target,
                 outcome: .dispatch(
                     .sendTerminalCommand(terminalID: terminalID, command: command)
-                )
-            )
-        }
-
-        if let payload = action.authoritativePayload,
-           let fingerprint = action.authoritativeFingerprint {
-            return .init(
-                target: target,
-                outcome: .dispatch(
-                    .sendTerminalReply(
-                        terminalID: terminalID,
-                        fingerprint: fingerprint,
-                        message: payload
-                    )
                 )
             )
         }

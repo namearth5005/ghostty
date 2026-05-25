@@ -135,6 +135,72 @@ struct TerminalUnderstandingProjectorTests {
     }
 
     @Test
+    func authoritativeCommandSuggestionPreservesFingerprint() {
+        let snapshot = TerminalSnapshot.makePreview(
+            terminalID: "codex-term",
+            windowID: "win-1",
+            tabID: "tab-1",
+            title: "shell",
+            cwd: "/tmp/project",
+            isFocused: true,
+            visibleText: "Should I inspect the TODO list?",
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessName: "codex",
+            cursorIsAtPrompt: true,
+            usingAlternateScreen: true
+        )
+        let workerSnapshot = TerminalWorkerSnapshot(
+            schemaVersion: 1,
+            terminalID: "codex-term",
+            workerSessionID: "codex-session-42",
+            revision: 42,
+            observedAt: Date(timeIntervalSince1970: 1_748_222_223),
+            ttlMilliseconds: 15_000,
+            workerGoal: "inspect the TODO list",
+            agent: .init(identity: .codex),
+            state: .init(
+                lifecycle: .blocked,
+                attention: .replyRequired,
+                summary: "Codex is waiting for a reply.",
+                details: ["Asked whether to inspect the TODO list."],
+                runtimeFlags: []
+            ),
+            request: .init(
+                id: "req-42",
+                kind: .reply,
+                prompt: "Should I inspect the TODO list?",
+                options: []
+            ),
+            suggestions: [
+                .init(
+                    id: "inspect-todo",
+                    kind: .command,
+                    title: "Inspect the TODO list",
+                    payload: .command("rg -n TODO ."),
+                    rationale: "Quickest way to find the remaining work items.",
+                    recommended: true,
+                    execution: .manualOnly,
+                    requestID: "req-42"
+                ),
+            ]
+        )
+
+        let understanding = projector.project(
+            current: snapshot,
+            classification: Optional<AgentMeaningDetector.Detection>.none,
+            lastOutcome: Optional<TerminalOutcomeReport>.none,
+            lastEvent: "Should I inspect the TODO list?",
+            workerSnapshot: workerSnapshot
+        )
+
+        let action = try! #require(understanding.suggestedNextActions.first)
+        #expect(action.command == "rg -n TODO .")
+        #expect(action.authoritativeFingerprint == workerSnapshot.attentionFingerprint)
+        #expect(action.authoritativePayload == nil)
+    }
+
+    @Test
     func authoritativeProjectionIgnoresSuggestionsFromOlderRequests() {
         let snapshot = TerminalSnapshot.makePreview(
             terminalID: "codex-term",

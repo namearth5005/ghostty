@@ -1605,6 +1605,37 @@ struct ForemanSidebarStoreTests {
 
     @MainActor
     @Test
+    func executeSuggestionRoutesAuthoritativeCommandThroughUnifiedIntent() {
+        let store = ForemanSidebarStore()
+
+        var dispatchedIntent: ForemanSidebarIntent?
+        store.onDispatchSidebarIntent = { intent in
+            dispatchedIntent = intent
+        }
+
+        store.executeSuggestion(
+            terminalID: "term-1",
+            action: .init(
+                title: "Inspect the TODO list",
+                command: "rg -n TODO .",
+                reason: "Quickest way to find the remaining work items.",
+                isRecommended: true,
+                authoritativeFingerprint: "fp-cmd"
+            )
+        )
+
+        #expect(
+            dispatchedIntent ==
+            .sendPendingAttentionAction(
+                terminalID: "term-1",
+                fingerprint: "fp-cmd",
+                payload: "rg -n TODO ."
+            )
+        )
+    }
+
+    @MainActor
+    @Test
     func executePendingAttentionActionRoutesThroughUnifiedIntentWhenConfigured() {
         let store = ForemanSidebarStore()
         let action = PendingAgentAction(

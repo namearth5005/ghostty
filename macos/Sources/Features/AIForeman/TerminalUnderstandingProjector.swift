@@ -334,14 +334,15 @@ struct TerminalUnderstandingProjector {
         from suggestion: TerminalWorkerSnapshot.Suggestion,
         fingerprint: String
     ) -> TerminalSuggestedAction {
+        let command = command(for: suggestion.payload)
         let payload = workerPayload(for: suggestion.payload)
         let guidancePrompt = guidancePrompt(for: suggestion.payload)
         return TerminalSuggestedAction(
             title: suggestion.title,
-            command: command(for: suggestion.payload),
+            command: command,
             reason: suggestion.rationale,
             isRecommended: suggestion.recommended,
-            authoritativeFingerprint: payload == nil && guidancePrompt == nil ? nil : fingerprint,
+            authoritativeFingerprint: command == nil && payload == nil && guidancePrompt == nil ? nil : fingerprint,
             authoritativePayload: payload,
             guidancePrompt: guidancePrompt
         )
