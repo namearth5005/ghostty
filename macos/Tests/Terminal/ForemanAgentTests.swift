@@ -408,6 +408,84 @@ struct ForemanAgentTests {
     }
 
     @Test
+    func startDefersPlanningWhenAuthoritativeWorkerSnapshotIsStillRunning() async throws {
+        let conversation = await MainActor.run { ForemanConversation() }
+        let client = ScriptedForemanClient(
+            responses: [
+                try makeStepResponse(
+                    thought: "This should not run while Kimi is still working.",
+                    action: .declareStuck(reason: "Foreman should have deferred instead of planning.")
+                ),
+            ]
+        )
+        let commandRecorder = CommandRecorder()
+        let agent = makeAgent(
+            conversation: conversation,
+            client: client,
+            commandRecorder: commandRecorder
+        )
+        let snapshots = [
+            TerminalSnapshot.makePreview(
+                terminalID: "kimi-running",
+                windowID: "win-1",
+                tabID: "tab-1",
+                title: "Kimi Code",
+                cwd: "/tmp/project",
+                isFocused: true,
+                visibleText: "Kimi is actively working.",
+                recentScrollbackLines: [],
+                lastInputPreview: nil,
+                foregroundProcessName: "kimi",
+                cursorIsAtPrompt: false,
+                usingAlternateScreen: true
+            ),
+        ]
+        let observedContext = ForemanObservedContextBuilder()
+            .build(
+                snapshots: snapshots,
+                kimiWireRecordsByTerminalID: [
+                    "kimi-running": [
+                        KimiWireRecord(
+                            timestamp: 1,
+                            message: KimiWireMessage(
+                                type: "StepBegin",
+                                payload: KimiWirePayload()
+                            )
+                        ),
+                    ],
+                ]
+            )
+            .context
+
+        await agent.start(
+            goal: "Help Kimi finish the analysis",
+            mode: .interactive,
+            captureSnapshots: { snapshots },
+            captureObservedContext: { observedContext }
+        )
+
+        try await waitFor {
+            await MainActor.run {
+                conversation.status == .idle && conversation.isRunning == false
+            }
+        }
+
+        let stepCalls = await client.agentStepCallCount()
+        let messages = await MainActor.run { conversation.messages }
+        let runtimeState = await MainActor.run { conversation.runtimeState }
+        let lastUnderstandings = await MainActor.run { runtimeState.lastUnderstandings }
+
+        #expect(stepCalls == 0)
+        #expect(messages.isEmpty)
+        #expect(lastUnderstandings.first?.agentInteractionState == .running)
+        #expect(lastUnderstandings.first?.agentInteractionContext == .running(
+            stepDescription: "Kimi is actively working.",
+            sessionID: "kimi-kimi-running",
+            revision: 0
+        ))
+    }
+
+    @Test
     func genericCodexWireObservedContextKeepsStartParityAcrossLaunchPaths() async throws {
         let cases: [(terminalID: String, title: String, isFocused: Bool)] = [
             ("codex-wire-existing", "shell", true),

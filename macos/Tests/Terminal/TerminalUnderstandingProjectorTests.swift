@@ -135,6 +135,91 @@ struct TerminalUnderstandingProjectorTests {
     }
 
     @Test
+    func authoritativeWorkerLifecycleMapsToInteractionStateWhenAttentionIsNone() {
+        let snapshot = TerminalSnapshot.makePreview(
+            terminalID: "kimi-term",
+            windowID: "win-1",
+            tabID: "tab-1",
+            title: "Kimi Code",
+            cwd: "/tmp/project",
+            isFocused: true,
+            visibleText: "Kimi is applying the selected API direction.",
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessName: "kimi",
+            cursorIsAtPrompt: false,
+            usingAlternateScreen: true
+        )
+
+        let runningSnapshot = TerminalWorkerSnapshot(
+            schemaVersion: 1,
+            terminalID: "kimi-term",
+            workerSessionID: "kimi-session-12",
+            revision: 12,
+            observedAt: Date(timeIntervalSince1970: 1_748_333_334),
+            ttlMilliseconds: 15_000,
+            workerGoal: "compare API directions",
+            agent: .init(identity: .kimi),
+            state: .init(
+                lifecycle: .running,
+                attention: .none,
+                summary: "Kimi is applying the selected API direction.",
+                details: ["The worker is continuing with the approved choice."],
+                runtimeFlags: []
+            ),
+            request: nil,
+            suggestions: []
+        )
+        let completedSnapshot = TerminalWorkerSnapshot(
+            schemaVersion: 1,
+            terminalID: "kimi-term",
+            workerSessionID: "kimi-session-13",
+            revision: 13,
+            observedAt: Date(timeIntervalSince1970: 1_748_333_335),
+            ttlMilliseconds: 15_000,
+            workerGoal: "compare API directions",
+            agent: .init(identity: .kimi),
+            state: .init(
+                lifecycle: .completed,
+                attention: .none,
+                summary: "Kimi completed the API comparison.",
+                details: ["A recommended direction is ready."],
+                runtimeFlags: []
+            ),
+            request: nil,
+            suggestions: []
+        )
+
+        let runningUnderstanding = projector.project(
+            current: snapshot,
+            classification: Optional<AgentMeaningDetector.Detection>.none,
+            lastOutcome: Optional<TerminalOutcomeReport>.none,
+            lastEvent: "Kimi is applying the selected API direction.",
+            workerSnapshot: runningSnapshot
+        )
+        let completedUnderstanding = projector.project(
+            current: snapshot,
+            classification: Optional<AgentMeaningDetector.Detection>.none,
+            lastOutcome: Optional<TerminalOutcomeReport>.none,
+            lastEvent: "Kimi completed the API comparison.",
+            workerSnapshot: completedSnapshot
+        )
+
+        #expect(runningUnderstanding.agentInteractionState == .running)
+        #expect(runningUnderstanding.agentInteractionContext == .running(
+            stepDescription: "Kimi is applying the selected API direction.",
+            sessionID: "kimi-session-12",
+            revision: 12
+        ))
+        #expect(completedUnderstanding.agentInteractionState == .completed)
+        #expect(completedUnderstanding.agentInteractionContext == .completed(
+            summary: "Kimi completed the API comparison.",
+            sessionID: "kimi-session-13",
+            revision: 13
+        ))
+    }
+
+    @Test
     func codexWaitingTextProjectionKeepsManagedLaunchParity() {
         let question = "• Hello. What do you want to work on in ghostty?"
         let classification = AgentMeaningDetector.Detection(

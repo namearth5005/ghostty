@@ -148,6 +148,44 @@ struct ForemanObservedContextBuilderTests {
     }
 
     @Test
+    func kimiRunningWireBuildKeepsAuthoritativeRunningInteractionState() {
+        let snapshot = kimiInputSnapshot(
+            terminalID: "kimi-running",
+            title: "Kimi Code",
+            isFocused: true
+        )
+        let records = [
+            KimiWireRecord(
+                timestamp: 1,
+                message: KimiWireMessage(
+                    type: "StepBegin",
+                    payload: KimiWirePayload()
+                )
+            ),
+        ]
+
+        let result = builder.build(
+            snapshots: [snapshot],
+            kimiWireRecordsByTerminalID: [snapshot.terminalID: records]
+        )
+        let understanding = try! #require(result.context.understandings.first)
+        let workerSnapshot = try! #require(result.context.workerSnapshots[snapshot.terminalID])
+
+        #expect(workerSnapshot.state.lifecycle == .running)
+        #expect(workerSnapshot.state.attention == .none)
+        #expect(understanding.agentIdentity == .kimi)
+        #expect(understanding.agentInteractionState == .running)
+        #expect(
+            understanding.agentInteractionContext ==
+            .running(
+                stepDescription: "Kimi is actively working.",
+                sessionID: "kimi-\(snapshot.terminalID)",
+                revision: 0
+            )
+        )
+    }
+
+    @Test
     func codexPromptParitySurvivesObservedContextBuild() {
         let visibleText = """
         • Hello. What do you want to work on in ghostty?

@@ -68,7 +68,7 @@ struct TerminalUnderstandingProjector {
             cwd: current.cwd,
             state: state,
             agentIdentity: workerSnapshot.agent.identity,
-            agentInteractionState: interactionState(for: workerSnapshot.state.attention),
+            agentInteractionState: interactionState(for: workerSnapshot),
             supportLevel: .firstClass,
             lastMeaningfulEvent: authoritativeLastEvent,
             shortExplanation: workerSnapshot.state.summary,
@@ -236,11 +236,20 @@ struct TerminalUnderstandingProjector {
     }
 
     private func interactionState(
-        for attention: TerminalWorkerAttention
+        for workerSnapshot: TerminalWorkerSnapshot
     ) -> AgentInteractionState {
-        switch attention {
+        switch workerSnapshot.state.attention {
         case .none:
-            return .unknown
+            switch workerSnapshot.state.lifecycle {
+            case .running:
+                return .running
+            case .completed:
+                return .completed
+            case .failed:
+                return .error
+            case .idle, .blocked:
+                return .unknown
+            }
         case .replyRequired:
             return .waitingText
         case .choiceRequired:
