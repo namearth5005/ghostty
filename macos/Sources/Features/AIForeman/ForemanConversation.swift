@@ -47,8 +47,8 @@ final class ForemanConversation: ObservableObject {
 
     let maxIterations = 20
 
-    init(runtimeState: ForemanRuntimeState = ForemanRuntimeState()) {
-        self.runtimeState = runtimeState
+    init(runtimeState: ForemanRuntimeState? = nil) {
+        self.runtimeState = runtimeState ?? ForemanRuntimeState()
     }
 
     func start(goal: String, mode: AgentMode = .interactive) {
@@ -146,6 +146,16 @@ final class ForemanConversation: ObservableObject {
 
     var effectiveGoal: String? {
         runtimeState.effectiveGoal(fallbackGoal: goal)
+    }
+
+    var narrationContext: ForemanNarrationContext {
+        ForemanNarrationContext(
+            goal: effectiveGoal,
+            mode: mode,
+            iterationCount: iterationCount,
+            messages: messages,
+            hiddenContext: hiddenContext
+        )
     }
 
     var formattedHistory: String {

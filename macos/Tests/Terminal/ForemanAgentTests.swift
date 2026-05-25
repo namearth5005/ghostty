@@ -2663,7 +2663,7 @@ private actor ScriptedForemanClient: ForemanLLMClient {
     }
 
     func agentStep(
-        conversation: ForemanConversation,
+        narrationContext: ForemanNarrationContext,
         terminals: [TerminalSnapshot],
         understandings: [TerminalUnderstanding],
         overview: TerminalOverview,
@@ -2679,7 +2679,7 @@ private actor ScriptedForemanClient: ForemanLLMClient {
     }
 
     func agentStep(
-        conversation: ForemanConversation,
+        narrationContext: ForemanNarrationContext,
         terminals: [TerminalSnapshot],
         lastOutcome: TerminalOutcomeReport?
     ) async throws -> AgentStepResponse {
@@ -2691,7 +2691,7 @@ private actor ScriptedForemanClient: ForemanLLMClient {
     }
 
     func draftAgentReply(
-        conversation: ForemanConversation,
+        narrationContext: ForemanNarrationContext,
         event: AgentNeedsAttentionEvent,
         terminals: [TerminalSnapshot],
         understandings: [TerminalUnderstanding],
@@ -3133,7 +3133,7 @@ private actor FastPathRecordingForemanClient: ForemanLLMClient {
     }
 
     func agentStep(
-        conversation: ForemanConversation,
+        narrationContext: ForemanNarrationContext,
         terminals: [TerminalSnapshot],
         understandings: [TerminalUnderstanding],
         overview: TerminalOverview,
@@ -3143,7 +3143,7 @@ private actor FastPathRecordingForemanClient: ForemanLLMClient {
     }
 
     func agentStep(
-        conversation: ForemanConversation,
+        narrationContext: ForemanNarrationContext,
         terminals: [TerminalSnapshot],
         lastOutcome: TerminalOutcomeReport?
     ) async throws -> AgentStepResponse {
@@ -3151,7 +3151,7 @@ private actor FastPathRecordingForemanClient: ForemanLLMClient {
     }
 
     func draftAgentReply(
-        conversation: ForemanConversation,
+        narrationContext: ForemanNarrationContext,
         event: AgentNeedsAttentionEvent,
         terminals: [TerminalSnapshot],
         understandings: [TerminalUnderstanding],

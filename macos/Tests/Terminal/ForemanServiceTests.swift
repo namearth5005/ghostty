@@ -44,9 +44,10 @@ struct ForemanServiceTests {
         await MainActor.run {
             conversation.start(goal: "list all files", mode: .interactive)
         }
+        let narrationContext = await MainActor.run { conversation.narrationContext }
 
         let response = try await client.agentStep(
-            conversation: conversation,
+            narrationContext: narrationContext,
             terminals: [
                 .makePreview(
                     terminalID: "term-1",
@@ -72,7 +73,7 @@ struct ForemanServiceTests {
     }
 
     @Test
-    func openAIClientLegacyAgentStepReadsObservedContextFromRuntimeState() async throws {
+    func openAIClientAgentStepUsesExplicitNarrationAndObservedContext() async throws {
         let transport = RecordingResponsesTransport(
             payload: """
             {"thought":"Using runtime state.","action":{"type":"respond","message":"term-1 failed because `hfind` is not installed."}}
@@ -100,10 +101,21 @@ struct ForemanServiceTests {
                 understandings: [understanding]
             )
         }
+        let narrationContext = await MainActor.run { conversation.narrationContext }
+        let observedState = await MainActor.run {
+            (
+                runtimeState.lastUnderstandings,
+                runtimeState.lastWorkerSnapshots,
+                runtimeState.lastOverview
+            )
+        }
 
         _ = try await client.agentStep(
-            conversation: conversation,
+            narrationContext: narrationContext,
             terminals: sampleSnapshots(),
+            understandings: observedState.0,
+            workerSnapshots: observedState.1,
+            overview: try #require(observedState.2),
             lastOutcome: nil
         )
 
@@ -127,11 +139,13 @@ struct ForemanServiceTests {
             conversation.start(goal: "watch Kimi", mode: .interactive)
             conversation.addHiddenContext("Kimi in terminal term-1 is waiting for text input.")
         }
+        let narrationContext = await MainActor.run { conversation.narrationContext }
 
         _ = try await client.agentStep(
-            conversation: conversation,
+            narrationContext: narrationContext,
             terminals: sampleSnapshots(),
             understandings: [],
+            workerSnapshots: [:],
             overview: .init(summary: "term-1 waiting", changedTerminalIDs: ["term-1"], primaryTerminalID: "term-1"),
             lastOutcome: nil
         )
@@ -156,11 +170,13 @@ struct ForemanServiceTests {
                 "Kimi in terminal term-1 is waiting for text input.\n\nRecent output:\nWhat would you like me to do here?"
             )
         }
+        let narrationContext = await MainActor.run { conversation.narrationContext }
 
         _ = try await client.agentStep(
-            conversation: conversation,
+            narrationContext: narrationContext,
             terminals: sampleSnapshots(),
             understandings: [],
+            workerSnapshots: [:],
             overview: .init(summary: "term-1 waiting", changedTerminalIDs: ["term-1"], primaryTerminalID: "term-1"),
             lastOutcome: nil
         )
@@ -194,12 +210,14 @@ struct ForemanServiceTests {
             deltaText: "What would you like me to do here?",
             timestamp: Date(timeIntervalSince1970: 1)
         )
+        let narrationContext = await MainActor.run { conversation.narrationContext }
 
         let response = try await client.draftAgentReply(
-            conversation: conversation,
+            narrationContext: narrationContext,
             event: event,
             terminals: sampleSnapshots(),
             understandings: [],
+            workerSnapshots: [:],
             overview: .init(summary: "term-1 waiting", changedTerminalIDs: ["term-1"], primaryTerminalID: "term-1"),
             lastOutcome: nil
         )
@@ -235,9 +253,10 @@ struct ForemanServiceTests {
             changedTerminalIDs: ["term-1"],
             primaryTerminalID: "term-1"
         )
+        let narrationContext = await MainActor.run { conversation.narrationContext }
 
         _ = try await service.agentStep(
-            conversation: conversation,
+            narrationContext: narrationContext,
             terminals: sampleSnapshots(),
             understandings: [understanding],
             workerSnapshots: [:],
@@ -289,9 +308,10 @@ struct ForemanServiceTests {
                 ),
             ]
         )
+        let narrationContext = await MainActor.run { conversation.narrationContext }
 
         _ = try await service.agentStep(
-            conversation: conversation,
+            narrationContext: narrationContext,
             terminals: sampleSnapshots(),
             understandings: [],
             workerSnapshots: ["term-1": workerSnapshot],
@@ -321,9 +341,10 @@ struct ForemanServiceTests {
             changedTerminalIDs: ["term-1"],
             primaryTerminalID: "term-1"
         )
+        let narrationContext = await MainActor.run { conversation.narrationContext }
 
         _ = try await service.agentStep(
-            conversation: conversation,
+            narrationContext: narrationContext,
             terminals: sampleSnapshots(),
             understandings: [understanding],
             workerSnapshots: [:],
@@ -347,9 +368,10 @@ struct ForemanServiceTests {
             deltaText: "What should I work on next?",
             timestamp: Date(timeIntervalSince1970: 1)
         )
+        let narrationContext = await MainActor.run { conversation.narrationContext }
 
         let response = try await service.draftAgentReply(
-            conversation: conversation,
+            narrationContext: narrationContext,
             event: event,
             terminals: sampleSnapshots(),
             understandings: [],
@@ -417,9 +439,10 @@ struct ForemanServiceTests {
                 ),
             ]
         )
+        let narrationContext = await MainActor.run { conversation.narrationContext }
 
         _ = try await client.agentStep(
-            conversation: conversation,
+            narrationContext: narrationContext,
             terminals: sampleSnapshots(),
             understandings: [],
             workerSnapshots: ["term-1": workerSnapshot],
@@ -433,6 +456,34 @@ struct ForemanServiceTests {
         #expect(prompt.contains("Structured worker snapshots:"))
         #expect(prompt.contains("\"preserve-api\""))
         #expect(prompt.contains("\"worker_goal\":\"stabilize the API\""))
+    }
+
+    @Test
+    func serviceForwardsNarrationContextToClient() async throws {
+        let client = RecordingForemanClient()
+        let service = ForemanService(client: client)
+        let narrationContext = ForemanNarrationContext(
+            goal: "watch term-1",
+            mode: .interactive,
+            iterationCount: 2,
+            messages: [
+                ConversationMessage(role: .user, content: "watch term-1"),
+                ConversationMessage(role: .agent, content: "Kimi is waiting.")
+            ],
+            hiddenContext: ["Kimi in terminal term-1 is waiting for text input."]
+        )
+
+        _ = try await service.agentStep(
+            narrationContext: narrationContext,
+            terminals: sampleSnapshots(),
+            understandings: [],
+            workerSnapshots: [:],
+            overview: .init(summary: "term-1 waiting", changedTerminalIDs: ["term-1"], primaryTerminalID: "term-1"),
+            lastOutcome: nil
+        )
+
+        let recorded = await client.lastNarrationContext
+        #expect(recorded == narrationContext)
     }
 }
 
@@ -454,6 +505,7 @@ private func sampleSnapshots() -> [TerminalSnapshot] {
 }
 
 private actor RecordingForemanClient: ForemanLLMClient {
+    private(set) var lastNarrationContext: ForemanNarrationContext?
     private(set) var lastUnderstandings: [TerminalUnderstanding] = []
     private(set) var lastWorkerSnapshots: [String: TerminalWorkerSnapshot] = [:]
 
@@ -466,13 +518,14 @@ private actor RecordingForemanClient: ForemanLLMClient {
     }
 
     func agentStep(
-        conversation: ForemanConversation,
+        narrationContext: ForemanNarrationContext,
         terminals: [TerminalSnapshot],
         understandings: [TerminalUnderstanding],
         workerSnapshots: [String: TerminalWorkerSnapshot],
         overview: TerminalOverview,
         lastOutcome: TerminalOutcomeReport?
     ) async throws -> AgentStepResponse {
+        lastNarrationContext = narrationContext
         lastUnderstandings = understandings
         lastWorkerSnapshots = workerSnapshots
         return try makeStepResponse(
@@ -482,7 +535,7 @@ private actor RecordingForemanClient: ForemanLLMClient {
     }
 
     func agentStep(
-        conversation: ForemanConversation,
+        narrationContext: ForemanNarrationContext,
         terminals: [TerminalSnapshot],
         lastOutcome: TerminalOutcomeReport?
     ) async throws -> AgentStepResponse {
@@ -490,7 +543,7 @@ private actor RecordingForemanClient: ForemanLLMClient {
     }
 
     func draftAgentReply(
-        conversation: ForemanConversation,
+        narrationContext: ForemanNarrationContext,
         event: AgentNeedsAttentionEvent,
         terminals: [TerminalSnapshot],
         understandings: [TerminalUnderstanding],
@@ -498,6 +551,7 @@ private actor RecordingForemanClient: ForemanLLMClient {
         overview: TerminalOverview,
         lastOutcome: TerminalOutcomeReport?
     ) async throws -> AgentReplyDraftResponse {
+        lastNarrationContext = narrationContext
         lastUnderstandings = understandings
         lastWorkerSnapshots = workerSnapshots
         return AgentReplyDraftResponse(
@@ -524,7 +578,7 @@ private actor LegacyRecordingForemanClient: ForemanLLMClient {
     }
 
     func agentStep(
-        conversation: ForemanConversation,
+        narrationContext: ForemanNarrationContext,
         terminals: [TerminalSnapshot],
         lastOutcome: TerminalOutcomeReport?
     ) async throws -> AgentStepResponse {
@@ -552,7 +606,7 @@ private actor LegacyReplyDraftClient: ForemanLLMClient {
     }
 
     func agentStep(
-        conversation: ForemanConversation,
+        narrationContext: ForemanNarrationContext,
         terminals: [TerminalSnapshot],
         lastOutcome: TerminalOutcomeReport?
     ) async throws -> AgentStepResponse {
@@ -560,7 +614,7 @@ private actor LegacyReplyDraftClient: ForemanLLMClient {
     }
 
     func draftAgentReply(
-        conversation: ForemanConversation,
+        narrationContext: ForemanNarrationContext,
         event: AgentNeedsAttentionEvent,
         terminals: [TerminalSnapshot],
         understandings: [TerminalUnderstanding],

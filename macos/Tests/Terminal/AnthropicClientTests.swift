@@ -42,9 +42,10 @@ struct AnthropicClientTests {
         await MainActor.run {
             conversation.start(goal: "list all files", mode: .interactive)
         }
+        let narrationContext = await MainActor.run { conversation.narrationContext }
 
         let response = try await client.agentStep(
-            conversation: conversation,
+            narrationContext: narrationContext,
             terminals: [],
             lastOutcome: nil
         )
@@ -94,11 +95,13 @@ struct AnthropicClientTests {
             conversation.start(goal: "list files", mode: .interactive)
             conversation.addHiddenContext("Kimi in terminal term-1 is waiting for text input.")
         }
+        let narrationContext = await MainActor.run { conversation.narrationContext }
 
         _ = try await client.agentStep(
-            conversation: conversation,
+            narrationContext: narrationContext,
             terminals: sampleSnapshots(),
             understandings: understandings,
+            workerSnapshots: [:],
             overview: overview,
             lastOutcome: Optional<TerminalOutcomeReport>.none
         )
@@ -129,11 +132,13 @@ struct AnthropicClientTests {
                 "Kimi in terminal term-1 is waiting for text input.\n\nRecent output:\nWhat would you like me to do here?"
             )
         }
+        let narrationContext = await MainActor.run { conversation.narrationContext }
 
         _ = try await client.agentStep(
-            conversation: conversation,
+            narrationContext: narrationContext,
             terminals: sampleSnapshots(),
             understandings: [],
+            workerSnapshots: [:],
             overview: .init(summary: "term-1 waiting", changedTerminalIDs: ["term-1"], primaryTerminalID: "term-1"),
             lastOutcome: nil
         )
@@ -161,12 +166,14 @@ struct AnthropicClientTests {
             deltaText: "What would you like me to do here?",
             timestamp: Date(timeIntervalSince1970: 1)
         )
+        let narrationContext = await MainActor.run { conversation.narrationContext }
 
         let response = try await client.draftAgentReply(
-            conversation: conversation,
+            narrationContext: narrationContext,
             event: event,
             terminals: sampleSnapshots(),
             understandings: [],
+            workerSnapshots: [:],
             overview: .init(summary: "term-1 waiting", changedTerminalIDs: ["term-1"], primaryTerminalID: "term-1"),
             lastOutcome: nil
         )
@@ -228,9 +235,10 @@ struct AnthropicClientTests {
                 ),
             ]
         )
+        let narrationContext = await MainActor.run { conversation.narrationContext }
 
         _ = try await client.agentStep(
-            conversation: conversation,
+            narrationContext: narrationContext,
             terminals: sampleSnapshots(),
             understandings: [],
             workerSnapshots: ["term-1": workerSnapshot],

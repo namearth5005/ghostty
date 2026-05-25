@@ -107,18 +107,18 @@ struct AnthropicClient: ForemanLLMClient, Sendable {
     }
 
     func agentStep(
-        conversation: ForemanConversation,
+        narrationContext: ForemanNarrationContext,
         terminals: [TerminalSnapshot],
         understandings: [TerminalUnderstanding],
         workerSnapshots: [String: TerminalWorkerSnapshot],
         overview: TerminalOverview,
         lastOutcome: TerminalOutcomeReport?
     ) async throws -> AgentStepResponse {
-        let goal = await MainActor.run { conversation.effectiveGoal ?? "" }
-        let mode = await MainActor.run { conversation.mode.rawValue }
-        let iterationCount = await MainActor.run { conversation.iterationCount }
-        let messages = await MainActor.run { conversation.messages }
-        let hiddenContext = await MainActor.run { conversation.hiddenContext }
+        let goal = narrationContext.goal ?? ""
+        let mode = narrationContext.mode.rawValue
+        let iterationCount = narrationContext.iterationCount
+        let messages = narrationContext.messages
+        let hiddenContext = narrationContext.hiddenContext
         let latestUserMessage = messages.last(where: { $0.role == .user })?.content ?? goal
         let activeTurn = latestUserMessage.isEmpty ? hiddenContext.last ?? "" : latestUserMessage
 
@@ -148,7 +148,7 @@ struct AnthropicClient: ForemanLLMClient, Sendable {
     }
 
     func draftAgentReply(
-        conversation: ForemanConversation,
+        narrationContext: ForemanNarrationContext,
         event: AgentNeedsAttentionEvent,
         terminals: [TerminalSnapshot],
         understandings: [TerminalUnderstanding],
@@ -156,9 +156,9 @@ struct AnthropicClient: ForemanLLMClient, Sendable {
         overview: TerminalOverview,
         lastOutcome: TerminalOutcomeReport?
     ) async throws -> AgentReplyDraftResponse {
-        let goal = await MainActor.run { conversation.effectiveGoal ?? "" }
-        let messages = await MainActor.run { conversation.messages }
-        let hiddenContext = await MainActor.run { conversation.hiddenContext }
+        let goal = narrationContext.goal ?? ""
+        let messages = narrationContext.messages
+        let hiddenContext = narrationContext.hiddenContext
 
         let request = Request(
             model: plannerModel,
@@ -183,19 +183,16 @@ struct AnthropicClient: ForemanLLMClient, Sendable {
     }
 
     func agentStep(
-        conversation: ForemanConversation,
+        narrationContext: ForemanNarrationContext,
         terminals: [TerminalSnapshot],
         lastOutcome: TerminalOutcomeReport?
     ) async throws -> AgentStepResponse {
-        let overview = await MainActor.run { conversation.runtimeState.lastOverview } ?? Self.fallbackOverview(for: terminals)
-        let understandings = await MainActor.run { conversation.runtimeState.lastUnderstandings }
-        let workerSnapshots = await MainActor.run { conversation.runtimeState.lastWorkerSnapshots }
         return try await agentStep(
-            conversation: conversation,
+            narrationContext: narrationContext,
             terminals: terminals,
-            understandings: understandings,
-            workerSnapshots: workerSnapshots,
-            overview: overview,
+            understandings: [],
+            workerSnapshots: [:],
+            overview: Self.fallbackOverview(for: terminals),
             lastOutcome: lastOutcome
         )
     }

@@ -151,7 +151,7 @@ private actor SessionTestClient: ForemanLLMClient {
     }
 
     func agentStep(
-        conversation: ForemanConversation,
+        narrationContext: ForemanNarrationContext,
         terminals: [TerminalSnapshot],
         understandings: [TerminalUnderstanding],
         overview: TerminalOverview,
@@ -164,7 +164,7 @@ private actor SessionTestClient: ForemanLLMClient {
     }
 
     func agentStep(
-        conversation: ForemanConversation,
+        narrationContext: ForemanNarrationContext,
         terminals: [TerminalSnapshot],
         lastOutcome: TerminalOutcomeReport?
     ) async throws -> AgentStepResponse {
@@ -175,7 +175,7 @@ private actor SessionTestClient: ForemanLLMClient {
     }
 
     func draftAgentReply(
-        conversation: ForemanConversation,
+        narrationContext: ForemanNarrationContext,
         event: AgentNeedsAttentionEvent,
         terminals: [TerminalSnapshot],
         understandings: [TerminalUnderstanding],

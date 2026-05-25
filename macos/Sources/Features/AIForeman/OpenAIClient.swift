@@ -127,18 +127,18 @@ struct OpenAIClient: ForemanLLMClient, Sendable {
     }
 
     func agentStep(
-        conversation: ForemanConversation,
+        narrationContext: ForemanNarrationContext,
         terminals: [TerminalSnapshot],
         understandings: [TerminalUnderstanding],
         workerSnapshots: [String: TerminalWorkerSnapshot],
         overview: TerminalOverview,
         lastOutcome: TerminalOutcomeReport?
     ) async throws -> AgentStepResponse {
-        let goal = await MainActor.run { conversation.effectiveGoal ?? "" }
-        let mode = await MainActor.run { conversation.mode.rawValue }
-        let iterationCount = await MainActor.run { conversation.iterationCount }
-        let messages = await MainActor.run { conversation.messages }
-        let hiddenContext = await MainActor.run { conversation.hiddenContext }
+        let goal = narrationContext.goal ?? ""
+        let mode = narrationContext.mode.rawValue
+        let iterationCount = narrationContext.iterationCount
+        let messages = narrationContext.messages
+        let hiddenContext = narrationContext.hiddenContext
         let latestUserMessage = messages.last(where: { $0.role == .user })?.content ?? goal
         let activeTurn = latestUserMessage.isEmpty ? hiddenContext.last ?? "" : latestUserMessage
 
@@ -168,7 +168,7 @@ struct OpenAIClient: ForemanLLMClient, Sendable {
     }
 
     func draftAgentReply(
-        conversation: ForemanConversation,
+        narrationContext: ForemanNarrationContext,
         event: AgentNeedsAttentionEvent,
         terminals: [TerminalSnapshot],
         understandings: [TerminalUnderstanding],
@@ -176,9 +176,9 @@ struct OpenAIClient: ForemanLLMClient, Sendable {
         overview: TerminalOverview,
         lastOutcome: TerminalOutcomeReport?
     ) async throws -> AgentReplyDraftResponse {
-        let goal = await MainActor.run { conversation.effectiveGoal ?? "" }
-        let messages = await MainActor.run { conversation.messages }
-        let hiddenContext = await MainActor.run { conversation.hiddenContext }
+        let goal = narrationContext.goal ?? ""
+        let messages = narrationContext.messages
+        let hiddenContext = narrationContext.hiddenContext
 
         let request = Request(
             model: plannerModel,
@@ -203,19 +203,16 @@ struct OpenAIClient: ForemanLLMClient, Sendable {
     }
 
     func agentStep(
-        conversation: ForemanConversation,
+        narrationContext: ForemanNarrationContext,
         terminals: [TerminalSnapshot],
         lastOutcome: TerminalOutcomeReport?
     ) async throws -> AgentStepResponse {
-        let overview = await MainActor.run { conversation.runtimeState.lastOverview } ?? Self.fallbackOverview(for: terminals)
-        let understandings = await MainActor.run { conversation.runtimeState.lastUnderstandings }
-        let workerSnapshots = await MainActor.run { conversation.runtimeState.lastWorkerSnapshots }
         return try await agentStep(
-            conversation: conversation,
+            narrationContext: narrationContext,
             terminals: terminals,
-            understandings: understandings,
-            workerSnapshots: workerSnapshots,
-            overview: overview,
+            understandings: [],
+            workerSnapshots: [:],
+            overview: Self.fallbackOverview(for: terminals),
             lastOutcome: lastOutcome
         )
     }
@@ -477,22 +474,37 @@ extension OpenAIClient {
             }
         }
 
-        if let decoded: T = decode(type, from: cleaned, decoder: decoder) {
-            return decoded
+        var directDecodeError: Error?
+        do {
+            return try decode(type, from: cleaned, decoder: decoder)
+        } catch {
+            directDecodeError = error
         }
 
-        if let extracted = extractJSONObject(from: cleaned),
-           let decoded: T = decode(type, from: extracted, decoder: decoder) {
-            return decoded
+        var extractedDecodeError: Error?
+        if let extracted = extractJSONObject(from: cleaned) {
+            do {
+                return try decode(type, from: extracted, decoder: decoder)
+            } catch {
+                extractedDecodeError = error
+            }
         }
 
         let preview = String(cleaned.prefix(200))
-        throw OpenAIClientError.responseFailed("JSON parse error: The data couldn't be read because it isn't in the correct format. Response preview: \(preview)")
+        let details = [directDecodeError, extractedDecodeError]
+            .compactMap { $0?.localizedDescription }
+            .joined(separator: " | ")
+        let suffix = details.isEmpty ? "" : " Details: \(details)"
+        throw OpenAIClientError.responseFailed(
+            "JSON parse error: The data couldn't be read because it isn't in the correct format. Response preview: \(preview)\(suffix)"
+        )
     }
 
-    private static func decode<T: Decodable>(_ type: T.Type, from text: String, decoder: JSONDecoder) -> T? {
-        guard let data = text.data(using: .utf8) else { return nil }
-        return try? decoder.decode(type, from: data)
+    private static func decode<T: Decodable>(_ type: T.Type, from text: String, decoder: JSONDecoder) throws -> T {
+        guard let data = text.data(using: .utf8) else {
+            throw OpenAIClientError.invalidResponse
+        }
+        return try decoder.decode(type, from: data)
     }
 
     private static func extractJSONObject(from text: String) -> String? {

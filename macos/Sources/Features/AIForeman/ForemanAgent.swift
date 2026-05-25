@@ -217,6 +217,7 @@ actor ForemanAgent {
         let deltaTerminals = makeDeltaTerminals(from: terminals)
 
         storeObservedTerminals(observedTerminals)
+        let narrationContext = await MainActor.run { conversation.narrationContext }
 
         await MainActor.run {
             conversation.runtimeState.updateTerminalContext(
@@ -248,7 +249,7 @@ actor ForemanAgent {
         }
 
         let response = try await foremanService.draftAgentReply(
-            conversation: conversation,
+            narrationContext: narrationContext,
             event: event,
             terminals: deltaTerminals,
             understandings: understandings,
@@ -428,6 +429,7 @@ actor ForemanAgent {
             let deltaTerminals = makeDeltaTerminals(from: terminals)
 
             storeObservedTerminals(observedTerminals)
+            let narrationContext = await MainActor.run { conversation.narrationContext }
 
             await MainActor.run {
                 conversation.runtimeState.updateTerminalContext(
@@ -460,7 +462,7 @@ actor ForemanAgent {
             // 2. Plan (with delta-truncated terminal text to keep LLM context small)
             await setStatus(.planning)
             let response = try await foremanService.agentStep(
-                conversation: conversation,
+                narrationContext: narrationContext,
                 terminals: deltaTerminals,
                 understandings: understandings,
                 workerSnapshots: observedTerminals.workerSnapshots,
@@ -726,6 +728,7 @@ actor ForemanAgent {
         let deltaTerminals = makeDeltaTerminals(from: terminals)
 
         storeObservedTerminals(observedTerminals)
+        let narrationContext = await MainActor.run { conversation.narrationContext }
 
         await MainActor.run {
             conversation.runtimeState.updateTerminalContext(
@@ -758,7 +761,7 @@ actor ForemanAgent {
         // Plan
         await setStatus(.planning)
         let response = try await foremanService.agentStep(
-            conversation: conversation,
+            narrationContext: narrationContext,
             terminals: deltaTerminals,
             understandings: understandings,
             workerSnapshots: observedTerminals.workerSnapshots,
