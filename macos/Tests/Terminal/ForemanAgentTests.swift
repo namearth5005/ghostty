@@ -965,6 +965,7 @@ struct ForemanAgentTests {
     func uiPhaseTreatsAskUserAsAwaitingReply() {
         let phase = ConversationUIPhase.resolve(
             goal: "Investigate",
+            sessionGoal: "Investigate",
             isRunning: true,
             status: .waitingForUser,
             lastAction: .askUser(question: "What should I inspect?")
@@ -977,6 +978,7 @@ struct ForemanAgentTests {
     func uiPhaseTreatsInteractiveCommandAsAwaitingApproval() {
         let phase = ConversationUIPhase.resolve(
             goal: "List the files",
+            sessionGoal: "List the files",
             isRunning: true,
             status: .waitingForUser,
             lastAction: .sendCommand(terminalID: "term-1", command: "ls -la", reason: "Inspect files")
@@ -989,6 +991,7 @@ struct ForemanAgentTests {
     func uiPhaseCanAwaitApprovalWithoutGoal() {
         let phase = ConversationUIPhase.resolve(
             goal: nil,
+            sessionGoal: nil,
             isRunning: true,
             status: .waitingForUser,
             lastAction: .sendCommand(
@@ -1005,6 +1008,7 @@ struct ForemanAgentTests {
     func uiPhaseTreatsAmbiguousSidebarTargetAsChoosingTarget() {
         let phase = ConversationUIPhase.resolve(
             goal: "Coordinate the waiting terminals",
+            sessionGoal: nil,
             isRunning: false,
             status: .idle,
             lastAction: nil,
@@ -1024,6 +1028,7 @@ struct ForemanAgentTests {
     func uiPhaseTreatsCompletedSidebarGoalAsCompleted() {
         let phase = ConversationUIPhase.resolve(
             goal: "Ship the sidebar",
+            sessionGoal: nil,
             isRunning: false,
             status: .idle,
             lastAction: nil,
@@ -1031,6 +1036,32 @@ struct ForemanAgentTests {
         )
 
         #expect(phase == .goalCompleted)
+    }
+
+    @Test
+    func uiPhaseTreatsSavedInternalGoalAsGoalReady() {
+        let phase = ConversationUIPhase.resolve(
+            goal: "Evaluate AGENTS.md",
+            sessionGoal: nil,
+            isRunning: false,
+            status: .idle,
+            lastAction: nil
+        )
+
+        #expect(phase == .goalReady)
+    }
+
+    @Test
+    func uiPhaseKeepsIdleStartedSessionAsChatting() {
+        let phase = ConversationUIPhase.resolve(
+            goal: "Evaluate AGENTS.md",
+            sessionGoal: "Evaluate AGENTS.md",
+            isRunning: false,
+            status: .idle,
+            lastAction: nil
+        )
+
+        #expect(phase == .chatting)
     }
 
     @Test
@@ -1061,6 +1092,16 @@ struct ForemanAgentTests {
         )
 
         #expect(display == .complete)
+    }
+
+    @Test
+    func statusDisplayTreatsSavedGoalPhaseAsIdle() {
+        let display = ConversationStatusDisplay.resolve(
+            status: .idle,
+            phase: .goalReady
+        )
+
+        #expect(display == .idle)
     }
 
     // MARK: - Reactive Auto-Drive Tests

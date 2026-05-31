@@ -318,7 +318,7 @@ struct ForemanChatView: View {
                         Spacer()
                     }
 
-                case .readyToStart:
+                case .readyToStart, .goalReady:
                     VStack(alignment: .leading, spacing: 8) {
                         Picker("Mode", selection: $mode) {
                             Text("Interactive").tag(AgentMode.interactive)
@@ -327,22 +327,35 @@ struct ForemanChatView: View {
                         .pickerStyle(.segmented)
                         .controlSize(.small)
 
+                        if let savedGoal = savedProjectGoalText {
+                            Text("Saved goal: \(savedGoal)")
+                                .font(.system(size: 11))
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+
+                        TextField(startupGoalPlaceholder, text: $store.chatInput)
+                            .textFieldStyle(.roundedBorder)
+                            .onSubmit {
+                                saveGoalFromStartupState()
+                            }
+
                         HStack(spacing: 8) {
-                            TextField("What should I do?", text: $store.chatInput)
-                                .textFieldStyle(.roundedBorder)
-                                .onSubmit {
-                                    startAgent()
-                                }
+                            Button("Set Goal") {
+                                saveGoalFromStartupState()
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                            .disabled(store.chatInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
 
                             Button {
                                 startAgent()
                             } label: {
-                                Image(systemName: "play.fill")
-                                    .font(.system(size: 14, weight: .bold))
+                                Label("Start Foreman", systemImage: "play.fill")
                             }
                             .buttonStyle(.borderedProminent)
                             .controlSize(.small)
-                            .disabled(store.chatInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                            .disabled(store.startableGoal == nil)
                         }
                     }
                 }
@@ -372,14 +385,14 @@ struct ForemanChatView: View {
     }
 
     private func startAgent() {
-        let goal = store.chatInput.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !goal.isEmpty else { return }
+        guard let goal = store.startableGoal else { return }
         store.startAgent(goal: goal, mode: mode)
     }
 
     private var inputPhase: ConversationUIPhase {
         ConversationUIPhase.resolve(
             goal: store.conversation.effectiveGoal,
+            sessionGoal: store.conversation.goal,
             isRunning: store.conversation.isRunning,
             status: store.conversation.status,
             lastAction: store.visibleConversationMessages.last?.action,
@@ -473,6 +486,25 @@ struct ForemanChatView: View {
         let goal = store.chatInput.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !goal.isEmpty else { return }
         store.sendChatMessage("/goal set \(goal)")
+    }
+
+    private func saveGoalFromStartupState() {
+        let goal = store.chatInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !goal.isEmpty else { return }
+        store.sendChatMessage("/goal set \(goal)")
+    }
+
+    private var savedProjectGoalText: String? {
+        let savedGoal = store.runtimeState.activeProjectGoal?.objective
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let savedGoal, !savedGoal.isEmpty else {
+            return nil
+        }
+        return savedGoal
+    }
+
+    private var startupGoalPlaceholder: String {
+        savedProjectGoalText == nil ? "Set a project goal" : "Update the project goal"
     }
 }
 

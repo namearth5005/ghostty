@@ -348,6 +348,27 @@ final class ForemanSidebarStore: ObservableObject {
         onSendChatMessage?(text)
     }
 
+    var startableGoal: String? {
+        let draftedGoal = chatInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !draftedGoal.isEmpty {
+            return draftedGoal
+        }
+
+        if let activeGoal = runtimeState.activeProjectGoal?.objective
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !activeGoal.isEmpty
+        {
+            return activeGoal
+        }
+
+        let effectiveGoal = conversation.effectiveGoal?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let effectiveGoal, !effectiveGoal.isEmpty {
+            return effectiveGoal
+        }
+
+        return nil
+    }
+
     var visibleConversationMessages: [ConversationMessage] {
         conversation.visibleMessages(selectedTerminalID: resolvedConversationTerminalID)
     }

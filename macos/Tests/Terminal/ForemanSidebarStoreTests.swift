@@ -173,6 +173,37 @@ struct ForemanSidebarStoreTests {
 
     @MainActor
     @Test
+    func startableGoalFallsBackToSavedProjectGoal() {
+        let runtimeState = ForemanRuntimeState()
+        runtimeState.setActiveProjectGoal(
+            ForemanProjectGoal(
+                projectID: "/tmp/project",
+                objective: "Ship the startup goal split."
+            )
+        )
+        let store = ForemanSidebarStore(runtimeState: runtimeState)
+
+        #expect(store.startableGoal == "Ship the startup goal split.")
+    }
+
+    @MainActor
+    @Test
+    func startableGoalPrefersDraftedInputOverSavedProjectGoal() {
+        let runtimeState = ForemanRuntimeState()
+        runtimeState.setActiveProjectGoal(
+            ForemanProjectGoal(
+                projectID: "/tmp/project",
+                objective: "Saved goal"
+            )
+        )
+        let store = ForemanSidebarStore(runtimeState: runtimeState)
+        store.chatInput = "Use this updated goal."
+
+        #expect(store.startableGoal == "Use this updated goal.")
+    }
+
+    @MainActor
+    @Test
     func visibleConversationMessagesKeepsGlobalMessagesAndSelectedTerminalThread() {
         let conversation = ForemanConversation()
         conversation.addMessage(role: .user, content: "Coordinate these terminals.")

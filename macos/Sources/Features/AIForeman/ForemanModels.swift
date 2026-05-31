@@ -255,6 +255,7 @@ enum AgentAction: Codable, Equatable, Sendable {
 
 enum ConversationUIPhase: Equatable {
     case readyToStart
+    case goalReady
     case processing
     case awaitingApproval(command: String)
     case awaitingReply
@@ -264,6 +265,7 @@ enum ConversationUIPhase: Equatable {
 
     static func resolve(
         goal: String?,
+        sessionGoal: String?,
         isRunning: Bool,
         status: AgentStatus,
         lastAction: AgentAction?,
@@ -289,6 +291,10 @@ enum ConversationUIPhase: Equatable {
         }
 
         guard goal != nil else { return .readyToStart }
+
+        if sessionGoal == nil && !isRunning {
+            return .goalReady
+        }
 
         if isRunning {
             switch status {
@@ -324,6 +330,8 @@ enum ConversationStatusDisplay: Equatable {
             return .awaitingReply
         case .goalCompleted:
             return .complete
+        case .goalReady:
+            return .idle
         case .chatting:
             return .chatting
         case .readyToStart:
