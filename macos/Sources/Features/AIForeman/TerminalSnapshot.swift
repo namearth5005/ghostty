@@ -254,7 +254,6 @@ struct TerminalSnapshot: Codable, Equatable, Sendable {
         [
             "building",
             "compiling",
-            "running",
             "watching",
             "bundling",
             "transpiling",

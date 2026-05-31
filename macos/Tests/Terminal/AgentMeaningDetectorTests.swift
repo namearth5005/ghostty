@@ -104,6 +104,64 @@ struct AgentMeaningDetectorTests {
     }
 
     @Test
+    func codexPromptOutranksStaleWireRunningState() {
+        let snapshot = TerminalSnapshot.makePreview(
+            terminalID: "codex-term",
+            windowID: "win-1",
+            tabID: "tab-1",
+            title: "OpenAI Codex",
+            cwd: "/tmp/project",
+            isFocused: true,
+            visibleText: """
+            You're running a debug build of Ghostty! Performance will be degraded.
+
+            gpt-5.4 medium · ~/tmp/project
+            """,
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessName: "codex",
+            cursorIsAtPrompt: true,
+            usingAlternateScreen: true
+        )
+        let wireRecord = CodexWireRecord(
+            timestamp: "2026-05-31T07:30:00Z",
+            type: "event_msg",
+            payload: CodexWirePayload(
+                id: nil,
+                cwd: "/tmp/project",
+                originator: nil,
+                cliVersion: nil,
+                type: "task_started",
+                turnId: "turn-1",
+                startedAt: 1,
+                completedAt: nil,
+                durationMs: nil,
+                reason: nil,
+                lastAgentMessage: nil,
+                callId: nil,
+                processId: nil,
+                command: nil,
+                status: nil,
+                message: nil,
+                phase: nil
+            )
+        )
+
+        let detection = detector.detect(
+            current: snapshot,
+            previous: nil,
+            lastOutcome: nil,
+            lastEvent: "gpt-5.4 medium · ~/tmp/project",
+            codexWireRecords: [wireRecord]
+        )
+
+        #expect(detection?.identity == .codex)
+        #expect(detection?.interactionState == .unknown)
+        #expect(detection?.runtimeState == .idle)
+        #expect(detection?.context == AgentInteractionContext.none)
+    }
+
+    @Test
     func successfulOutcomeMapsToCompleted() {
         let snapshot = TerminalSnapshot.makePreview(
             terminalID: "codex-term",
