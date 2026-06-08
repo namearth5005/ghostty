@@ -52,6 +52,24 @@ class ForemanNotifier {
         UNUserNotificationCenter.current().add(request)
     }
 
+    /// Notify the user about a pending proposal when the app is not in the foreground.
+    func notifyProposal(terminalID: String, summary: String) {
+        guard authorized else { return }
+        guard !NSApp.isActive else { return }
+
+        let content = UNMutableNotificationContent()
+        content.title = "Foreman needs you"
+        content.body = summary
+        content.sound = .default
+
+        let request = UNNotificationRequest(
+            identifier: "foreman-proposal-\(terminalID)",
+            content: content,
+            trigger: nil
+        )
+        UNUserNotificationCenter.current().add(request)
+    }
+
     private func isAppFocusedAndSidebarVisible() -> Bool {
         guard NSApp.isActive else { return false }
         guard let keyWindow = NSApp.keyWindow else { return false }

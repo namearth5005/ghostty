@@ -2073,8 +2073,56 @@ extension AppDelegate {
                 controller.proposalStore.clear(terminalID: snapshot.terminalID)
                 return
             }
+            let isNew = controller.proposalStore.current?.id != proposal.id
+            bindProposalCallbacks(for: controller)
             controller.proposalStore.present(proposal)
+            if isNew {
+                ForemanNotifier.shared.notifyProposal(
+                    terminalID: proposal.terminalID,
+                    summary: proposal.summary
+                )
+            }
         }
+    }
+
+    @MainActor
+    private func bindProposalCallbacks(for controller: TerminalController) {
+        guard controller.proposalStore.onApprove == nil else { return }
+        controller.proposalStore.onApprove = { [weak self, weak controller] proposal, payload in
+            guard let self, let controller else { return }
+            self.sendProposalReply(
+                terminalID: proposal.terminalID,
+                fingerprint: proposal.fingerprint,
+                payload: payload,
+                store: controller.proposalStore
+            )
+        }
+        controller.proposalStore.onReject = { proposal in
+            DebugLogger.log("[Foreman] proposal rejected for \(proposal.terminalID)")
+        }
+    }
+
+    @MainActor
+    func sendProposalReply(
+        terminalID: String,
+        fingerprint: String,
+        payload: String,
+        store: ProposalStore
+    ) {
+        guard let controller = terminalController(for: terminalID) else {
+            store.errorMessage = "This terminal is no longer available."
+            return
+        }
+
+        let item = DispatchQueueItem(terminalID: terminalID, message: payload)
+        guard dispatchQueueCoordinator.send(item, through: controller) else {
+            store.errorMessage = "Couldn't send to the terminal. Try again."
+            return
+        }
+
+        registerTerminalOutcomeTracking(terminalID: terminalID, sentCommand: payload)
+        agentStateMonitor.resolve(terminalID: terminalID, fingerprint: fingerprint)
+        store.errorMessage = nil
     }
 
     /// An async summary source backed by the configured LLM, or one that always
