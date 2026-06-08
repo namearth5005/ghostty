@@ -153,6 +153,7 @@ final class ForemanSidebarStore: ObservableObject {
     @Published var dispatchQueue: [DispatchQueueItem]
     @Published var userInstruction: String
     @Published var selectedTerminalID: String?
+    @Published var preferredSidebarTarget: ForemanSidebarTargetPreference?
     @Published var isSidebarVisible: Bool
     @Published var planSummary: String?
     @Published var errorMessage: String?
@@ -160,21 +161,29 @@ final class ForemanSidebarStore: ObservableObject {
     @Published var activityLog: [DispatchActivityLogEntry]
     @Published var lastActionMessage: String?
     @Published private(set) var pendingAttentionByTerminalID: [String: PendingAgentAttention] = [:]
+    @Published private(set) var workerSnapshotsByTerminalID: [String: TerminalWorkerSnapshot] = [:]
 
     // Agentic conversation state
     @Published var conversation: ForemanConversation
+    @Published var runtimeState: ForemanRuntimeState
     @Published var chatInput: String = ""
     @Published var isAgentRunning: Bool = false
     @Published var agentReadiness: [(AgentIdentity, AgentReadinessState)] = []
+    private(set) var sidebarSession: ForemanSidebarSessionControlling?
+    private let sidebarRouter = ForemanSidebarRouter()
     var onStartAgent: ((String, AgentMode) -> Void)?
     var onSendChatMessage: ((String) -> Void)?
     var onStopAgent: (() -> Void)?
     var onApproveAction: (() -> Void)?
     var onSkipAction: (() -> Void)?
     var onLaunchAgent: ((AgentIdentity) -> Void)?
+    var onDispatchSidebarIntent: ((ForemanSidebarIntent) -> Void)?
     var onExecuteSuggestion: ((String, String) -> Void)?
     var onExecutePendingAttentionAction: ((PendingAgentAttention, PendingAgentAction) -> Void)?
 
+    private var latestSnapshots: [TerminalSnapshot] = []
+    private var latestSummariesByTerminalID: [String: TerminalSummary] = [:]
+    private var latestUnderstandingsByTerminalID: [String: TerminalUnderstanding] = [:]
     private var cancellables = Set<AnyCancellable>()
 
     @MainActor
@@ -183,30 +192,46 @@ final class ForemanSidebarStore: ObservableObject {
         dispatchQueue: [DispatchQueueItem] = [],
         userInstruction: String = "",
         selectedTerminalID: String? = nil,
+        preferredSidebarTarget: ForemanSidebarTargetPreference? = nil,
         isSidebarVisible: Bool = false,
         planSummary: String? = nil,
         errorMessage: String? = nil,
         isGeneratingDrafts: Bool = false,
         activityLog: [DispatchActivityLogEntry] = [],
         lastActionMessage: String? = nil,
-        conversation: ForemanConversation? = nil
+        conversation: ForemanConversation? = nil,
+        runtimeState: ForemanRuntimeState? = nil
     ) {
+        let resolvedRuntimeState = runtimeState ?? conversation?.runtimeState ?? ForemanRuntimeState()
+        let resolvedConversation = conversation ?? ForemanConversation(runtimeState: resolvedRuntimeState)
+        assert(conversation == nil || runtimeState == nil || conversation!.runtimeState === resolvedRuntimeState)
+
         self.terminalRows = terminalRows
         self.dispatchQueue = dispatchQueue
         self.userInstruction = userInstruction
         self.selectedTerminalID = selectedTerminalID
+        self.preferredSidebarTarget = preferredSidebarTarget
         self.isSidebarVisible = isSidebarVisible
         self.planSummary = planSummary
         self.errorMessage = errorMessage
         self.isGeneratingDrafts = isGeneratingDrafts
         self.activityLog = activityLog
         self.lastActionMessage = lastActionMessage
-        self.conversation = conversation ?? ForemanConversation()
+        self.conversation = resolvedConversation
+        self.runtimeState = resolvedRuntimeState
 
         // Forward conversation changes so SwiftUI re-renders the sidebar
         self.conversation.objectWillChange.sink { [weak self] _ in
             self?.objectWillChange.send()
         }.store(in: &cancellables)
+        self.runtimeState.objectWillChange.sink { [weak self] _ in
+            self?.objectWillChange.send()
+        }.store(in: &cancellables)
+        self.runtimeState.$activeProjectGoal.sink { [weak self] goal in
+            self?.refreshTerminalRowsForGoalState(goal)
+        }.store(in: &cancellables)
+
+        refreshTerminalRowsForGoalState(self.runtimeState.activeProjectGoal)
     }
 
     static var preview: ForemanSidebarStore {
@@ -304,17 +329,138 @@ final class ForemanSidebarStore: ObservableObject {
     }
 
     func sendChatMessage(_ text: String) {
+        if ForemanProjectGoalCommand.parse(text) != nil {
+            chatInput = ""
+            onSendChatMessage?(text)
+            return
+        }
+
+        if let onDispatchSidebarIntent {
+            let routeResult = sidebarRouter.resolveChatInput(text, state: routingState())
+            applyRouteResult(routeResult, defaultDraft: text)
+            if case .dispatch(let intent) = routeResult.outcome {
+                onDispatchSidebarIntent(intent)
+            }
+            return
+        }
+
         chatInput = ""
         onSendChatMessage?(text)
     }
 
+    var startableGoal: String? {
+        let draftedGoal = chatInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !draftedGoal.isEmpty {
+            return draftedGoal
+        }
+
+        if let activeGoal = runtimeState.activeProjectGoal?.objective
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !activeGoal.isEmpty
+        {
+            return activeGoal
+        }
+
+        let effectiveGoal = conversation.effectiveGoal?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let effectiveGoal, !effectiveGoal.isEmpty {
+            return effectiveGoal
+        }
+
+        return nil
+    }
+
     var visibleConversationMessages: [ConversationMessage] {
-        conversation.visibleMessages(selectedTerminalID: selectedTerminalID)
+        conversation.visibleMessages(selectedTerminalID: resolvedConversationTerminalID)
+    }
+
+    var selectedTerminalWorkerSnapshot: TerminalWorkerSnapshot? {
+        guard let selectedTerminalID else {
+            return nil
+        }
+
+        return workerSnapshotsByTerminalID[selectedTerminalID]
+    }
+
+    var selectedTerminalSuggestedWorkerAction: TerminalWorkerSnapshot.Suggestion? {
+        selectedTerminalWorkerSnapshot?.preferredSuggestion
+    }
+
+    var selectedTerminalSuggestionProvenance: String? {
+        guard let snapshot = selectedTerminalWorkerSnapshot,
+              selectedTerminalSuggestedWorkerAction != nil else {
+            return nil
+        }
+
+        return "Suggested by \(snapshot.agent.identity.displayName ?? "worker")"
+    }
+
+    var selectedTerminalPlanningNotice: String? {
+        guard selectedTerminalWorkerSnapshot?.state.runtimeFlags.contains(.planning) == true else {
+            return nil
+        }
+
+        return "This worker is in plan mode. Review the plan before continuing."
+    }
+
+    var attentionSummaryText: String? {
+        let fragments = terminalRows.compactMap { row -> String? in
+            attentionSummaryFragment(for: row)
+        }
+
+        guard fragments.count > 1 else {
+            return nil
+        }
+
+        return "\(fragments.count) terminals need attention: \(fragments.joined(separator: "; "))."
+    }
+
+    var rollupStatusText: String? {
+        let summary = attentionSummaryText
+            ?? runtimeState.lastOverview?.summary
+            ?? selectedTerminalWorkerSnapshot?.state.summary
+
+        guard let summary, !summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return nil
+        }
+
+        return summary
+    }
+
+    var resolvedSidebarTarget: ForemanSidebarTarget {
+        sidebarRouter.resolveTarget(from: routingState())
+    }
+
+    var resolvedConversationTerminalID: String? {
+        switch resolvedSidebarTarget {
+        case .terminalReply(let terminalID, _):
+            return terminalID
+
+        case .project:
+            if preferredSidebarTarget == .project {
+                return nil
+            }
+            return selectedTerminalID
+
+        case .ambiguous, .completedGoal:
+            return nil
+        }
+    }
+
+    var resolvedTargetOptions: [ForemanTargetOption] {
+        guard case .ambiguous(let options) = resolvedSidebarTarget else {
+            return []
+        }
+
+        return options
     }
 
     func stopAgent() {
         isAgentRunning = false
         onStopAgent?()
+    }
+
+    func attachSidebarSession(_ session: ForemanSidebarSessionControlling) {
+        sidebarSession = session
     }
 
     func approveAction() {
@@ -326,14 +472,77 @@ final class ForemanSidebarStore: ObservableObject {
     }
 
     func executeSuggestion(terminalID: String, command: String) {
+        executeSuggestion(
+            terminalID: terminalID,
+            action: .init(
+                title: command,
+                command: command,
+                reason: "",
+                isRecommended: false
+            )
+        )
+    }
+
+    func executeSuggestion(terminalID: String, action: TerminalSuggestedAction) {
+        if terminalRows.contains(where: { $0.terminalID == terminalID }) {
+            selectTerminal(terminalID)
+        }
+
+        if action.authoritativePayload == nil,
+           action.command == nil,
+           action.guidancePrompt == nil,
+           let attention = pendingAttentionByTerminalID[terminalID],
+           let pendingAction = attention.actions.first(where: { $0.title == action.title }) {
+            executePendingAttentionAction(attention, action: pendingAction)
+            return
+        }
+
+        if let onDispatchSidebarIntent {
+            let routeResult = sidebarRouter.resolveSuggestion(
+                action,
+                terminalID: terminalID,
+                state: routingState()
+            )
+            applyRouteResult(routeResult)
+            if case .dispatch(let intent) = routeResult.outcome {
+                onDispatchSidebarIntent(intent)
+            }
+            return
+        }
+
+        guard let command = action.command else {
+            return
+        }
+
         onExecuteSuggestion?(terminalID, command)
+    }
+
+    func selectTerminal(_ terminalID: String) {
+        selectedTerminalID = terminalID
+        if pendingAttentionByTerminalID[terminalID] != nil {
+            preferredSidebarTarget = .terminal(terminalID)
+        } else if case .terminal = preferredSidebarTarget {
+            preferredSidebarTarget = nil
+        }
+    }
+
+    func selectSidebarTargetOption(_ option: ForemanTargetOption) {
+        switch option {
+        case .project:
+            preferredSidebarTarget = .project
+        case .terminalReply(let terminalID, _, _):
+            selectedTerminalID = terminalID
+            preferredSidebarTarget = .terminal(terminalID)
+        }
     }
 
     func upsertPendingAttention(_ attention: PendingAgentAttention) {
         DebugLogger.log("[ForemanSidebarStore] upsertPendingAttention terminal=\(attention.terminalID.prefix(8)) fingerprint='\(attention.fingerprint)' title='\(attention.title)' actions=\(attention.actions.count)")
         pendingAttentionByTerminalID[attention.terminalID] = attention
         updateTerminalRowPendingAttention(terminalID: attention.terminalID)
-        selectedTerminalID = attention.terminalID
+        if shouldAdoptPendingAttentionSelection(for: attention.terminalID) {
+            selectedTerminalID = attention.terminalID
+        }
         showSidebar()
         DebugLogger.log("[ForemanSidebarStore] upsertPendingAttention complete terminal=\(attention.terminalID.prefix(8)) selected=\(selectedTerminalID ?? "nil") visible=\(isSidebarVisible) rowHasAttention=\(terminalRows.first(where: { $0.terminalID == attention.terminalID })?.pendingAttention != nil)")
     }
@@ -358,6 +567,9 @@ final class ForemanSidebarStore: ObservableObject {
         }
 
         pendingAttentionByTerminalID.removeValue(forKey: terminalID)
+        if preferredSidebarTarget == .terminal(terminalID) {
+            preferredSidebarTarget = nil
+        }
         updateTerminalRowPendingAttention(terminalID: terminalID)
     }
 
@@ -375,6 +587,22 @@ final class ForemanSidebarStore: ObservableObject {
             return
         }
 
+        if let onDispatchSidebarIntent {
+            let routeResult = sidebarRouter.resolveExplicitIntent(
+                .sendPendingAttentionAction(
+                    terminalID: attention.terminalID,
+                    fingerprint: attention.fingerprint,
+                    payload: action.payload
+                ),
+                state: routingState()
+            )
+            applyRouteResult(routeResult)
+            if case .dispatch(let intent) = routeResult.outcome {
+                onDispatchSidebarIntent(intent)
+            }
+            return
+        }
+
         onExecutePendingAttentionAction?(attention, action)
     }
 
@@ -383,12 +611,63 @@ final class ForemanSidebarStore: ObservableObject {
         summariesByTerminalID: [String: TerminalSummary] = [:],
         understandingsByTerminalID: [String: TerminalUnderstanding] = [:]
     ) {
+        latestSnapshots = snapshots
+        latestSummariesByTerminalID = summariesByTerminalID
+        latestUnderstandingsByTerminalID = understandingsByTerminalID
+
         reconcilePendingAttention(
             snapshots: snapshots,
             understandingsByTerminalID: understandingsByTerminalID
         )
+        workerSnapshotsByTerminalID = Dictionary(
+            uniqueKeysWithValues: understandingsByTerminalID.compactMap { terminalID, understanding in
+                guard let workerSnapshot = understanding.workerSnapshot else {
+                    return nil
+                }
 
-        terminalRows = snapshots.map { snapshot in
+                return (terminalID, workerSnapshot)
+            }
+        )
+
+        rebuildTerminalRowsFromCachedState(
+            suppressSuggestedActions: shouldSuppressSuggestedActionsForCompletedGoal
+        )
+    }
+
+    private func rebuildTerminalRowsFromCachedState(
+        suppressSuggestedActions: Bool = false
+    ) {
+        terminalRows = makeTerminalRows(
+            snapshots: latestSnapshots,
+            summariesByTerminalID: latestSummariesByTerminalID,
+            understandingsByTerminalID: latestUnderstandingsByTerminalID,
+            suppressSuggestedActions: suppressSuggestedActions
+        )
+
+        let nextPendingTerminalID = dispatchQueue.first(where: { $0.state == .pending })?.terminalID
+        let waitingTerminalID = terminalRows.first(where: {
+            !$0.isFocused && ($0.agentContextType == "waitingApproval" ||
+                             $0.agentContextType == "waitingChoice" ||
+                             $0.agentContextType == "waitingText")
+        })?.terminalID
+        let focusedTerminalID = latestSnapshots.first(where: { $0.isFocused })?.terminalID
+        let firstTerminalID = latestSnapshots.first?.terminalID
+
+        if let selectedTerminalID,
+           terminalRows.contains(where: { $0.terminalID == selectedTerminalID }) {
+            return
+        }
+
+        selectedTerminalID = nextPendingTerminalID ?? waitingTerminalID ?? focusedTerminalID ?? firstTerminalID
+    }
+
+    private func makeTerminalRows(
+        snapshots: [TerminalSnapshot],
+        summariesByTerminalID: [String: TerminalSummary],
+        understandingsByTerminalID: [String: TerminalUnderstanding],
+        suppressSuggestedActions: Bool
+    ) -> [TerminalSummaryRowModel] {
+        snapshots.map { snapshot in
             if let understanding = understandingsByTerminalID[snapshot.terminalID] {
                 let context = understanding.agentInteractionContext
                 return TerminalSummaryRowModel(
@@ -402,7 +681,10 @@ final class ForemanSidebarStore: ObservableObject {
                     supportLevel: understanding.supportLevel.rawValue,
                     evidenceSummary: understanding.evidence.first?.source.rawValue,
                     isFocused: snapshot.isFocused,
-                    suggestedActions: understanding.suggestedNextActions,
+                    suggestedActions: scopedSuggestedActions(
+                        suggestedActions(for: understanding),
+                        suppressSuggestedActions: suppressSuggestedActions
+                    ),
                     pendingAttention: pendingAttentionByTerminalID[snapshot.terminalID],
                     agentContextType: context.typeString,
                     agentContextTitle: context.titleString,
@@ -452,22 +734,6 @@ final class ForemanSidebarStore: ObservableObject {
                 agentContextDetail: nil
             )
         }
-
-        let nextPendingTerminalID = dispatchQueue.first(where: { $0.state == .pending })?.terminalID
-        let waitingTerminalID = terminalRows.first(where: {
-            !$0.isFocused && ($0.agentContextType == "waitingApproval" ||
-                             $0.agentContextType == "waitingChoice" ||
-                             $0.agentContextType == "waitingText")
-        })?.terminalID
-        let focusedTerminalID = snapshots.first(where: { $0.isFocused })?.terminalID
-        let firstTerminalID = snapshots.first?.terminalID
-
-        if let selectedTerminalID,
-           terminalRows.contains(where: { $0.terminalID == selectedTerminalID }) {
-            return
-        }
-
-        selectedTerminalID = nextPendingTerminalID ?? waitingTerminalID ?? focusedTerminalID ?? firstTerminalID
     }
 
     private func reconcilePendingAttention(
@@ -487,6 +753,11 @@ final class ForemanSidebarStore: ObservableObject {
 
             return Self.pendingAttentionIsStillRelevant(attention, for: understanding)
         }
+
+        if case .terminal(let terminalID) = preferredSidebarTarget,
+           pendingAttentionByTerminalID[terminalID] == nil {
+            preferredSidebarTarget = nil
+        }
     }
 
     private static func pendingAttentionIsStillRelevant(
@@ -501,11 +772,76 @@ final class ForemanSidebarStore: ObservableObject {
             return false
         }
 
+        if let workerSnapshot = understanding.workerSnapshot,
+           workerSnapshot.request != nil,
+           attention.fingerprint != workerSnapshot.attentionFingerprint {
+            return false
+        }
+
         switch understanding.agentInteractionState {
         case .waitingApproval, .waitingChoice, .waitingText, .error:
             return true
         case .unknown, .running, .completed:
             return false
+        }
+    }
+
+    private func routingState() -> ForemanSidebarRoutingState {
+        ForemanSidebarRoutingState(
+            projectID: resolvedProjectID(),
+            selectedTerminalID: selectedTerminalID,
+            focusedTerminalID: terminalRows.first(where: \.isFocused)?.terminalID,
+            preferredTarget: preferredSidebarTarget,
+            pendingAttentionByTerminalID: pendingAttentionByTerminalID,
+            terminalRows: terminalRows,
+            workerSnapshotsByTerminalID: workerSnapshotsByTerminalID,
+            activeProjectGoal: runtimeState.activeProjectGoal
+        )
+    }
+
+    private func resolvedProjectID() -> String? {
+        if let projectID = runtimeState.activeProjectGoal?.projectID {
+            return projectID
+        }
+
+        if let selectedTerminalID,
+           let row = terminalRows.first(where: { $0.terminalID == selectedTerminalID }),
+           let projectID = ForemanProjectPathResolver.projectPath(from: row.cwd) {
+            return projectID
+        }
+
+        if let focusedRow = terminalRows.first(where: \.isFocused),
+           let projectID = ForemanProjectPathResolver.projectPath(from: focusedRow.cwd) {
+            return projectID
+        }
+
+        return terminalRows.lazy.compactMap { row in
+            ForemanProjectPathResolver.projectPath(from: row.cwd)
+        }.first
+    }
+
+    private func applyRouteResult(
+        _ routeResult: ForemanSidebarRouteResult,
+        defaultDraft: String? = nil
+    ) {
+        switch routeResult.outcome {
+        case .dispatch:
+            errorMessage = nil
+            if defaultDraft != nil {
+                chatInput = ""
+            }
+
+        case .blocked(let message, let draftToPreserve):
+            errorMessage = message
+            if let draft = draftToPreserve ?? defaultDraft {
+                chatInput = draft
+            }
+
+        case .suppressed(let message):
+            errorMessage = message
+            if let defaultDraft {
+                chatInput = defaultDraft
+            }
         }
     }
 
@@ -627,6 +963,135 @@ final class ForemanSidebarStore: ObservableObject {
         terminalRows[index].pendingAttention = pendingAttentionByTerminalID[terminalID]
     }
 
+    private func refreshTerminalRowsForGoalState(_ goal: ForemanProjectGoal?) {
+        guard goal != nil || !latestSnapshots.isEmpty else {
+            return
+        }
+
+        rebuildTerminalRowsFromCachedState(
+            suppressSuggestedActions: goal?.status == .completed
+        )
+    }
+
+    private var shouldSuppressSuggestedActionsForCompletedGoal: Bool {
+        runtimeState.activeProjectGoal?.status == .completed
+    }
+
+    private func scopedSuggestedActions(
+        _ actions: [TerminalSuggestedAction],
+        suppressSuggestedActions: Bool
+    ) -> [TerminalSuggestedAction] {
+        guard suppressSuggestedActions else {
+            return actions
+        }
+
+        return []
+    }
+
+    private func suggestedActions(
+        for understanding: TerminalUnderstanding
+    ) -> [TerminalSuggestedAction] {
+        if let workerSnapshot = understanding.workerSnapshot,
+           !workerSnapshot.requestSuggestions.isEmpty {
+            return workerSnapshot.requestSuggestions.map { suggestion in
+                let command = snapshotCommand(for: suggestion.payload)
+                let authoritativePayload = snapshotReplyPayload(for: suggestion.payload)
+                let guidancePrompt = snapshotGuidancePrompt(for: suggestion.payload)
+                return TerminalSuggestedAction(
+                    title: suggestion.title,
+                    command: command,
+                    reason: suggestion.rationale,
+                    isRecommended: suggestion.recommended,
+                    authoritativeFingerprint: command == nil && authoritativePayload == nil && guidancePrompt == nil ? nil : workerSnapshot.attentionFingerprint,
+                    authoritativePayload: authoritativePayload,
+                    guidancePrompt: guidancePrompt
+                )
+            }
+        }
+
+        if let workerSnapshot = understanding.workerSnapshot,
+           let guidancePrompt = authoritativeGuidancePrompt(for: workerSnapshot) {
+            return understanding.suggestedNextActions.map { action in
+                guard action.command == nil,
+                      action.authoritativePayload == nil,
+                      action.guidancePrompt == nil else {
+                    return action
+                }
+
+                return TerminalSuggestedAction(
+                    title: action.title,
+                    command: nil,
+                    reason: action.reason,
+                    isRecommended: action.isRecommended,
+                    authoritativeFingerprint: workerSnapshot.attentionFingerprint,
+                    guidancePrompt: guidancePrompt
+                )
+            }
+        }
+
+        return understanding.suggestedNextActions
+    }
+
+    private func snapshotCommand(
+        for payload: TerminalWorkerSnapshot.Payload
+    ) -> String? {
+        switch payload {
+        case .command(let command):
+            return command
+        case .text, .option, .approval, .foremanPrompt:
+            return nil
+        }
+    }
+
+    private func snapshotReplyPayload(
+        for payload: TerminalWorkerSnapshot.Payload
+    ) -> String? {
+        switch payload {
+        case .text(let value), .option(let value), .approval(let value):
+            return value
+        case .command, .foremanPrompt:
+            return nil
+        }
+    }
+
+    private func snapshotGuidancePrompt(
+        for payload: TerminalWorkerSnapshot.Payload
+    ) -> String? {
+        switch payload {
+        case .foremanPrompt(let value):
+            return value
+        case .text, .command, .option, .approval:
+            return nil
+        }
+    }
+
+    private func authoritativeGuidancePrompt(
+        for workerSnapshot: TerminalWorkerSnapshot
+    ) -> String? {
+        switch workerSnapshot.state.attention {
+        case .replyRequired, .choiceRequired, .approvalRequired, .error:
+            return workerSnapshot.request?.prompt ?? workerSnapshot.state.summary
+        case .none:
+            return nil
+        }
+    }
+
+    private func shouldAdoptPendingAttentionSelection(for terminalID: String) -> Bool {
+        guard let selectedTerminalID else {
+            return true
+        }
+
+        if selectedTerminalID == terminalID {
+            return true
+        }
+
+        if terminalRows.contains(where: { $0.terminalID == selectedTerminalID }) {
+            return false
+        }
+
+        return pendingAttentionByTerminalID[selectedTerminalID] == nil
+    }
+
     private static func snapshotState(for snapshot: TerminalSnapshot) -> String {
         if snapshot.signals.likelyErrorState { return "blocked" }
         if snapshot.signals.likelyLongRunning { return "running" }
@@ -637,5 +1102,55 @@ final class ForemanSidebarStore: ObservableObject {
 
     private static func snapshotSummary(for snapshot: TerminalSnapshot) -> String {
         TerminalContentAnalyzer.analyze(snapshot).summary
+    }
+
+    private func attentionSummaryFragment(for row: TerminalSummaryRowModel) -> String? {
+        if let workerSnapshot = workerSnapshotsByTerminalID[row.terminalID],
+           let attentionText = attentionText(for: workerSnapshot.state.attention) {
+            return "\(row.terminalID) \(attentionText)"
+        }
+
+        if let pendingAttention = row.pendingAttention,
+           let attentionText = attentionText(for: pendingAttention.interactionState) {
+            return "\(row.terminalID) \(attentionText)"
+        }
+
+        if let interactionState = row.agentInteractionState,
+           let parsedState = AgentInteractionState(rawValue: interactionState),
+           let attentionText = attentionText(for: parsedState) {
+            return "\(row.terminalID) \(attentionText)"
+        }
+
+        return nil
+    }
+
+    private func attentionText(for attention: TerminalWorkerAttention) -> String? {
+        switch attention {
+        case .replyRequired:
+            return "reply required"
+        case .choiceRequired:
+            return "choice required"
+        case .approvalRequired:
+            return "approval required"
+        case .error:
+            return "error requires review"
+        case .none:
+            return nil
+        }
+    }
+
+    private func attentionText(for interactionState: AgentInteractionState) -> String? {
+        switch interactionState {
+        case .waitingText:
+            return "reply required"
+        case .waitingChoice:
+            return "choice required"
+        case .waitingApproval:
+            return "approval required"
+        case .error:
+            return "error requires review"
+        case .unknown, .running, .completed:
+            return nil
+        }
     }
 }

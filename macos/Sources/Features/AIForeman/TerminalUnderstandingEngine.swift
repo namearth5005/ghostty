@@ -38,6 +38,22 @@ struct TerminalUnderstandingEngine {
         current: [TerminalUnderstanding],
         previous: [TerminalUnderstanding]
     ) -> TerminalOverview {
+        let waitingTerminals = current.compactMap { understanding -> (terminalID: String, attentionText: String)? in
+            guard let attentionText = attentionText(for: understanding) else {
+                return nil
+            }
+
+            return (understanding.terminalID, attentionText)
+        }
+        if waitingTerminals.count > 1 {
+            let attentionFragments = waitingTerminals.map { "\($0.terminalID) \($0.attentionText)" }
+            return TerminalOverview(
+                summary: "\(attentionFragments.count) terminals need attention: \(attentionFragments.joined(separator: "; ")).",
+                changedTerminalIDs: waitingTerminals.map(\.terminalID),
+                primaryTerminalID: nil
+            )
+        }
+
         let currentIDs = Set(current.map(\.terminalID))
         let previousByID = Dictionary(uniqueKeysWithValues: previous.map { ($0.terminalID, $0) })
         let changedCurrent = current.filter { previousByID[$0.terminalID] != $0 }.map(\.terminalID)
@@ -69,6 +85,36 @@ struct TerminalUnderstandingEngine {
             changedTerminalIDs: [],
             primaryTerminalID: current.first?.terminalID
         )
+    }
+
+    private func attentionText(for understanding: TerminalUnderstanding) -> String? {
+        if let workerSnapshot = understanding.workerSnapshot {
+            switch workerSnapshot.state.attention {
+            case .replyRequired:
+                return "reply required"
+            case .choiceRequired:
+                return "choice required"
+            case .approvalRequired:
+                return "approval required"
+            case .error:
+                return "error requires review"
+            case .none:
+                break
+            }
+        }
+
+        switch understanding.agentInteractionState {
+        case .waitingText:
+            return "reply required"
+        case .waitingChoice:
+            return "choice required"
+        case .waitingApproval:
+            return "approval required"
+        case .error:
+            return "error requires review"
+        case .unknown, .running, .completed:
+            return nil
+        }
     }
 
     private func extractLastMeaningfulEvent(

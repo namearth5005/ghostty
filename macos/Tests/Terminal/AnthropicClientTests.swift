@@ -42,9 +42,10 @@ struct AnthropicClientTests {
         await MainActor.run {
             conversation.start(goal: "list all files", mode: .interactive)
         }
+        let narrationContext = await MainActor.run { conversation.narrationContext }
 
         let response = try await client.agentStep(
-            conversation: conversation,
+            narrationContext: narrationContext,
             terminals: [],
             lastOutcome: nil
         )
@@ -94,17 +95,22 @@ struct AnthropicClientTests {
             conversation.start(goal: "list files", mode: .interactive)
             conversation.addHiddenContext("Kimi in terminal term-1 is waiting for text input.")
         }
+        let narrationContext = await MainActor.run { conversation.narrationContext }
 
         _ = try await client.agentStep(
-            conversation: conversation,
+            narrationContext: narrationContext,
             terminals: sampleSnapshots(),
             understandings: understandings,
+            workerSnapshots: [:],
             overview: overview,
             lastOutcome: Optional<TerminalOutcomeReport>.none
         )
 
         let request = try #require(await transport.lastRequest)
         #expect(request.system.contains("Use structured terminal understanding as your primary context"))
+        #expect(request.system.contains("Do not infer or replace the user's broader goal from terminal history alone."))
+        #expect(request.system.contains("If a structured worker snapshot does not include a sendable payload, ask the user or give project-level guidance instead of drafting a worker-local reply."))
+        #expect(request.system.contains("infer the user's goal") == false)
         let prompt = request.messages[0].content
         #expect(prompt.contains("Structured terminal overview:"))
         #expect(prompt.contains("Hidden reactive context:"))
@@ -129,11 +135,13 @@ struct AnthropicClientTests {
                 "Kimi in terminal term-1 is waiting for text input.\n\nRecent output:\nWhat would you like me to do here?"
             )
         }
+        let narrationContext = await MainActor.run { conversation.narrationContext }
 
         _ = try await client.agentStep(
-            conversation: conversation,
+            narrationContext: narrationContext,
             terminals: sampleSnapshots(),
             understandings: [],
+            workerSnapshots: [:],
             overview: .init(summary: "term-1 waiting", changedTerminalIDs: ["term-1"], primaryTerminalID: "term-1"),
             lastOutcome: nil
         )
@@ -161,18 +169,21 @@ struct AnthropicClientTests {
             deltaText: "What would you like me to do here?",
             timestamp: Date(timeIntervalSince1970: 1)
         )
+        let narrationContext = await MainActor.run { conversation.narrationContext }
 
         let response = try await client.draftAgentReply(
-            conversation: conversation,
+            narrationContext: narrationContext,
             event: event,
             terminals: sampleSnapshots(),
             understandings: [],
+            workerSnapshots: [:],
             overview: .init(summary: "term-1 waiting", changedTerminalIDs: ["term-1"], primaryTerminalID: "term-1"),
             lastOutcome: nil
         )
 
         let request = try #require(await transport.lastRequest)
         #expect(request.system.contains("reply_to_agent, ask_human, or no_action"))
+        #expect(request.system.contains("provides no suggested payload, use ask_human instead of inventing one"))
         let prompt = request.messages[0].content
         #expect(prompt.contains("Current waiting-text event:"))
         #expect(prompt.contains("What would you like me to do here?"))
@@ -182,6 +193,108 @@ struct AnthropicClientTests {
             reason: "Kimi asked what to do next.",
             confidence: 0.9
         ))
+    }
+
+    @Test
+    func anthropicPromptIncludesWorkerSnapshotsAndNarratorConstraint() async throws {
+        let transport = RecordingAnthropicTransport(
+            payload: """
+            {"thought":"Use the worker suggestion.","action":{"type":"respond","message":"Codex already recommended preserving the API."}}
+            """
+        )
+        let client = AnthropicClient(apiKey: "test-key", transport: transport)
+        let conversation = await MainActor.run { ForemanConversation() }
+        let workerSnapshot = TerminalWorkerSnapshot(
+            schemaVersion: 1,
+            terminalID: "term-1",
+            workerSessionID: "codex-session-1",
+            revision: 7,
+            observedAt: Date(timeIntervalSince1970: 1_748_444_444),
+            ttlMilliseconds: 15_000,
+            workerGoal: "stabilize the API",
+            agent: .init(identity: .codex),
+            state: .init(
+                lifecycle: .running,
+                attention: .replyRequired,
+                summary: "Codex is waiting for a reply.",
+                details: ["Asked whether the API should stay stable."],
+                runtimeFlags: []
+            ),
+            request: .init(
+                id: "req-7",
+                kind: .reply,
+                prompt: "Should I preserve the API?",
+                options: []
+            ),
+            suggestions: [
+                .init(
+                    id: "preserve-api",
+                    kind: .reply,
+                    title: "Preserve the API",
+                    payload: .text("Preserve the current API and adapt the internals."),
+                    rationale: "Lowest migration risk.",
+                    recommended: true,
+                    execution: .manualOnly,
+                    requestID: "req-7"
+                ),
+            ]
+        )
+        let narrationContext = await MainActor.run { conversation.narrationContext }
+
+        _ = try await client.agentStep(
+            narrationContext: narrationContext,
+            terminals: sampleSnapshots(),
+            understandings: [],
+            workerSnapshots: ["term-1": workerSnapshot],
+            overview: .init(summary: "term-1 waiting", changedTerminalIDs: ["term-1"], primaryTerminalID: "term-1"),
+            lastOutcome: nil
+        )
+
+        let request = try #require(await transport.lastRequest)
+        #expect(request.system.contains("do not invent a competing suggestion"))
+        #expect(request.system.contains("If a structured worker snapshot is waiting for direction but provides no suggested payload, do not invent one"))
+        let prompt = request.messages[0].content
+        #expect(prompt.contains("Structured worker snapshots:"))
+        #expect(prompt.contains("\"preserve-api\""))
+        #expect(prompt.contains("\"worker_goal\":\"stabilize the API\""))
+    }
+
+    @Test
+    func anthropicGuidanceOnlyPromptDisallowsSendCommand() async throws {
+        let transport = RecordingAnthropicTransport(
+            payload: """
+            {"thought":"Guide the worker without dispatching.","action":{"type":"respond","message":"Tell the worker to inspect the auth flow first."}}
+            """
+        )
+        let client = AnthropicClient(apiKey: "test-key", transport: transport)
+        let narrationContext = ForemanNarrationContext(
+            goal: "guide the worker",
+            mode: .interactive,
+            iterationCount: 1,
+            messages: [
+                ConversationMessage(role: .user, content: "Give me project-level guidance for this worker."),
+            ],
+            hiddenContext: [],
+            stepPolicy: .guidanceOnly
+        )
+
+        _ = try await client.agentStep(
+            narrationContext: narrationContext,
+            terminals: sampleSnapshots(),
+            understandings: [],
+            workerSnapshots: [:],
+            overview: .init(summary: "term-1 waiting", changedTerminalIDs: ["term-1"], primaryTerminalID: "term-1"),
+            lastOutcome: nil
+        )
+
+        let request = try #require(await transport.lastRequest)
+        #expect(request.system.contains("Guidance-only turn: do not use send_command."))
+        #expect(request.system.contains("Available action types (use exact snake_case strings): respond, ask_user, declare_complete, declare_stuck."))
+        #expect(request.system.contains("Available action types (use exact snake_case strings): respond, send_command") == false)
+        let prompt = request.messages[0].content
+        #expect(prompt.contains("\"type\": \"respond|ask_user|declare_complete|declare_stuck\""))
+        #expect(prompt.contains("\"terminal_id\": \"string (for send_command)\"") == false)
+        #expect(prompt.contains("\"command\": \"string (for send_command)\"") == false)
     }
 }
 

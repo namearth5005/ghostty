@@ -8,6 +8,7 @@
 .envrc.local
 .flatpak-builder/
 .worktrees/
+.superpowers/
 zig-cache/
 .zig-cache/
 zig-out/

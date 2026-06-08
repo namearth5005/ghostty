@@ -11,6 +11,7 @@ struct AgentMeaningDetector {
     }
 
     private let runtimeDetector = AgentRuntimeDetector()
+    private let rawRuntimeDetector = AgentRawRuntimeDetector()
     private let contextResolver = AgentInteractionContextResolver()
     private let screenDetector = AgentScreenInteractionDetector()
 
@@ -37,6 +38,11 @@ struct AgentMeaningDetector {
         }
 
         let identity = runtimeDetection.identity
+        let rawRuntimeDetection = rawRuntimeDetector.detect(
+            identity: identity,
+            current: current,
+            previous: previous
+        )
         let screenDetection = screenDetector.detect(
             identity: identity,
             visibleText: current.visibleText,
@@ -60,12 +66,20 @@ struct AgentMeaningDetector {
             kimiWireRecords: wireRecords,
             codexWireRecords: codexWireRecords,
             claudeWireRecords: claudeWireRecords
-        ), let wireDetection = detectionFromContext(
-            identity: identity,
-            context: resolvedContext.context,
-            detail: resolvedContext.detail
         ) {
-            return wireDetection
+            let shouldIgnoreWireRunningContext =
+                current.signals.likelyWaitingForInput &&
+                resolvedContext.context.typeString == "running" &&
+                rawRuntimeDetection.state != .working
+
+            if !shouldIgnoreWireRunningContext,
+               let wireDetection = detectionFromContext(
+                   identity: identity,
+                   context: resolvedContext.context,
+                   detail: resolvedContext.detail
+               ) {
+                return wireDetection
+            }
         }
 
         if let screenDetection,
@@ -80,7 +94,8 @@ struct AgentMeaningDetector {
         case .kimi, .codex, .claudeCode:
             return detectFromRuntime(
                 identity: identity,
-                runtimeDetection: runtimeDetection,
+                runtimeState: rawRuntimeDetection.state,
+                runtimeEvidence: rawRuntimeDetection.evidence,
                 current: current,
                 lastOutcome: lastOutcome,
                 lastEvent: lastEvent
@@ -131,7 +146,8 @@ struct AgentMeaningDetector {
 
     private func detectFromRuntime(
         identity: AgentIdentity,
-        runtimeDetection: AgentRuntimeDetector.Detection,
+        runtimeState: AgentRuntimeState,
+        runtimeEvidence: [UnderstandingEvidence],
         current: TerminalSnapshot,
         lastOutcome: TerminalOutcomeReport?,
         lastEvent: String
@@ -151,7 +167,7 @@ struct AgentMeaningDetector {
             }
         }
 
-        switch runtimeDetection.state {
+        switch runtimeState {
         case .blocked:
             if current.signals.likelyErrorState && !TerminalScreenText.looksLikeQuestion(lastEvent) {
                 return detection(identity, .error, runtimeState: .blocked, .phraseHeuristic, "Detected active failure markers in agent output.", 0.73, .error(description: lastEvent))
@@ -170,7 +186,7 @@ struct AgentMeaningDetector {
                 interactionState: .unknown,
                 runtimeState: .idle,
                 supportLevel: .firstClass,
-                evidence: runtimeDetection.evidence,
+                evidence: runtimeEvidence,
                 context: .none
             )
 

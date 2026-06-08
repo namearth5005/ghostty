@@ -191,6 +191,391 @@ struct PendingAgentAttentionFactoryTests {
         ])
     }
 
+    @Test
+    func authoritativeReplySuggestionBecomesPrimaryAction() throws {
+        let snapshot = TerminalWorkerSnapshot(
+            schemaVersion: 1,
+            terminalID: "term-1",
+            workerSessionID: "codex-session-41",
+            revision: 41,
+            observedAt: Date(timeIntervalSince1970: 1_748_222_222),
+            ttlMilliseconds: 15_000,
+            workerGoal: "stabilize the API",
+            agent: .init(identity: .codex),
+            state: .init(
+                lifecycle: .running,
+                attention: .replyRequired,
+                summary: "Codex is waiting for a reply.",
+                details: ["Asked whether the API should stay stable."],
+                runtimeFlags: []
+            ),
+            request: .init(
+                id: "req-41",
+                kind: .reply,
+                prompt: "Should I preserve the API?",
+                options: []
+            ),
+            suggestions: [
+                .init(
+                    id: "preserve-api",
+                    kind: .reply,
+                    title: "Preserve the API",
+                    payload: .text("Preserve the current API and adapt the internals."),
+                    rationale: "Lowest migration risk.",
+                    recommended: true,
+                    execution: .manualOnly,
+                    requestID: "req-41"
+                ),
+            ]
+        )
+        let understanding = TerminalUnderstanding.preview(
+            terminalID: "term-1",
+            state: .waiting,
+            shortExplanation: "Codex is waiting for a reply.",
+            lastMeaningfulEvent: "Should I preserve the API?",
+            importantDetails: [],
+            suggestedNextActions: [],
+            agentIdentity: .codex,
+            agentInteractionState: .waitingText,
+            workerSnapshot: snapshot
+        )
+        let event = AgentNeedsAttentionEvent(
+            terminalID: "term-1",
+            agentIdentity: .codex,
+            interactionState: .waitingText,
+            deltaText: "Should I preserve the API?",
+            timestamp: Date(),
+            fingerprint: snapshot.attentionFingerprint
+        )
+
+        let attention = try #require(
+            PendingAgentAttentionFactory.make(from: event, understanding: understanding)
+        )
+
+        #expect(attention.title == "Suggested reply")
+        #expect(attention.actions.first?.title == "Preserve the API")
+        #expect(attention.fingerprint == snapshot.attentionFingerprint)
+    }
+
+    @Test
+    func authoritativeReplyWithoutSuggestionEscalatesNeedsDirection() throws {
+        let snapshot = TerminalWorkerSnapshot(
+            schemaVersion: 1,
+            terminalID: "term-1",
+            workerSessionID: "codex-session-42",
+            revision: 42,
+            observedAt: Date(timeIntervalSince1970: 1_748_222_223),
+            ttlMilliseconds: 15_000,
+            workerGoal: "stabilize the API",
+            agent: .init(identity: .codex),
+            state: .init(
+                lifecycle: .running,
+                attention: .replyRequired,
+                summary: "Codex is waiting for your reply.",
+                details: ["Should I preserve the API?"],
+                runtimeFlags: []
+            ),
+            request: .init(
+                id: "req-42",
+                kind: .reply,
+                prompt: "Should I preserve the API?",
+                options: []
+            ),
+            suggestions: []
+        )
+        let understanding = TerminalUnderstanding.preview(
+            terminalID: "term-1",
+            state: .waiting,
+            shortExplanation: "Codex is waiting for your reply.",
+            lastMeaningfulEvent: "Should I preserve the API?",
+            importantDetails: [],
+            suggestedNextActions: [],
+            agentIdentity: .codex,
+            agentInteractionState: .waitingText,
+            workerSnapshot: snapshot
+        )
+        let event = AgentNeedsAttentionEvent(
+            terminalID: "term-1",
+            agentIdentity: .codex,
+            interactionState: .waitingText,
+            deltaText: "Should I preserve the API?",
+            timestamp: Date(),
+            fingerprint: snapshot.attentionFingerprint
+        )
+
+        let attention = try #require(
+            PendingAgentAttentionFactory.make(from: event, understanding: understanding)
+        )
+
+        #expect(attention.title == "Needs direction")
+        #expect(attention.description == "Should I preserve the API?")
+        #expect(attention.detail == nil)
+        #expect(attention.actions.isEmpty)
+        #expect(attention.fingerprint == snapshot.attentionFingerprint)
+    }
+
+    @Test
+    func authoritativeCommandWithoutSuggestionEscalatesNeedsDirection() throws {
+        let snapshot = TerminalWorkerSnapshot(
+            schemaVersion: 1,
+            terminalID: "term-1",
+            workerSessionID: "codex-session-42",
+            revision: 52,
+            observedAt: Date(timeIntervalSince1970: 1_748_222_230),
+            ttlMilliseconds: 15_000,
+            workerGoal: "prepare the migration",
+            agent: .init(identity: .codex),
+            state: .init(
+                lifecycle: .running,
+                attention: .replyRequired,
+                summary: "Codex is waiting for command guidance.",
+                details: ["The worker needs direction before running the migration."],
+                runtimeFlags: []
+            ),
+            request: .init(
+                id: "req-52",
+                kind: .command,
+                prompt: "Should I run the migration now?",
+                options: []
+            ),
+            suggestions: []
+        )
+        let understanding = TerminalUnderstanding.preview(
+            terminalID: "term-1",
+            state: .waiting,
+            shortExplanation: "Codex is waiting for command guidance.",
+            lastMeaningfulEvent: "Should I run the migration now?",
+            importantDetails: [],
+            suggestedNextActions: [],
+            agentIdentity: .codex,
+            agentInteractionState: .waitingText,
+            workerSnapshot: snapshot
+        )
+        let event = AgentNeedsAttentionEvent(
+            terminalID: "term-1",
+            agentIdentity: .codex,
+            interactionState: .waitingText,
+            deltaText: "Should I run the migration now?",
+            timestamp: Date(),
+            fingerprint: snapshot.attentionFingerprint
+        )
+
+        let attention = try #require(
+            PendingAgentAttentionFactory.make(from: event, understanding: understanding)
+        )
+
+        #expect(attention.title == "Needs direction")
+        #expect(attention.description == "Should I run the migration now?")
+        #expect(attention.detail == "The worker needs direction before running the migration.")
+        #expect(attention.actions.isEmpty)
+        #expect(attention.fingerprint == snapshot.attentionFingerprint)
+    }
+
+    @Test
+    func authoritativeReplyIgnoresSuggestionsFromOlderRequests() throws {
+        let snapshot = TerminalWorkerSnapshot(
+            schemaVersion: 1,
+            terminalID: "term-1",
+            workerSessionID: "codex-session-42",
+            revision: 43,
+            observedAt: Date(timeIntervalSince1970: 1_748_222_224),
+            ttlMilliseconds: 15_000,
+            workerGoal: "stabilize the API",
+            agent: .init(identity: .codex),
+            state: .init(
+                lifecycle: .running,
+                attention: .replyRequired,
+                summary: "Codex is waiting for your reply.",
+                details: ["A stale recommendation should not be used."],
+                runtimeFlags: []
+            ),
+            request: .init(
+                id: "req-current",
+                kind: .reply,
+                prompt: "Should I preserve the API?",
+                options: []
+            ),
+            suggestions: [
+                .init(
+                    id: "stale",
+                    kind: .reply,
+                    title: "Follow the old plan",
+                    payload: .text("Use the previous migration path."),
+                    rationale: "This suggestion belongs to the old request.",
+                    recommended: true,
+                    execution: .manualOnly,
+                    requestID: "req-old"
+                ),
+            ]
+        )
+        let understanding = TerminalUnderstanding.preview(
+            terminalID: "term-1",
+            state: .waiting,
+            shortExplanation: "Codex is waiting for your reply.",
+            lastMeaningfulEvent: "Should I preserve the API?",
+            importantDetails: [],
+            suggestedNextActions: [],
+            agentIdentity: .codex,
+            agentInteractionState: .waitingText,
+            workerSnapshot: snapshot
+        )
+        let event = AgentNeedsAttentionEvent(
+            terminalID: "term-1",
+            agentIdentity: .codex,
+            interactionState: .waitingText,
+            deltaText: "Should I preserve the API?",
+            timestamp: Date(),
+            fingerprint: snapshot.attentionFingerprint
+        )
+
+        let attention = try #require(
+            PendingAgentAttentionFactory.make(from: event, understanding: understanding)
+        )
+
+        #expect(attention.title == "Needs direction")
+        #expect(attention.description == "Should I preserve the API?")
+        #expect(attention.detail == "A stale recommendation should not be used.")
+        #expect(attention.actions.isEmpty)
+    }
+
+    @Test
+    func authoritativeReplyForemanPromptSuggestionEscalatesNeedsDirection() throws {
+        let snapshot = TerminalWorkerSnapshot(
+            schemaVersion: 1,
+            terminalID: "term-1",
+            workerSessionID: "codex-session-43",
+            revision: 43,
+            observedAt: Date(timeIntervalSince1970: 1_748_222_224),
+            ttlMilliseconds: 15_000,
+            workerGoal: "stabilize the API",
+            agent: .init(identity: .codex),
+            state: .init(
+                lifecycle: .running,
+                attention: .replyRequired,
+                summary: "Codex is waiting for direction.",
+                details: ["Two migration paths are viable."],
+                runtimeFlags: []
+            ),
+            request: .init(
+                id: "req-43",
+                kind: .reply,
+                prompt: "Should I preserve the API?",
+                options: []
+            ),
+            suggestions: [
+                .init(
+                    id: "guide-foreman",
+                    kind: .foremanPrompt,
+                    title: "Guide Foreman",
+                    payload: .foremanPrompt("Ask Foreman which migration path to take."),
+                    rationale: "The worker needs a planner-level decision.",
+                    recommended: true,
+                    execution: .manualOnly,
+                    requestID: "req-43"
+                ),
+            ]
+        )
+        let understanding = TerminalUnderstanding.preview(
+            terminalID: "term-1",
+            state: .waiting,
+            shortExplanation: "Codex is waiting for direction.",
+            lastMeaningfulEvent: "Should I preserve the API?",
+            importantDetails: [],
+            suggestedNextActions: [],
+            agentIdentity: .codex,
+            agentInteractionState: .waitingText,
+            workerSnapshot: snapshot
+        )
+        let event = AgentNeedsAttentionEvent(
+            terminalID: "term-1",
+            agentIdentity: .codex,
+            interactionState: .waitingText,
+            deltaText: "Should I preserve the API?",
+            timestamp: Date(),
+            fingerprint: snapshot.attentionFingerprint
+        )
+
+        let attention = try #require(
+            PendingAgentAttentionFactory.make(from: event, understanding: understanding)
+        )
+
+        #expect(attention.title == "Needs direction")
+        #expect(attention.description == "Should I preserve the API?")
+        #expect(attention.detail == "Two migration paths are viable.")
+        #expect(attention.actions.isEmpty)
+    }
+
+    @Test
+    func authoritativeChoiceForemanPromptSuggestionFallsBackToWorkerOptions() throws {
+        let snapshot = TerminalWorkerSnapshot(
+            schemaVersion: 1,
+            terminalID: "term-1",
+            workerSessionID: "codex-session-44",
+            revision: 44,
+            observedAt: Date(timeIntervalSince1970: 1_748_222_225),
+            ttlMilliseconds: 15_000,
+            workerGoal: "choose the migration path",
+            agent: .init(identity: .codex),
+            state: .init(
+                lifecycle: .running,
+                attention: .choiceRequired,
+                summary: "Codex needs a direction choice.",
+                details: [],
+                runtimeFlags: []
+            ),
+            request: .init(
+                id: "req-44",
+                kind: .choice,
+                prompt: "Which migration path should I take?",
+                options: [
+                    .init(id: "keep-api", label: "Keep the API", recommended: true),
+                    .init(id: "break-api", label: "Break the API", recommended: false),
+                ]
+            ),
+            suggestions: [
+                .init(
+                    id: "guide-foreman",
+                    kind: .foremanPrompt,
+                    title: "Guide Foreman",
+                    payload: .foremanPrompt("Ask Foreman which migration path to take."),
+                    rationale: "The worker wants planner-level direction.",
+                    recommended: true,
+                    execution: .manualOnly,
+                    requestID: "req-44"
+                ),
+            ]
+        )
+        let understanding = TerminalUnderstanding.preview(
+            terminalID: "term-1",
+            state: .waiting,
+            shortExplanation: "Codex needs a direction choice.",
+            lastMeaningfulEvent: "Which migration path should I take?",
+            importantDetails: [],
+            suggestedNextActions: [],
+            agentIdentity: .codex,
+            agentInteractionState: .waitingChoice,
+            workerSnapshot: snapshot
+        )
+        let event = AgentNeedsAttentionEvent(
+            terminalID: "term-1",
+            agentIdentity: .codex,
+            interactionState: .waitingChoice,
+            deltaText: "Which migration path should I take?",
+            timestamp: Date(),
+            fingerprint: snapshot.attentionFingerprint
+        )
+
+        let attention = try #require(
+            PendingAgentAttentionFactory.make(from: event, understanding: understanding)
+        )
+
+        #expect(attention.title == "Choose an option")
+        #expect(attention.actions == [
+            PendingAgentAction(id: "choice_1", title: "Keep the API", payload: "keep-api", style: .primary),
+            PendingAgentAction(id: "choice_2", title: "Break the API", payload: "break-api", style: .secondary),
+        ])
+    }
+
     private func paritySignature(_ attention: PendingAgentAttention) -> AttentionParitySignature {
         AttentionParitySignature(
             agentIdentity: attention.agentIdentity,

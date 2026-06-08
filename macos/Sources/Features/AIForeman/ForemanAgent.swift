@@ -1,6 +1,23 @@
 import Foundation
 
 actor ForemanAgent {
+    private struct AuthoritativeWorkerDirective {
+        let terminalID: String
+        let payload: String
+        let rationale: String
+    }
+
+    private struct AuthoritativeWorkerPause {
+        let terminalID: String
+        let message: String
+        let question: String
+    }
+
+    private struct AmbiguousWorkerTargetPause {
+        let message: String
+        let question: String
+    }
+
     private enum PauseState {
         case none
         case awaitingApproval(AgentAction)
@@ -10,10 +27,12 @@ actor ForemanAgent {
     private let conversation: ForemanConversation
     private let foremanService: ForemanService
     private let goalRuntime: ForemanProjectGoalRuntime
-    private let preferredTerminalID: String?
+    private var preferredTerminalID: String?
     private let onSendCommand: @MainActor (String, String) async -> Bool
     private let onStatusChange: @MainActor (AgentStatus) -> Void
     private let onAction: @MainActor (AgentAction, String) -> Void
+    private let goalEvaluator = ForemanProjectGoalEvaluator()
+    private let runtimePolicy = ForemanRuntimePolicy()
 
     private var currentTask: Task<Void, Never>?
     private let observedContextBuilder = ForemanObservedContextBuilder()
@@ -24,6 +43,8 @@ actor ForemanAgent {
     private let understandingEngine = TerminalUnderstandingEngine()
     private var previousSnapshotsByTerminalID: [String: TerminalSnapshot] = [:]
     private var previousUnderstandings: [TerminalUnderstanding] = []
+    private var latestObservedContext: ForemanObservedTerminalContext?
+    private var pendingGuidanceBypassTerminalID: String?
 
     init(
         conversation: ForemanConversation,
@@ -54,6 +75,8 @@ actor ForemanAgent {
         pauseState = .none
         previousSnapshotsByTerminalID = [:]
         previousUnderstandings = []
+        latestObservedContext = nil
+        pendingGuidanceBypassTerminalID = nil
         cancelCurrentTask()
 
         currentTask = Task {
@@ -64,12 +87,15 @@ actor ForemanAgent {
             let initialSnapshots = await captureSnapshots()
             if let projectGoal = await saveProjectGoal(goal, from: initialSnapshots) {
                 await MainActor.run {
-                    conversation.setActiveProjectGoal(projectGoal)
+                    conversation.runtimeState.setActiveProjectGoal(projectGoal)
                 }
             }
 
             do {
-                try await runLoop(captureSnapshots: captureSnapshots)
+                try await runLoop(
+                    captureSnapshots: captureSnapshots,
+                    bypassAuthoritativeWorkerFor: nil
+                )
             } catch {
                 await MainActor.run {
                     conversation.errorMessage = error.localizedDescription
@@ -79,10 +105,21 @@ actor ForemanAgent {
         }
     }
 
-    func receiveUserMessage(_ text: String) async {
+    func receiveUserMessage(
+        _ text: String,
+        preferredTerminalID explicitPreferredTerminalID: String? = nil,
+        bypassAuthoritativeWorker: Bool = false
+    ) async {
+        if let explicitPreferredTerminalID {
+            preferredTerminalID = explicitPreferredTerminalID
+        }
+        pendingGuidanceBypassTerminalID = bypassAuthoritativeWorker
+            ? (explicitPreferredTerminalID ?? preferredTerminalID)
+            : nil
         await MainActor.run {
             conversation.addMessage(role: .user, content: text)
         }
+        await reopenCompletedGoalAfterUserMessageIfNeeded(text)
 
         switch pauseState {
         case .awaitingUserReply:
@@ -212,23 +249,50 @@ actor ForemanAgent {
         let deltaTerminals = makeDeltaTerminals(from: terminals)
 
         storeObservedTerminals(observedTerminals)
+        let narrationContext = await MainActor.run { conversation.narrationContext }
 
         await MainActor.run {
-            conversation.updateTerminalContext(
+            conversation.runtimeState.updateTerminalContext(
                 overview: overview,
-                understandings: understandings
+                understandings: understandings,
+                workerSnapshots: observedTerminals.workerSnapshots
             )
         }
-        await updateConversationProjectGoal(
+        _ = await updateConversationProjectGoal(
             for: event.terminalID,
             terminals: terminals
         )
+        if let evaluatedGoal = await evaluateProjectGoal(
+            for: event.terminalID,
+            terminals: terminals,
+            understandings: understandings
+        ), evaluatedGoal.status.suppressesRecommendations {
+            return makeCompletedGoalAttention(
+                for: event,
+                goal: evaluatedGoal
+            )
+        }
+        if let authoritativeAttention = draftAuthoritativePendingAttention(
+            for: event,
+            observedTerminals: observedTerminals
+        ) {
+            DebugLogger.log("[ForemanAgent] draftPendingAttention authoritative terminal=\(event.terminalID.prefix(8)) title='\(authoritativeAttention.title)'")
+            return authoritativeAttention
+        }
+        if let firstClassAttention = firstClassPendingAttentionWithoutSnapshot(
+            for: event,
+            observedTerminals: observedTerminals
+        ) {
+            DebugLogger.log("[ForemanAgent] draftPendingAttention first-class-no-snapshot terminal=\(event.terminalID.prefix(8)) title='\(firstClassAttention.title)'")
+            return firstClassAttention
+        }
 
         let response = try await foremanService.draftAgentReply(
-            conversation: conversation,
+            narrationContext: narrationContext,
             event: event,
             terminals: deltaTerminals,
             understandings: understandings,
+            workerSnapshots: observedTerminals.workerSnapshots,
             overview: overview,
             lastOutcome: lastOutcome
         )
@@ -238,6 +302,12 @@ actor ForemanAgent {
         await MainActor.run {
             conversation.incrementIteration()
         }
+        _ = await evaluateProjectGoal(
+            for: event.terminalID,
+            terminals: terminals,
+            understandings: understandings,
+            recommendationOutcome: .replyDraft(response.suggestion)
+        )
 
         switch response.suggestion {
         case .replyToAgent(let terminalID, let message, let reason, _):
@@ -278,13 +348,122 @@ actor ForemanAgent {
                 title: "Needs direction",
                 description: message.isEmpty ? "The agent is waiting for your direction." : message,
                 detail: reason.isEmpty ? event.deltaText : reason,
-                actions: await makeRecommendationActions(for: event)
+                actions: []
             )
 
         case .noAction:
             DebugLogger.log("[ForemanAgent] draftPendingAttention no-action terminal=\(event.terminalID.prefix(8)) suggestion=\(Self.describe(response.suggestion))")
             return nil
         }
+    }
+
+    private func draftAuthoritativePendingAttention(
+        for event: AgentNeedsAttentionEvent,
+        observedTerminals: ForemanObservedTerminalContext
+    ) -> PendingAgentAttention? {
+        guard let understanding = observedTerminals.understandings.first(where: { $0.terminalID == event.terminalID }),
+              let workerSnapshot = observedTerminals.workerSnapshots[event.terminalID] else {
+            return nil
+        }
+
+        let authoritativeEvent = AgentNeedsAttentionEvent(
+            terminalID: event.terminalID,
+            agentIdentity: event.agentIdentity,
+            interactionState: event.interactionState,
+            deltaText: event.deltaText,
+            timestamp: event.timestamp,
+            fingerprint: workerSnapshot.attentionFingerprint
+        )
+
+        return PendingAgentAttentionFactory.make(
+            from: authoritativeEvent,
+            understanding: understanding
+        )
+    }
+
+    private func firstClassPendingAttentionWithoutSnapshot(
+        for event: AgentNeedsAttentionEvent,
+        observedTerminals: ForemanObservedTerminalContext
+    ) -> PendingAgentAttention? {
+        guard observedTerminals.workerSnapshots[event.terminalID] == nil,
+              let understanding = observedTerminals.understandings.first(where: { $0.terminalID == event.terminalID }),
+              understanding.supportLevel == .firstClass else {
+            return nil
+        }
+
+        if let structuredAttention = PendingAgentAttentionFactory.make(
+            from: event,
+            understanding: understanding
+        ) {
+            return structuredAttention
+        }
+
+        switch understanding.agentInteractionState {
+        case .waitingText, .error:
+            let eventText = event.deltaText.trimmingCharacters(in: .whitespacesAndNewlines)
+            let description = understanding.agentInteractionContext.descriptionString ??
+                (eventText.isEmpty ? nil : eventText) ??
+                "The agent is waiting for your direction."
+
+            return PendingAgentAttention(
+                terminalID: event.terminalID,
+                agentIdentity: understanding.agentIdentity,
+                interactionState: understanding.agentInteractionState,
+                fingerprint: event.fingerprint,
+                title: "Needs direction",
+                description: description,
+                detail: understanding.agentInteractionContext.detailString,
+                actions: []
+            )
+
+        case .waitingApproval, .waitingChoice, .unknown, .running, .completed:
+            return nil
+        }
+    }
+
+    private func firstClassWorkerPauseWithoutSnapshot(
+        for terminalID: String?,
+        observedTerminals: ForemanObservedTerminalContext
+    ) -> AuthoritativeWorkerPause? {
+        let candidateTerminalIDs: [String]
+        if let terminalID {
+            candidateTerminalIDs = [terminalID]
+        } else {
+            candidateTerminalIDs = observedTerminals.understandings.map(\.terminalID)
+        }
+
+        for candidateTerminalID in candidateTerminalIDs {
+            guard let understanding = observedTerminals.understandings.first(where: { $0.terminalID == candidateTerminalID }),
+                  understanding.supportLevel == .firstClass,
+                  observedTerminals.workerSnapshots[candidateTerminalID] == nil else {
+                continue
+            }
+
+            let prompt = understanding.agentInteractionContext.descriptionString ??
+                understanding.lastMeaningfulEvent
+            let event = AgentNeedsAttentionEvent(
+                terminalID: candidateTerminalID,
+                agentIdentity: understanding.agentIdentity,
+                interactionState: understanding.agentInteractionState,
+                deltaText: prompt,
+                timestamp: Date(timeIntervalSince1970: 0)
+            )
+
+            guard let attention = firstClassPendingAttentionWithoutSnapshot(
+                for: event,
+                observedTerminals: observedTerminals
+            ) else {
+                continue
+            }
+
+            return AuthoritativeWorkerPause(
+                terminalID: candidateTerminalID,
+                message: authoritativePauseMessage(for: attention),
+                question: authoritativePauseQuestion(for: attention)
+            )
+        }
+
+        return nil
     }
 
     func receiveOutcome(_ report: TerminalOutcomeReport) {
@@ -310,8 +489,11 @@ actor ForemanAgent {
 
     private func shouldResumeAfterUserMessage() async -> Bool {
         await MainActor.run {
-            guard conversation.goal != nil else { return false }
+            guard conversation.effectiveGoal != nil else { return false }
             guard !conversation.isRunning else { return false }
+            if conversation.runtimeState.activeProjectGoal?.status == .completed {
+                return false
+            }
             switch conversation.status {
             case .idle, .complete, .stuck:
                 return true
@@ -331,6 +513,8 @@ actor ForemanAgent {
         }
 
         cancelCurrentTask()
+        let bypassAuthoritativeWorkerFor = pendingGuidanceBypassTerminalID
+        pendingGuidanceBypassTerminalID = nil
         currentTask = Task {
             do {
                 await MainActor.run {
@@ -343,7 +527,10 @@ actor ForemanAgent {
                     await executeApprovedAction(action)
                 }
 
-                try await runLoop(captureSnapshots: captureSnapshots)
+                try await runLoop(
+                    captureSnapshots: captureSnapshots,
+                    bypassAuthoritativeWorkerFor: bypassAuthoritativeWorkerFor
+                )
             } catch {
                 await MainActor.run {
                     conversation.errorMessage = error.localizedDescription
@@ -354,7 +541,8 @@ actor ForemanAgent {
     }
 
     private func runLoop(
-        captureSnapshots: @escaping @MainActor () -> [TerminalSnapshot]
+        captureSnapshots: @escaping @MainActor () -> [TerminalSnapshot],
+        bypassAuthoritativeWorkerFor guidanceTerminalID: String? = nil
     ) async throws {
         while await !shouldStop() {
             // 1. Observe
@@ -371,29 +559,101 @@ actor ForemanAgent {
             let deltaTerminals = makeDeltaTerminals(from: terminals)
 
             storeObservedTerminals(observedTerminals)
+            let narrationContext = await MainActor.run {
+                let context = conversation.narrationContext
+                return guidanceTerminalID == nil
+                    ? context
+                    : context.withStepPolicy(.guidanceOnly)
+            }
 
             await MainActor.run {
-                conversation.updateTerminalContext(
+                conversation.runtimeState.updateTerminalContext(
                     overview: overview,
-                    understandings: understandings
+                    understandings: understandings,
+                    workerSnapshots: observedTerminals.workerSnapshots
                 )
             }
-            await updateConversationProjectGoal(
+            _ = await updateConversationProjectGoal(
                 for: preferredTerminalID ?? overview.primaryTerminalID,
                 terminals: terminals
             )
+            if let evaluatedGoal = await evaluateProjectGoal(
+                for: preferredTerminalID ?? overview.primaryTerminalID,
+                terminals: terminals,
+                understandings: understandings
+            ), evaluatedGoal.status.suppressesRecommendations {
+                await pauseForCompletedGoal(
+                    evaluatedGoal,
+                    terminalID: preferredTerminalID ?? overview.primaryTerminalID
+                )
+                break
+            }
 
-            if let runningAgent = runningAgentWithoutAttention(in: understandings) {
+            if guidanceTerminalID == nil,
+               let runningAgent = runningAgentWithoutAttention(in: understandings) {
                 await pauseUntilAgentNeedsAttention(runningAgent)
+                break
+            }
+
+            if guidanceTerminalID == nil,
+               let ambiguousPause = ambiguousWorkerTargetPause(
+                for: preferredTerminalID,
+                understandings: understandings,
+                overview: overview
+            ) {
+                await pauseForAmbiguousWorkerTargets(ambiguousPause)
+                break
+            }
+
+            if guidanceTerminalID == nil,
+               let authoritativeDirective = authoritativeWorkerDirective(
+                for: preferredTerminalID ?? overview.primaryTerminalID,
+                observedTerminals: observedTerminals
+            ) {
+                await MainActor.run {
+                    conversation.incrementIteration()
+                }
+
+                let shouldContinue = try await executeAuthoritativeWorkerDirective(
+                    authoritativeDirective,
+                    terminalID: preferredTerminalID ?? overview.primaryTerminalID
+                )
+                try Task.checkCancellation()
+                guard shouldContinue else { break }
+                continue
+            }
+
+            if guidanceTerminalID == nil,
+               let authoritativePause = authoritativeWorkerPause(
+                for: preferredTerminalID ?? overview.primaryTerminalID,
+                observedTerminals: observedTerminals
+            ) {
+                await pauseForAuthoritativeWorker(
+                    authoritativePause,
+                    terminalID: preferredTerminalID ?? overview.primaryTerminalID
+                )
+                break
+            }
+
+            if guidanceTerminalID == nil,
+               let firstClassPause = firstClassWorkerPauseWithoutSnapshot(
+                for: preferredTerminalID ?? overview.primaryTerminalID,
+                observedTerminals: observedTerminals
+            ) {
+                await pauseForAuthoritativeWorker(
+                    firstClassPause,
+                    terminalID: preferredTerminalID ?? overview.primaryTerminalID
+                )
                 break
             }
 
             // 2. Plan (with delta-truncated terminal text to keep LLM context small)
             await setStatus(.planning)
             let response = try await foremanService.agentStep(
-                conversation: conversation,
+                narrationContext: narrationContext,
                 terminals: deltaTerminals,
                 understandings: understandings,
+                workerSnapshots: observedTerminals.workerSnapshots,
                 overview: overview,
                 lastOutcome: lastOutcome
             )
@@ -404,6 +664,12 @@ actor ForemanAgent {
             await MainActor.run {
                 conversation.incrementIteration()
             }
+            _ = await evaluateProjectGoal(
+                for: preferredTerminalID ?? overview.primaryTerminalID,
+                terminals: terminals,
+                understandings: understandings,
+                recommendationOutcome: .agentAction(response.action)
+            )
 
             // 3. Execute
             let shouldContinue = try await executeAction(response)
@@ -491,6 +757,21 @@ actor ForemanAgent {
         }
     }
 
+    private func executeAuthoritativeWorkerDirective(
+        _ directive: AuthoritativeWorkerDirective,
+        terminalID messageTerminalID: String? = nil
+    ) async throws -> Bool {
+        DebugLogger.log(
+            "[ForemanAgent] authoritative worker directive terminal=\(directive.terminalID.prefix(8)) payload='\(directive.payload.prefix(160))' reason='\(directive.rationale.prefix(160))'"
+        )
+        return try await handleSendCommand(
+            terminalID: directive.terminalID,
+            command: directive.payload,
+            reason: directive.rationale,
+            messageTerminalID: messageTerminalID
+        )
+    }
+
     private func handleSendCommand(
         terminalID: String,
         command: String,
@@ -514,6 +795,33 @@ actor ForemanAgent {
             }
             pauseState = .awaitingApproval(action)
             return false
+        }
+
+        let activeGoalStatus = await MainActor.run { conversation.runtimeState.activeProjectGoal?.status }
+        let selectedSnapshot =
+            latestObservedContext?.workerSnapshots[terminalID] ??
+            previousUnderstandings.first(where: { $0.terminalID == terminalID })?.workerSnapshot
+        let resolvedTarget = selectedSnapshot.map {
+            ForemanSidebarTarget.terminalReply(
+                terminalID: terminalID,
+                fingerprint: $0.attentionFingerprint
+            )
+        } ?? .project(projectID: nil)
+
+        switch runtimePolicy.continuationDecision(
+            mode: mode,
+            activeGoalStatus: activeGoalStatus,
+            resolvedTarget: resolvedTarget,
+            selectedSnapshot: selectedSnapshot,
+            proposedPayload: command
+        ) {
+        case .allowAutonomousDispatch:
+            break
+        case .requireUser(let message), .blockCompletedGoal(let message):
+            return try await handleAskUser(
+                question: message,
+                terminalID: messageTerminalID ?? terminalID
+            )
         }
 
         // Autonomous mode: execute directly
@@ -623,29 +931,82 @@ actor ForemanAgent {
         let deltaTerminals = makeDeltaTerminals(from: terminals)
 
         storeObservedTerminals(observedTerminals)
+        let narrationContext = await MainActor.run { conversation.narrationContext }
 
         await MainActor.run {
-            conversation.updateTerminalContext(
+            conversation.runtimeState.updateTerminalContext(
                 overview: overview,
-                understandings: understandings
+                understandings: understandings,
+                workerSnapshots: observedTerminals.workerSnapshots
             )
         }
-        await updateConversationProjectGoal(
+        _ = await updateConversationProjectGoal(
             for: event.terminalID,
             terminals: terminals
         )
+        if let evaluatedGoal = await evaluateProjectGoal(
+            for: event.terminalID,
+            terminals: terminals,
+            understandings: understandings
+        ), evaluatedGoal.status.suppressesRecommendations {
+            await pauseForCompletedGoal(
+                evaluatedGoal,
+                terminalID: event.terminalID
+            )
+            return
+        }
 
         if let runningAgent = runningAgentWithoutAttention(in: understandings) {
             await pauseUntilAgentNeedsAttention(runningAgent)
             return
         }
 
+        if let authoritativeDirective = authoritativeWorkerDirective(
+            for: event.terminalID,
+            observedTerminals: observedTerminals
+        ) {
+            await MainActor.run {
+                conversation.incrementIteration()
+            }
+
+            _ = try await executeAuthoritativeWorkerDirective(
+                authoritativeDirective,
+                terminalID: event.terminalID
+            )
+            try Task.checkCancellation()
+
+            await MainActor.run {
+                if conversation.status != .waitingForUser {
+                    conversation.status = .idle
+                    conversation.isRunning = false
+                }
+            }
+            return
+        }
+
+        if let authoritativePause = authoritativeWorkerPause(
+            for: event.terminalID,
+            observedTerminals: observedTerminals
+        ) {
+            await pauseForAuthoritativeWorker(authoritativePause, terminalID: event.terminalID)
+            return
+        }
+
+        if let firstClassPause = firstClassWorkerPauseWithoutSnapshot(
+            for: event.terminalID,
+            observedTerminals: observedTerminals
+        ) {
+            await pauseForAuthoritativeWorker(firstClassPause, terminalID: event.terminalID)
+            return
+        }
+
         // Plan
         await setStatus(.planning)
         let response = try await foremanService.agentStep(
-            conversation: conversation,
+            narrationContext: narrationContext,
             terminals: deltaTerminals,
             understandings: understandings,
+            workerSnapshots: observedTerminals.workerSnapshots,
             overview: overview,
             lastOutcome: lastOutcome
         )
@@ -656,6 +1017,12 @@ actor ForemanAgent {
         await MainActor.run {
             conversation.incrementIteration()
         }
+        _ = await evaluateProjectGoal(
+            for: event.terminalID,
+            terminals: terminals,
+            understandings: understandings,
+            recommendationOutcome: .agentAction(response.action)
+        )
 
         // Execute (one action, then stop)
         _ = try await executeAction(response, terminalID: event.terminalID)
@@ -715,6 +1082,7 @@ actor ForemanAgent {
     }
 
     private func storeObservedTerminals(_ observedTerminals: ForemanObservedTerminalContext) {
+        latestObservedContext = observedTerminals
         previousSnapshotsByTerminalID = Dictionary(
             uniqueKeysWithValues: observedTerminals.terminals.map { ($0.terminalID, $0) }
         )
@@ -746,31 +1114,160 @@ actor ForemanAgent {
         }
     }
 
+    private func ambiguousWorkerTargetPause(
+        for terminalID: String?,
+        understandings: [TerminalUnderstanding],
+        overview: TerminalOverview
+    ) -> AmbiguousWorkerTargetPause? {
+        guard terminalID == nil else {
+            return nil
+        }
+
+        let waitingTerminalIDs = understandings.compactMap { understanding -> String? in
+            guard understanding.agentIdentity != .none,
+                  Self.needsHumanAttention(understanding) else {
+                return nil
+            }
+            return understanding.terminalID
+        }
+
+        guard waitingTerminalIDs.count > 1 else {
+            return nil
+        }
+
+        let question = ForemanRuntimePolicy.ambiguousTargetMessage
+        return AmbiguousWorkerTargetPause(
+            message: "\(overview.summary)\n\n\(question)",
+            question: question
+        )
+    }
+
+    private func authoritativeWorkerDirective(
+        for terminalID: String?,
+        observedTerminals: ForemanObservedTerminalContext
+    ) -> AuthoritativeWorkerDirective? {
+        let candidateTerminalIDs: [String]
+        if let terminalID {
+            candidateTerminalIDs = [terminalID]
+        } else {
+            candidateTerminalIDs = observedTerminals.understandings.map(\.terminalID)
+        }
+
+        for candidateTerminalID in candidateTerminalIDs {
+            guard let workerSnapshot = observedTerminals.workerSnapshots[candidateTerminalID],
+                  hasAuthoritativeRuntimeIdentity(workerSnapshot),
+                  let suggestion = workerSnapshot.preferredSuggestion,
+                  let payload = payloadString(for: suggestion.payload) else {
+                continue
+            }
+
+            return AuthoritativeWorkerDirective(
+                terminalID: candidateTerminalID,
+                payload: payload,
+                rationale: suggestion.rationale
+            )
+        }
+
+        return nil
+    }
+
+    private func authoritativeWorkerPause(
+        for terminalID: String?,
+        observedTerminals: ForemanObservedTerminalContext
+    ) -> AuthoritativeWorkerPause? {
+        let candidateTerminalIDs: [String]
+        if let terminalID {
+            candidateTerminalIDs = [terminalID]
+        } else {
+            candidateTerminalIDs = observedTerminals.understandings.map(\.terminalID)
+        }
+
+        for candidateTerminalID in candidateTerminalIDs {
+            guard let workerSnapshot = observedTerminals.workerSnapshots[candidateTerminalID],
+                  workerSnapshot.request != nil,
+                  let understanding = observedTerminals.understandings.first(where: { $0.terminalID == candidateTerminalID }),
+                  understanding.supportLevel == .firstClass else {
+                continue
+            }
+
+            let authoritativeEvent = AgentNeedsAttentionEvent(
+                terminalID: candidateTerminalID,
+                agentIdentity: workerSnapshot.agent.identity,
+                interactionState: understanding.agentInteractionState,
+                deltaText: workerSnapshot.request?.prompt ?? workerSnapshot.state.summary,
+                timestamp: workerSnapshot.observedAt,
+                fingerprint: workerSnapshot.attentionFingerprint
+            )
+
+            guard let attention = PendingAgentAttentionFactory.make(
+                from: authoritativeEvent,
+                understanding: understanding
+            ) else {
+                continue
+            }
+
+            return AuthoritativeWorkerPause(
+                terminalID: candidateTerminalID,
+                message: authoritativePauseMessage(for: attention),
+                question: authoritativePauseQuestion(for: attention)
+            )
+        }
+
+        return nil
+    }
+
+    private func hasAuthoritativeRuntimeIdentity(_ snapshot: TerminalWorkerSnapshot) -> Bool {
+        snapshot.revision > 0 ||
+        snapshot.workerSessionID != "\(snapshot.agent.identity.rawValue)-\(snapshot.terminalID)"
+    }
+
+    private func payloadString(for payload: TerminalWorkerSnapshot.Payload) -> String? {
+        switch payload {
+        case .text(let value), .command(let value), .option(let value), .approval(let value):
+            return value
+        case .foremanPrompt:
+            return nil
+        }
+    }
+
     private func saveProjectGoal(_ goal: String, from snapshots: [TerminalSnapshot]) async -> ForemanProjectGoal? {
         guard let projectID = resolvedProjectID(in: snapshots) else {
             return nil
         }
 
         await goalRuntime.saveGoal(goal, for: projectID)
-        return await goalRuntime.activeGoal(for: projectID)
+        return await goalRuntime.goal(for: projectID)
     }
 
     private func updateConversationProjectGoal(
         for terminalID: String?,
         terminals: [TerminalSnapshot]
-    ) async {
-        let projectGoal: ForemanProjectGoal?
-        if let terminalID {
-            projectGoal = await goalRuntime.goal(forTerminalID: terminalID, in: terminals)
-        } else if let projectID = resolvedProjectID(in: terminals) {
-            projectGoal = await goalRuntime.activeGoal(for: projectID)
-        } else {
-            projectGoal = nil
-        }
+    ) async -> ForemanProjectGoal? {
+        let projectGoal = await resolvedConversationProjectGoal(
+            for: terminalID,
+            terminals: terminals
+        )
 
         await MainActor.run {
-            conversation.setActiveProjectGoal(projectGoal)
+            conversation.runtimeState.setActiveProjectGoal(projectGoal)
         }
+
+        return projectGoal
+    }
+
+    private func resolvedConversationProjectGoal(
+        for terminalID: String?,
+        terminals: [TerminalSnapshot]
+    ) async -> ForemanProjectGoal? {
+        if let terminalID {
+            return await goalRuntime.goal(forTerminalID: terminalID, in: terminals)
+        }
+
+        if let projectID = resolvedProjectID(in: terminals) {
+            return await goalRuntime.goal(for: projectID)
+        }
+
+        return nil
     }
 
     private func resolvedProjectID(in snapshots: [TerminalSnapshot]) -> String? {
@@ -796,36 +1293,176 @@ actor ForemanAgent {
         return nil
     }
 
-    private func makeRecommendationActions(
-        for event: AgentNeedsAttentionEvent
-    ) async -> [PendingAgentAction] {
-        let goal = await MainActor.run {
-            conversation.activeProjectGoal?.objective ?? conversation.goal
+    private func evaluateProjectGoal(
+        for terminalID: String?,
+        terminals: [TerminalSnapshot],
+        understandings: [TerminalUnderstanding],
+        recommendationOutcome: ForemanProjectGoalRecommendationOutcome? = nil
+    ) async -> ForemanProjectGoal? {
+        guard let goal = await resolvedConversationProjectGoal(
+            for: terminalID,
+            terminals: terminals
+        ) else {
+            return nil
         }
-        let title = "Ask \(event.agentIdentity.displayName ?? "the agent") to recommend next step"
-        let payload = recommendationPrompt(for: goal)
-        return [
-            .init(
-                id: "recommend_next_step",
-                title: title,
-                payload: payload,
-                style: .primary
-            ),
-        ]
+
+        // A completed goal stays latched until Foreman observes an explicit
+        // agent outcome or the user reopens/replaces the goal.
+        if goal.status.suppressesRecommendations, recommendationOutcome == nil {
+            await MainActor.run {
+                conversation.runtimeState.setActiveProjectGoal(goal)
+            }
+            return goal
+        }
+
+        let evaluation = goalEvaluator.evaluate(
+            goal: goal,
+            projectID: goal.projectID,
+            terminals: terminals,
+            understandings: understandings,
+            recommendationOutcome: recommendationOutcome
+        )
+        await goalRuntime.recordEvaluation(
+            evaluation,
+            for: goal.projectID
+        )
+
+        let refreshedGoal = await goalRuntime.goal(for: goal.projectID)
+        await MainActor.run {
+            conversation.runtimeState.setActiveProjectGoal(refreshedGoal)
+        }
+
+        return refreshedGoal
     }
 
-    private func recommendationPrompt(for goal: String?) -> String {
-        if let goal, !goal.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return """
-            The saved project goal for this repository is:
-            \(goal)
+    private func makeCompletedGoalAttention(
+        for event: AgentNeedsAttentionEvent,
+        goal: ForemanProjectGoal
+    ) -> PendingAgentAttention {
+        PendingAgentAttention(
+            terminalID: event.terminalID,
+            agentIdentity: event.agentIdentity,
+            interactionState: event.interactionState,
+            fingerprint: event.fingerprint,
+            title: "Goal complete",
+            description: "The saved project goal already looks complete. Choose whether to continue, extend, or close it before sending more work.",
+            detail: completedGoalDetail(for: goal),
+            actions: []
+        )
+    }
 
-            Please inspect the current project state and recommend the single most useful next step toward that goal. Explain why before making changes.
-            """
+    private func pauseForCompletedGoal(
+        _ goal: ForemanProjectGoal,
+        terminalID: String?
+    ) async {
+        let message = "✅ \(goal.goalText) looks complete.\n\n\(completedGoalDetail(for: goal))"
+        let prompt = "Continue it, extend it, or close it?"
+
+        await MainActor.run {
+            if conversation.messages.last?.content != message {
+                conversation.addMessage(
+                    role: .agent,
+                    content: message,
+                    action: .askUser(question: prompt),
+                    terminalID: terminalID
+                )
+            }
+            conversation.setStatus(.waitingForUser)
+        }
+        pauseState = .awaitingUserReply(question: prompt)
+    }
+
+    private func pauseForAuthoritativeWorker(
+        _ pause: AuthoritativeWorkerPause,
+        terminalID: String?
+    ) async {
+        await MainActor.run {
+            if conversation.messages.last?.content != pause.message {
+                conversation.addMessage(
+                    role: .agent,
+                    content: pause.message,
+                    action: .askUser(question: pause.question),
+                    terminalID: terminalID ?? pause.terminalID
+                )
+            }
+            conversation.setStatus(.waitingForUser)
+            conversation.isRunning = false
+        }
+        pauseState = .awaitingUserReply(question: pause.question)
+    }
+
+    private func pauseForAmbiguousWorkerTargets(
+        _ pause: AmbiguousWorkerTargetPause
+    ) async {
+        await MainActor.run {
+            if conversation.messages.last?.content != pause.message {
+                conversation.addMessage(
+                    role: .agent,
+                    content: pause.message,
+                    action: .askUser(question: pause.question)
+                )
+            }
+            conversation.setStatus(.waitingForUser)
+            conversation.isRunning = false
+        }
+        pauseState = .awaitingUserReply(question: pause.question)
+    }
+
+    private func authoritativePauseMessage(
+        for attention: PendingAgentAttention
+    ) -> String {
+        var sections: [String] = [attention.title, attention.description]
+
+        if let detail = attention.detail,
+           !detail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            sections.append(detail)
         }
 
+        if !attention.actions.isEmpty {
+            sections.append(
+                "Options: \(attention.actions.map(\.title).joined(separator: ", "))"
+            )
+        }
+
+        return sections.joined(separator: "\n\n")
+    }
+
+    private func authoritativePauseQuestion(
+        for attention: PendingAgentAttention
+    ) -> String {
+        let description = attention.description.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !description.isEmpty {
+            return description
+        }
+
+        return attention.title
+    }
+
+    private func completedGoalDetail(for goal: ForemanProjectGoal) -> String {
+        let evidence = goal.lastEvidenceSnapshot ?? "Recent observed terminal state suggests the project goal is finished."
         return """
-        Please inspect the current project state and recommend the single most useful next step. Explain why before making changes.
+        \(evidence)
+
+        Use `/goal reopen` to continue it, `/goal set <new goal>` to extend it, or `/goal clear` to close it.
         """
+    }
+
+    private func reopenCompletedGoalAfterUserMessageIfNeeded(_ text: String) async {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        guard runtimePolicy.shouldReopenCompletedGoal(for: trimmed) else { return }
+
+        let completedGoal = await MainActor.run { conversation.runtimeState.activeProjectGoal }
+        guard let completedGoal, completedGoal.status == .completed else { return }
+
+        await goalRuntime.setStatus(
+            .active,
+            for: completedGoal.projectID,
+            evidenceSnapshot: "Reopened after a new user follow-up."
+        )
+        let reopenedGoal = await goalRuntime.goal(for: completedGoal.projectID)
+        await MainActor.run {
+            conversation.runtimeState.setActiveProjectGoal(reopenedGoal)
+        }
     }
 }

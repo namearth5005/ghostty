@@ -179,7 +179,7 @@ struct ForemanAgentTests {
     }
 
     @Test
-    func followUpMessageAfterCompleteStartsANewLoop() async throws {
+    func explicitGoalReopenAfterCompleteStartsANewLoop() async throws {
         let conversation = await MainActor.run { ForemanConversation() }
         let responses: [AgentStepResponse] = [
             try makeStepResponse(
@@ -203,14 +203,14 @@ struct ForemanAgentTests {
 
         try await waitForStatus(.complete, in: conversation)
 
-        await agent.receiveUserMessage("hey how are you")
+        await agent.receiveUserMessage("/goal reopen")
 
         try await waitForIterationCount(2, in: conversation)
         try await waitForStatus(.complete, in: conversation)
 
         let messages = await MainActor.run { conversation.messages }
         let commands = await commandRecorder.recordedCommands()
-        #expect(messages.contains { $0.role == .user && $0.content == "hey how are you" })
+        #expect(messages.contains { $0.role == .user && $0.content == "/goal reopen" })
         #expect(messages.contains { $0.role == .agent && $0.content == "✅ Hello back." })
         #expect(commands.isEmpty)
     }
@@ -248,8 +248,9 @@ struct ForemanAgentTests {
         #expect(overviews.count == 1)
         #expect(overviews.first?.summary.contains("term-1") == true)
         #expect(overviews.first?.summary.contains("hfind") == true)
-        let lastOverview = await MainActor.run { conversation.lastOverview }
-        let lastUnderstandings = await MainActor.run { conversation.lastUnderstandings }
+        let runtimeState = await MainActor.run { conversation.runtimeState }
+        let lastOverview = await MainActor.run { runtimeState.lastOverview }
+        let lastUnderstandings = await MainActor.run { runtimeState.lastUnderstandings }
         #expect(lastOverview?.summary.contains("term-1") == true)
         #expect(lastUnderstandings.first?.state == .failed)
         let messages = await MainActor.run { conversation.messages }
@@ -298,22 +299,7 @@ struct ForemanAgentTests {
     }
 
     @Test
-    func loopUsesSuppliedObservedContextDuringStart() async throws {
-        let conversation = await MainActor.run { ForemanConversation() }
-        let client = ScriptedForemanClient(
-            responses: [
-                try makeStepResponse(
-                    thought: "The structured waiting question is already clear.",
-                    action: .respond(message: "Use the structured waiting question.")
-                ),
-            ]
-        )
-        let commandRecorder = CommandRecorder()
-        let agent = makeAgent(
-            conversation: conversation,
-            client: client,
-            commandRecorder: commandRecorder
-        )
+    func loopUsesSuppliedObservedContextToPauseFirstClassWaitingWorkerDuringStart() async throws {
         let snapshots = kimiInputChromeSnapshots(
             terminalID: "term-1",
             title: "Kimi Code",
@@ -323,28 +309,97 @@ struct ForemanAgentTests {
             terminalID: "term-1",
             snapshots: snapshots
         )
-
-        await agent.start(
-            goal: "help kimi",
-            mode: .interactive,
-            captureSnapshots: { snapshots },
-            captureObservedContext: { observedContext }
+        let result = try await startWithObservedContextPauseCase(
+            snapshots: snapshots,
+            observedContext: observedContext,
+            response: try makeStepResponse(
+                thought: "Foreman should not plan this structured first-class wait.",
+                action: .respond(message: "This should never be used.")
+            )
         )
 
-        try await waitFor {
-            await MainActor.run { conversation.messages.contains { $0.content == "Use the structured waiting question." } }
-        }
-
-        let payloads = await client.recordedUnderstandings()
-        let forwarded = try #require(payloads.first?.first)
-        #expect(forwarded.agentInteractionContext == .waitingText(question: "What should I do here?"))
-        #expect(forwarded.lastMeaningfulEvent == "What should I do here?")
-        let lastUnderstandings = await MainActor.run { conversation.lastUnderstandings }
-        #expect(lastUnderstandings.first?.agentInteractionContext == .waitingText(question: "What should I do here?"))
+        let understanding = try #require(result.understanding)
+        #expect(result.stepCallCount == 0)
+        #expect(result.status == .waitingForUser)
+        #expect(result.agentMessage == "Needs direction\n\nWhat should I do here?")
+        #expect(understanding.interactionContext == .waitingText(question: "What should I do here?"))
+        #expect(understanding.lastMeaningfulEvent == "What should I do here?")
     }
 
     @Test
-    func approvalResumeUsesSuppliedObservedContextProvider() async throws {
+    func loopPausesAuthoritativeCommandRequestWithoutPayloadDuringStart() async throws {
+        let observedContext = authoritativeCommandObservedContextWithoutPayload()
+        let result = try await startWithObservedContextPauseCase(
+            snapshots: observedContext.terminals,
+            observedContext: observedContext,
+            response: try makeStepResponse(
+                thought: "Foreman should not plan this authoritative worker command request.",
+                action: .respond(message: "This should never be used.")
+            )
+        )
+
+        let understanding = try #require(result.understanding)
+        #expect(result.stepCallCount == 0)
+        #expect(result.status == .waitingForUser)
+        #expect(
+            result.agentMessage ==
+            "Needs direction\n\nShould I run the migration now?\n\nThe worker needs direction before running the migration."
+        )
+        #expect(
+            understanding.interactionContext ==
+            .waitingText(
+                question: "Should I run the migration now?",
+                requestID: "req-52",
+                sessionID: "codex-session-52",
+                revision: 52,
+                isPlanning: false
+            )
+        )
+        #expect(understanding.lastMeaningfulEvent == "Should I run the migration now?")
+    }
+
+    @Test
+    func startRequiresExplicitTargetWhenMultipleAuthoritativeWorkersNeedAttention() async throws {
+        let observedContext = ambiguousAuthoritativeWorkerObservedContext()
+        let result = try await startWithObservedContextPauseCase(
+            snapshots: observedContext.terminals,
+            observedContext: observedContext,
+            response: try makeStepResponse(
+                thought: "Foreman should not plan or auto-pick a worker here.",
+                action: .respond(message: "This should never be used.")
+            )
+        )
+
+        #expect(result.stepCallCount == 0)
+        #expect(result.status == .waitingForUser)
+        #expect(
+            result.agentMessage ==
+            "2 terminals need attention: term-1 reply required; term-2 choice required.\n\n\(ForemanRuntimePolicy.ambiguousTargetMessage)"
+        )
+    }
+
+    @Test
+    func startRequiresExplicitTargetWhenMultipleFirstClassWorkersWaitWithoutSnapshots() async throws {
+        let observedContext = ambiguousFirstClassWaitingObservedContextWithoutSnapshots()
+        let result = try await startWithObservedContextPauseCase(
+            snapshots: observedContext.terminals,
+            observedContext: observedContext,
+            response: try makeStepResponse(
+                thought: "Foreman should not plan or auto-pick a worker here.",
+                action: .respond(message: "This should never be used.")
+            )
+        )
+
+        #expect(result.stepCallCount == 0)
+        #expect(result.status == .waitingForUser)
+        #expect(
+            result.agentMessage ==
+            "2 terminals need attention: term-1 reply required; term-2 reply required.\n\n\(ForemanRuntimePolicy.ambiguousTargetMessage)"
+        )
+    }
+
+    @Test
+    func approvalResumeUsesSuppliedObservedContextProviderForGenericContext() async throws {
         let conversation = await MainActor.run { ForemanConversation() }
         let client = ScriptedForemanClient(
             responses: [
@@ -353,12 +408,12 @@ struct ForemanAgentTests {
                     action: .sendCommand(
                         terminalID: "term-1",
                         command: "echo structured",
-                        reason: "Reply based on the structured waiting question."
+                        reason: "Reply using the structured generic Codex context."
                     )
                 ),
                 try makeStepResponse(
-                    thought: "The context stayed structured after approval.",
-                    action: .respond(message: "Structured context persisted after approval.")
+                    thought: "The generic context stayed structured after approval.",
+                    action: .respond(message: "Structured generic context persisted after approval.")
                 ),
             ]
         )
@@ -368,18 +423,19 @@ struct ForemanAgentTests {
             client: client,
             commandRecorder: commandRecorder
         )
-        let snapshots = kimiInputChromeSnapshots(
+        let snapshots = genericCodexWireSnapshots(
             terminalID: "term-1",
-            title: "Kimi Code",
+            title: "Codex",
             isFocused: true
         )
-        let observedContext = kimiObservedWaitingTextContext(
+        let observedContext = genericCodexWireObservedContext(
             terminalID: "term-1",
-            snapshots: snapshots
+            title: "Codex",
+            isFocused: true
         )
 
         await agent.start(
-            goal: "reply to kimi",
+            goal: "reply to codex",
             mode: .interactive,
             captureSnapshots: { snapshots },
             captureObservedContext: { observedContext }
@@ -393,16 +449,98 @@ struct ForemanAgentTests {
         )
 
         try await waitFor {
-            await MainActor.run { conversation.messages.contains { $0.content == "Structured context persisted after approval." } }
+            await MainActor.run { conversation.messages.contains { $0.content == "Structured generic context persisted after approval." } }
         }
 
         let payloads = await client.recordedUnderstandings()
         #expect(payloads.count == 2)
         for payload in payloads {
             let forwarded = try #require(payload.first)
-            #expect(forwarded.agentInteractionContext == .waitingText(question: "What should I do here?"))
-            #expect(forwarded.lastMeaningfulEvent == "What should I do here?")
+            #expect(forwarded.agentIdentity == .codex)
+            #expect(forwarded.agentInteractionContext == .waitingText(question: nil))
         }
+    }
+
+    @Test
+    func startDefersPlanningWhenAuthoritativeWorkerSnapshotIsStillRunning() async throws {
+        let conversation = await MainActor.run { ForemanConversation() }
+        let client = ScriptedForemanClient(
+            responses: [
+                try makeStepResponse(
+                    thought: "This should not run while Kimi is still working.",
+                    action: .declareStuck(reason: "Foreman should have deferred instead of planning.")
+                ),
+            ]
+        )
+        let commandRecorder = CommandRecorder()
+        let agent = makeAgent(
+            conversation: conversation,
+            client: client,
+            commandRecorder: commandRecorder
+        )
+        let snapshots = [
+            TerminalSnapshot.makePreview(
+                terminalID: "kimi-running",
+                windowID: "win-1",
+                tabID: "tab-1",
+                title: "Kimi Code",
+                cwd: "/tmp/project",
+                isFocused: true,
+                visibleText: "Kimi is actively working.",
+                recentScrollbackLines: [],
+                lastInputPreview: nil,
+                foregroundProcessName: "kimi",
+                cursorIsAtPrompt: false,
+                usingAlternateScreen: true
+            ),
+        ]
+        let observedContext = ForemanObservedContextBuilder()
+            .build(
+                snapshots: snapshots,
+                kimiWireRecordsByTerminalID: [
+                    "kimi-running": [
+                        KimiWireRecord(
+                            timestamp: 1,
+                            message: KimiWireMessage(
+                                type: "StepBegin",
+                                payload: KimiWirePayload()
+                            )
+                        ),
+                    ],
+                ]
+            )
+            .context
+
+        await agent.start(
+            goal: "Help Kimi finish the analysis",
+            mode: .interactive,
+            captureSnapshots: { snapshots },
+            captureObservedContext: { observedContext }
+        )
+
+        try await waitFor {
+            let runtimeState = await MainActor.run { conversation.runtimeState }
+            let lastUnderstandings = await MainActor.run { runtimeState.lastUnderstandings }
+            return await MainActor.run {
+                conversation.status == .idle &&
+                conversation.isRunning == false &&
+                !lastUnderstandings.isEmpty
+            }
+        }
+
+        let stepCalls = await client.agentStepCallCount()
+        let messages = await MainActor.run { conversation.messages }
+        let runtimeState = await MainActor.run { conversation.runtimeState }
+        let lastUnderstandings = await MainActor.run { runtimeState.lastUnderstandings }
+
+        #expect(stepCalls == 0)
+        #expect(messages.count == 1)
+        #expect(messages.first?.role == .user)
+        #expect(messages.first?.content == "Help Kimi finish the analysis")
+        #expect(lastUnderstandings.first?.state == .running)
+        #expect(lastUnderstandings.first?.agentIdentity == .kimi)
+        #expect(lastUnderstandings.first?.agentInteractionState == .running)
+        #expect(lastUnderstandings.first?.supportLevel == .firstClass)
     }
 
     @Test
@@ -482,7 +620,7 @@ struct ForemanAgentTests {
     }
 
     @Test
-    func codexTransitionObservedContextKeepsStartParityAcrossLaunchPaths() async throws {
+    func codexTransitionObservedContextPausesWithoutPlannerAcrossLaunchPaths() async throws {
         let builder = ForemanObservedContextBuilder()
         let cases: [(terminalID: String, title: String, isFocused: Bool)] = [
             ("codex-transition-existing", "shell", true),
@@ -490,7 +628,8 @@ struct ForemanAgentTests {
             ("codex-transition-managed", "OpenAI Codex", false),
         ]
 
-        var forwardedUnderstandings: [UnderstandingSignature] = []
+        var runtimeUnderstandings: [UnderstandingSignature] = []
+        var agentMessages: [String] = []
 
         for entry in cases {
             let current = TerminalSnapshot.makePreview(
@@ -532,28 +671,32 @@ struct ForemanAgentTests {
                 previousSnapshotsByTerminalID: [entry.terminalID: previous]
             ).context
 
-            let result = try await startWithObservedContextCase(
+            let result = try await startWithObservedContextPauseCase(
                 snapshots: [current],
                 observedContext: observedContext,
                 response: try makeStepResponse(
-                    thought: "The Codex question is already clear.",
-                    action: .respond(message: "Use the structured Codex question.")
+                    thought: "Foreman should not plan this authoritative worker request.",
+                    action: .respond(message: "This should never be used.")
                 )
             )
 
-            forwardedUnderstandings.append(try #require(result.understanding))
-            #expect(result.messages.contains { $0.content == "Use the structured Codex question." })
+            runtimeUnderstandings.append(try #require(result.understanding))
+            agentMessages.append(try #require(result.agentMessage))
+            #expect(result.stepCallCount == 0)
+            #expect(result.status == .waitingForUser)
         }
 
-        let first = try #require(forwardedUnderstandings.first)
-        #expect(forwardedUnderstandings.dropFirst().allSatisfy { $0 == first })
+        let first = try #require(runtimeUnderstandings.first)
+        #expect(runtimeUnderstandings.dropFirst().allSatisfy { $0 == first })
         #expect(first.agentIdentity == .codex)
         #expect(first.interactionState == .waitingText)
         #expect(first.interactionContext == .waitingText(question: "• Hey. What do you need help with?"))
+        #expect(agentMessages.dropFirst().allSatisfy { $0 == agentMessages.first })
+        #expect(agentMessages.first == "Needs direction\n\n• Hey. What do you need help with?")
     }
 
     @Test
-    func kimiTransitionObservedContextKeepsStartParityAcrossLaunchPaths() async throws {
+    func kimiTransitionObservedContextPausesWithoutPlannerAcrossLaunchPaths() async throws {
         let builder = ForemanObservedContextBuilder()
         let question = "What should I do here?"
         let cases: [(terminalID: String, title: String, isFocused: Bool)] = [
@@ -562,7 +705,8 @@ struct ForemanAgentTests {
             ("kimi-transition-managed", "Kimi Code", false),
         ]
 
-        var forwardedUnderstandings: [UnderstandingSignature] = []
+        var runtimeUnderstandings: [UnderstandingSignature] = []
+        var agentMessages: [String] = []
 
         for entry in cases {
             let current = kimiInputChromeSnapshots(
@@ -601,28 +745,32 @@ struct ForemanAgentTests {
                 kimiWireRecordsByTerminalID: [entry.terminalID: [kimiQuestionRecord(question: question)]]
             ).context
 
-            let result = try await startWithObservedContextCase(
+            let result = try await startWithObservedContextPauseCase(
                 snapshots: [current],
                 observedContext: observedContext,
                 response: try makeStepResponse(
-                    thought: "The Kimi question is already clear.",
-                    action: .respond(message: "Use the structured Kimi question.")
+                    thought: "Foreman should not plan this authoritative worker request.",
+                    action: .respond(message: "This should never be used.")
                 )
             )
 
-            forwardedUnderstandings.append(try #require(result.understanding))
-            #expect(result.messages.contains { $0.content == "Use the structured Kimi question." })
+            runtimeUnderstandings.append(try #require(result.understanding))
+            agentMessages.append(try #require(result.agentMessage))
+            #expect(result.stepCallCount == 0)
+            #expect(result.status == .waitingForUser)
         }
 
-        let first = try #require(forwardedUnderstandings.first)
-        #expect(forwardedUnderstandings.dropFirst().allSatisfy { $0 == first })
+        let first = try #require(runtimeUnderstandings.first)
+        #expect(runtimeUnderstandings.dropFirst().allSatisfy { $0 == first })
         #expect(first.agentIdentity == .kimi)
         #expect(first.interactionState == .waitingText)
         #expect(first.interactionContext == .waitingText(question: question))
+        #expect(agentMessages.dropFirst().allSatisfy { $0 == agentMessages.first })
+        #expect(agentMessages.first == "Needs direction\n\nWhat should I do here?")
     }
 
     @Test
-    func claudeTransitionObservedContextKeepsStartParityAcrossLaunchPaths() async throws {
+    func claudeTransitionObservedContextPausesWithoutPlannerAcrossLaunchPaths() async throws {
         let builder = ForemanObservedContextBuilder()
         let expectedContext: AgentInteractionContext = .waitingChoice(
             question: "Quick safety check: Is this a project you created or one you trust?",
@@ -634,7 +782,8 @@ struct ForemanAgentTests {
             ("claude-transition-managed", "Claude Code", false, 2103),
         ]
 
-        var forwardedUnderstandings: [UnderstandingSignature] = []
+        var runtimeUnderstandings: [UnderstandingSignature] = []
+        var agentMessages: [String] = []
 
         for entry in cases {
             let current = TerminalSnapshot.makePreview(
@@ -685,29 +834,40 @@ struct ForemanAgentTests {
                 previousSnapshotsByTerminalID: [entry.terminalID: previous]
             ).context
 
-            let result = try await startWithObservedContextCase(
+            let result = try await startWithObservedContextPauseCase(
                 snapshots: [current],
                 observedContext: observedContext,
                 response: try makeStepResponse(
-                    thought: "The Claude trust prompt is already clear.",
-                    action: .respond(message: "Use the structured Claude options.")
+                    thought: "Foreman should not plan this authoritative worker request.",
+                    action: .respond(message: "This should never be used.")
                 )
             )
 
-            forwardedUnderstandings.append(try #require(result.understanding))
-            #expect(result.messages.contains { $0.content == "Use the structured Claude options." })
+            runtimeUnderstandings.append(try #require(result.understanding))
+            agentMessages.append(try #require(result.agentMessage))
+            #expect(result.stepCallCount == 0)
+            #expect(result.status == .waitingForUser)
         }
 
-        let first = try #require(forwardedUnderstandings.first)
-        #expect(forwardedUnderstandings.dropFirst().allSatisfy { $0 == first })
+        let first = try #require(runtimeUnderstandings.first)
+        #expect(runtimeUnderstandings.dropFirst().allSatisfy { $0 == first })
         #expect(first.agentIdentity == .claudeCode)
         #expect(first.interactionState == .waitingChoice)
         #expect(first.interactionContext == expectedContext)
+        #expect(agentMessages.dropFirst().allSatisfy { $0 == agentMessages.first })
+        #expect(agentMessages.first == """
+        Choose an option
+
+        Quick safety check: Is this a project you created or one you trust?
+
+        Options: Yes, I trust this folder, No, exit
+        """)
     }
 
     @Test
     func startingAndStoppingConversationClearsStructuredTerminalContext() async {
         let conversation = await MainActor.run { ForemanConversation() }
+        let runtimeState = await MainActor.run { conversation.runtimeState }
         let overview = TerminalOverview(
             summary: "term-1 failed",
             changedTerminalIDs: ["term-1"],
@@ -721,29 +881,36 @@ struct ForemanAgentTests {
             importantDetails: ["The typed command was `hfind . -print`."],
             suggestedNextActions: []
         )
+        let activeGoal = ForemanProjectGoal(
+            projectID: "/tmp/project",
+            objective: "Preserve this project goal."
+        )
 
         await MainActor.run {
-            conversation.updateTerminalContext(overview: overview, understandings: [understanding])
+            runtimeState.updateTerminalContext(overview: overview, understandings: [understanding])
+            runtimeState.setActiveProjectGoal(activeGoal)
             conversation.addHiddenContext("Hidden context from previous reactive event.")
             conversation.start(goal: "new session", mode: .interactive)
         }
 
         let clearedOnStart = await MainActor.run {
-            conversation.lastOverview == nil &&
-            conversation.lastUnderstandings.isEmpty &&
+            runtimeState.lastOverview == nil &&
+            runtimeState.lastUnderstandings.isEmpty &&
+            runtimeState.activeProjectGoal == activeGoal &&
             conversation.hiddenContext.isEmpty
         }
         #expect(clearedOnStart)
 
         await MainActor.run {
-            conversation.updateTerminalContext(overview: overview, understandings: [understanding])
+            runtimeState.updateTerminalContext(overview: overview, understandings: [understanding])
             conversation.addHiddenContext("Hidden context from stopped reactive event.")
             conversation.stop()
         }
 
         let clearedOnStop = await MainActor.run {
-            conversation.lastOverview == nil &&
-            conversation.lastUnderstandings.isEmpty &&
+            runtimeState.lastOverview == nil &&
+            runtimeState.lastUnderstandings.isEmpty &&
+            runtimeState.activeProjectGoal == activeGoal &&
             conversation.hiddenContext.isEmpty
         }
         #expect(clearedOnStop)
@@ -798,6 +965,7 @@ struct ForemanAgentTests {
     func uiPhaseTreatsAskUserAsAwaitingReply() {
         let phase = ConversationUIPhase.resolve(
             goal: "Investigate",
+            sessionGoal: "Investigate",
             isRunning: true,
             status: .waitingForUser,
             lastAction: .askUser(question: "What should I inspect?")
@@ -810,6 +978,7 @@ struct ForemanAgentTests {
     func uiPhaseTreatsInteractiveCommandAsAwaitingApproval() {
         let phase = ConversationUIPhase.resolve(
             goal: "List the files",
+            sessionGoal: "List the files",
             isRunning: true,
             status: .waitingForUser,
             lastAction: .sendCommand(terminalID: "term-1", command: "ls -la", reason: "Inspect files")
@@ -822,6 +991,7 @@ struct ForemanAgentTests {
     func uiPhaseCanAwaitApprovalWithoutGoal() {
         let phase = ConversationUIPhase.resolve(
             goal: nil,
+            sessionGoal: nil,
             isRunning: true,
             status: .waitingForUser,
             lastAction: .sendCommand(
@@ -832,6 +1002,66 @@ struct ForemanAgentTests {
         )
 
         #expect(phase == .awaitingApproval(command: "1"))
+    }
+
+    @Test
+    func uiPhaseTreatsAmbiguousSidebarTargetAsChoosingTarget() {
+        let phase = ConversationUIPhase.resolve(
+            goal: "Coordinate the waiting terminals",
+            sessionGoal: nil,
+            isRunning: false,
+            status: .idle,
+            lastAction: nil,
+            resolvedTarget: .ambiguous(options: [
+                .terminalReply(terminalID: "term-1", fingerprint: "fp-1", title: "term-1"),
+                .project(title: "Guide Foreman"),
+            ])
+        )
+
+        #expect(phase == .choosingTarget(options: [
+            .terminalReply(terminalID: "term-1", fingerprint: "fp-1", title: "term-1"),
+            .project(title: "Guide Foreman"),
+        ]))
+    }
+
+    @Test
+    func uiPhaseTreatsCompletedSidebarGoalAsCompleted() {
+        let phase = ConversationUIPhase.resolve(
+            goal: "Ship the sidebar",
+            sessionGoal: nil,
+            isRunning: false,
+            status: .idle,
+            lastAction: nil,
+            resolvedTarget: .completedGoal(projectID: "/tmp/ghostty")
+        )
+
+        #expect(phase == .goalCompleted)
+    }
+
+    @Test
+    func uiPhaseTreatsSavedInternalGoalAsGoalReady() {
+        let phase = ConversationUIPhase.resolve(
+            goal: "Evaluate AGENTS.md",
+            sessionGoal: nil,
+            isRunning: false,
+            status: .idle,
+            lastAction: nil
+        )
+
+        #expect(phase == .goalReady)
+    }
+
+    @Test
+    func uiPhaseKeepsIdleStartedSessionAsChatting() {
+        let phase = ConversationUIPhase.resolve(
+            goal: "Evaluate AGENTS.md",
+            sessionGoal: "Evaluate AGENTS.md",
+            isRunning: false,
+            status: .idle,
+            lastAction: nil
+        )
+
+        #expect(phase == .chatting)
     }
 
     @Test
@@ -852,6 +1082,26 @@ struct ForemanAgentTests {
         )
 
         #expect(display == .chatting)
+    }
+
+    @Test
+    func statusDisplayTreatsCompletedGoalPhaseAsComplete() {
+        let display = ConversationStatusDisplay.resolve(
+            status: .idle,
+            phase: .goalCompleted
+        )
+
+        #expect(display == .complete)
+    }
+
+    @Test
+    func statusDisplayTreatsSavedGoalPhaseAsIdle() {
+        let display = ConversationStatusDisplay.resolve(
+            status: .idle,
+            phase: .goalReady
+        )
+
+        #expect(display == .idle)
     }
 
     // MARK: - Reactive Auto-Drive Tests
@@ -1030,7 +1280,7 @@ struct ForemanAgentTests {
     }
 
     @Test
-    func draftPendingAttentionForAskHumanShowsClickableFallbackAction() async throws {
+    func draftPendingAttentionForAskHumanDoesNotInventFallbackWorkerPrompt() async throws {
         let conversation = await MainActor.run { ForemanConversation() }
         let client = ScriptedForemanClient(replyDrafts: [
             try makeReplyDraftResponse(
@@ -1064,16 +1314,12 @@ struct ForemanAgentTests {
         )
 
         let commands = await commandRecorder.recordedCommands()
-        let action = try #require(attention?.actions.first)
         #expect(commands.isEmpty)
         #expect(attention?.terminalID == "term-1")
         #expect(attention?.title == "Needs direction")
         #expect(attention?.description == "What should Kimi do in the mend directory?")
         #expect(attention?.detail == "Kimi is asking for the next task and Foreman has no active user goal.")
-        #expect(attention?.actions.count == 1)
-        #expect(action.title == "Ask Kimi to recommend next step")
-        #expect(action.payload == "Please inspect the current project state and recommend the single most useful next step. Explain why before making changes.")
-        #expect(action.style == .primary)
+        #expect(attention?.actions.isEmpty == true)
     }
 
     @Test
@@ -1108,7 +1354,7 @@ struct ForemanAgentTests {
     }
 
     @Test
-    func draftPendingAttentionUsesSuppliedObservedContext() async throws {
+    func draftPendingAttentionUsesSuppliedObservedContextToEscalateFirstClassRepliesWithoutDrafting() async throws {
         let snapshots = kimiInputChromeSnapshots(
             terminalID: "kimi-observed",
             title: "Kimi Code",
@@ -1140,14 +1386,17 @@ struct ForemanAgentTests {
             )
         )
 
-        #expect(result.signature?.title == "Suggested reply")
+        #expect(result.signature?.title == "Needs direction")
+        #expect(result.signature?.description == "What should I do here?")
+        #expect(result.signature?.actions.isEmpty == true)
         #expect(result.understanding?.interactionContext == .waitingText(question: "What should I do here?"))
         #expect(result.understanding?.lastMeaningfulEvent == "What should I do here?")
         #expect(result.understanding?.shortExplanation == "Kimi is waiting for your response: What should I do here?")
+        #expect(result.replyDraftCallCount == 0)
     }
 
     @Test
-    func draftPendingAttentionWithObservedContextKeepsLaunchPathParity() async throws {
+    func draftPendingAttentionWithObservedContextKeepsFirstClassEscalationParity() async throws {
         let cases: [(terminalID: String, title: String, isFocused: Bool)] = [
             ("kimi-observed-existing", "shell", true),
             ("kimi-observed-new-tab", "nambouchara@Nams-MacBook-Pro:~", false),
@@ -1156,6 +1405,7 @@ struct ForemanAgentTests {
 
         var signatures: [PendingAttentionSignature] = []
         var forwardedUnderstandings: [UnderstandingSignature] = []
+        var draftCallCounts: [Int] = []
 
         for entry in cases {
             let snapshots = kimiInputChromeSnapshots(
@@ -1191,15 +1441,17 @@ struct ForemanAgentTests {
 
             signatures.append(try #require(result.signature))
             forwardedUnderstandings.append(try #require(result.understanding))
+            draftCallCounts.append(result.replyDraftCallCount)
         }
 
         #expect(signatures.dropFirst().allSatisfy { $0 == signatures.first })
         #expect(forwardedUnderstandings.dropFirst().allSatisfy { $0 == forwardedUnderstandings.first })
+        #expect(draftCallCounts.allSatisfy { $0 == 0 })
         #expect(forwardedUnderstandings.first?.interactionContext == .waitingText(question: "What should I do here?"))
         #expect(forwardedUnderstandings.first?.lastMeaningfulEvent == "What should I do here?")
-        #expect(signatures.first?.title == "Suggested reply")
-        #expect(signatures.first?.description == "The current wire-aware question is specific enough to answer directly.")
-        #expect(signatures.first?.actions.first?.title == "Summarize the repository first.")
+        #expect(signatures.first?.title == "Needs direction")
+        #expect(signatures.first?.description == "What should I do here?")
+        #expect(signatures.first?.actions.isEmpty == true)
     }
 
     @Test
@@ -1338,7 +1590,7 @@ struct ForemanAgentTests {
     }
 
     @Test
-    func draftPendingAttentionForKimiRepliesSharesParityAcrossLaunchPaths() async throws {
+    func draftPendingAttentionForKimiAuthoritativeReplyEscalatesWithoutLLMDraftAcrossLaunchPaths() async throws {
         let cases: [(terminalID: String, snapshots: [TerminalSnapshot])] = [
             ("kimi-existing", kimiReplySnapshots(terminalID: "kimi-existing", title: "shell", isFocused: true)),
             ("kimi-new-tab", kimiReplySnapshots(terminalID: "kimi-new-tab", title: "nambouchara@Nams-MacBook-Pro:~")),
@@ -1346,7 +1598,7 @@ struct ForemanAgentTests {
         ]
 
         var signatures: [PendingAttentionSignature] = []
-        var forwardedUnderstandings: [UnderstandingSignature] = []
+        var draftCallCounts: [Int] = []
 
         for entry in cases {
             let result = try await draftPendingAttentionCase(
@@ -1358,34 +1610,23 @@ struct ForemanAgentTests {
                     deltaText: "What would you like me to do here?",
                     timestamp: Date(timeIntervalSince1970: 1),
                     fingerprint: "\(entry.terminalID)|kimi|waitingText|next"
-                ),
-                replyDraft: try makeReplyDraftResponse(
-                    thought: "Kimi is asking what to do next.",
-                    suggestion: .replyToAgent(
-                        terminalID: entry.terminalID,
-                        message: "Read README.md and summarize what this project does.",
-                        reason: "Kimi has entered the mend repo and is asking for the next instruction.",
-                        confidence: 1.0
-                    )
                 )
             )
 
             signatures.append(try #require(result.signature))
-            forwardedUnderstandings.append(try #require(result.understanding))
+            draftCallCounts.append(result.replyDraftCallCount)
         }
 
         #expect(signatures.dropFirst().allSatisfy { $0 == signatures.first })
-        #expect(forwardedUnderstandings.dropFirst().allSatisfy { $0 == forwardedUnderstandings.first })
-        #expect(signatures.first?.title == "Suggested reply")
-        #expect(signatures.first?.description == "Kimi has entered the mend repo and is asking for the next instruction.")
-        #expect(signatures.first?.detail == "What would you like me to do here?")
-        #expect(signatures.first?.actions.first?.title == "Read README.md and summarize what this project does.")
-        #expect(forwardedUnderstandings.first?.interactionState == .waitingText)
-        #expect(forwardedUnderstandings.first?.interactionContext == .waitingText(question: "What would you like me to do here?"))
+        #expect(draftCallCounts.allSatisfy { $0 == 0 })
+        #expect(signatures.first?.title == "Needs direction")
+        #expect(signatures.first?.description == "What would you like me to do here?")
+        #expect(signatures.first?.detail == nil)
+        #expect(signatures.first?.actions.isEmpty == true)
     }
 
     @Test
-    func draftPendingAttentionForKimiAskHumanSharesParityAcrossLaunchPaths() async throws {
+    func draftPendingAttentionForKimiSavedGoalStillEscalatesAuthoritativeReplyAcrossLaunchPaths() async throws {
         let cases: [(terminalID: String, snapshots: [TerminalSnapshot])] = [
             ("kimi-existing", kimiReplySnapshots(terminalID: "kimi-existing", title: "shell", isFocused: true)),
             ("kimi-new-tab", kimiReplySnapshots(terminalID: "kimi-new-tab", title: "nambouchara@Nams-MacBook-Pro:~")),
@@ -1409,15 +1650,7 @@ struct ForemanAgentTests {
                     timestamp: Date(timeIntervalSince1970: 1),
                     fingerprint: "\(entry.terminalID)|kimi|waitingText|next"
                 ),
-                replyDraft: try makeReplyDraftResponse(
-                    thought: "The agent needs a goal from the human.",
-                    suggestion: .askHuman(
-                        terminalID: entry.terminalID,
-                        message: "What should Kimi do in the mend directory?",
-                        reason: "Kimi is asking for the next task and Foreman has no active user goal.",
-                        confidence: 1.0
-                    )
-                ),
+                replyDraft: nil,
                 goalRuntime: runtime
             )
 
@@ -1426,24 +1659,21 @@ struct ForemanAgentTests {
 
         #expect(signatures.dropFirst().allSatisfy { $0 == signatures.first })
         #expect(signatures.first?.title == "Needs direction")
-        #expect(signatures.first?.description == "What should Kimi do in the mend directory?")
-        #expect(signatures.first?.detail == "Kimi is asking for the next task and Foreman has no active user goal.")
-        #expect(signatures.first?.actions.first?.title == "Ask Kimi to recommend next step")
-        #expect(signatures.first?.actions.first?.payload == goalAwareRecommendNextStepPrompt(goal: projectGoal))
+        #expect(signatures.first?.description == "What would you like me to do here?")
+        #expect(signatures.first?.detail == nil)
+        #expect(signatures.first?.actions.isEmpty == true)
     }
 
     @Test
-    func draftPendingAttentionForCodexAskHumanUsesSavedProjectGoalAcrossLaunchPaths() async throws {
+    func draftPendingAttentionForCodexAuthoritativeReplyEscalatesWithoutLLMDraftAcrossLaunchPaths() async throws {
         let cases: [(terminalID: String, snapshots: [TerminalSnapshot])] = [
             ("codex-existing", codexReplySnapshots(terminalID: "codex-existing", title: "shell", isFocused: true)),
             ("codex-new-tab", codexReplySnapshots(terminalID: "codex-new-tab", title: "nambouchara@Nams-MacBook-Pro:~")),
             ("codex-managed", codexReplySnapshots(terminalID: "codex-managed", title: "OpenAI Codex")),
         ]
-        let projectGoal = "Coordinate the next Foreman goal-runtime slice across agent terminals."
-        let runtime = ForemanProjectGoalRuntime()
-        await runtime.saveGoal(projectGoal, for: "/tmp/project")
 
         var signatures: [PendingAttentionSignature] = []
+        var draftCallCounts: [Int] = []
 
         for entry in cases {
             let result = try await draftPendingAttentionCase(
@@ -1457,41 +1687,263 @@ struct ForemanAgentTests {
                     timestamp: Date(timeIntervalSince1970: 1),
                     fingerprint: "\(entry.terminalID)|codex|waitingText|next"
                 ),
-                replyDraft: try makeReplyDraftResponse(
-                    thought: "The agent needs a goal from the human.",
-                    suggestion: .askHuman(
+                replyDraft: nil
+            )
+
+            signatures.append(try #require(result.signature))
+            draftCallCounts.append(result.replyDraftCallCount)
+        }
+
+        #expect(signatures.dropFirst().allSatisfy { $0 == signatures.first })
+        #expect(draftCallCounts.allSatisfy { $0 == 0 })
+        #expect(signatures.first?.title == "Needs direction")
+        #expect(signatures.first?.description == "• Hello. What do you want to work on in ghostty?")
+        #expect(signatures.first?.detail == nil)
+        #expect(signatures.first?.actions.isEmpty == true)
+    }
+
+    @Test
+    func draftPendingAttentionForCompletedGoalSuppressesRecommendationsAcrossLaunchPaths() async throws {
+        let cases: [(terminalID: String, snapshots: [TerminalSnapshot])] = [
+            ("codex-complete-existing", codexReplySnapshots(terminalID: "codex-complete-existing", title: "shell", isFocused: true)),
+            ("codex-complete-new-tab", codexReplySnapshots(terminalID: "codex-complete-new-tab", title: "nambouchara@Nams-MacBook-Pro:~")),
+            ("codex-complete-managed", codexReplySnapshots(terminalID: "codex-complete-managed", title: "OpenAI Codex")),
+        ]
+        let runtime = ForemanProjectGoalRuntime()
+        await runtime.saveGoal("Ship the goal evaluator.", for: "/tmp/project")
+        await runtime.recordEvaluation(
+            .init(
+                progress: .completed,
+                evidenceSnapshot: "Codex completed the evaluator slice and the project goal looks done.",
+                evaluatedAt: Date(timeIntervalSince1970: 10)
+            ),
+            for: "/tmp/project"
+        )
+
+        var signatures: [PendingAttentionSignature] = []
+
+        for entry in cases {
+            let conversation = await MainActor.run { ForemanConversation() }
+            let client = ScriptedForemanClient(replyDrafts: [
+                try makeReplyDraftResponse(
+                    thought: "This should never be drafted once the goal is complete.",
+                    suggestion: .replyToAgent(
                         terminalID: entry.terminalID,
-                        message: "What should Codex do in this project?",
-                        reason: "Codex is asking for the next task and Foreman has no active user goal.",
+                        message: "Keep going.",
+                        reason: "This should not be used.",
                         confidence: 1.0
                     )
                 ),
+            ])
+            let commandRecorder = CommandRecorder()
+            let agent = makeAgent(
+                conversation: conversation,
+                client: client,
+                commandRecorder: commandRecorder,
+                goalRuntime: runtime,
+                preferredTerminalID: entry.terminalID
+            )
+
+            let attention = try await agent.draftPendingAttention(
+                for: AgentNeedsAttentionEvent(
+                    terminalID: entry.terminalID,
+                    agentIdentity: .codex,
+                    interactionState: .waitingText,
+                    deltaText: "What should I work on next?",
+                    timestamp: Date(timeIntervalSince1970: 11),
+                    fingerprint: "\(entry.terminalID)|codex|waitingText|complete"
+                ),
+                captureSnapshots: { entry.snapshots }
+            )
+
+            signatures.append(try #require(pendingAttentionSignature(attention)))
+            let draftCalls = await client.replyDraftCallCount()
+            #expect(draftCalls == 0)
+        }
+
+        #expect(signatures.dropFirst().allSatisfy { $0 == signatures.first })
+        #expect(signatures.first?.title == "Goal complete")
+        #expect(signatures.first?.description.contains("continue") == true)
+        #expect(signatures.first?.description.contains("close") == true)
+        #expect(signatures.first?.detail?.contains("/goal reopen") == true)
+        #expect(signatures.first?.detail?.contains("/goal clear") == true)
+        #expect(signatures.first?.actions.isEmpty == true)
+    }
+
+    @Test
+    func draftPendingAttentionForCompletedGoalSuppressesAuthoritativeWorkerAttention() async throws {
+        let runtime = ForemanProjectGoalRuntime()
+        await runtime.saveGoal("Ship the goal evaluator.", for: "/tmp/project")
+        await runtime.recordEvaluation(
+            .init(
+                progress: .completed,
+                evidenceSnapshot: "Codex finished the evaluator slice and the project goal is done.",
+                evaluatedAt: Date(timeIntervalSince1970: 10)
+            ),
+            for: "/tmp/project"
+        )
+
+        let conversation = await MainActor.run { ForemanConversation() }
+        let client = ScriptedForemanClient(replyDrafts: [
+            try makeReplyDraftResponse(
+                thought: "This should never be drafted once the goal is complete.",
+                suggestion: .replyToAgent(
+                    terminalID: "term-1",
+                    message: "Keep going.",
+                    reason: "This should not be used.",
+                    confidence: 1.0
+                )
+            ),
+        ])
+        let commandRecorder = CommandRecorder()
+        let agent = makeAgent(
+            conversation: conversation,
+            client: client,
+            commandRecorder: commandRecorder,
+            goalRuntime: runtime,
+            preferredTerminalID: "term-1"
+        )
+
+        let snapshot = TerminalSnapshot.makePreview(
+            terminalID: "term-1",
+            windowID: "win-1",
+            tabID: "tab-1",
+            title: "Codex",
+            cwd: "/tmp/project",
+            isFocused: true,
+            visibleText: "Should I preserve the API?",
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessName: "codex"
+        )
+        let workerSnapshot = TerminalWorkerSnapshot(
+            schemaVersion: 1,
+            terminalID: "term-1",
+            workerSessionID: "codex-session-1",
+            revision: 7,
+            observedAt: Date(timeIntervalSince1970: 1_748_444_444),
+            ttlMilliseconds: 15_000,
+            workerGoal: "stabilize the API",
+            agent: .init(identity: .codex),
+            state: .init(
+                lifecycle: .running,
+                attention: .replyRequired,
+                summary: "Codex is waiting for a reply.",
+                details: ["Asked whether the API should stay stable."],
+                runtimeFlags: []
+            ),
+            request: .init(
+                id: "req-7",
+                kind: .reply,
+                prompt: "Should I preserve the API?",
+                options: []
+            ),
+            suggestions: [
+                .init(
+                    id: "preserve-api",
+                    kind: .reply,
+                    title: "Preserve the API",
+                    payload: .text("Preserve the current API and adapt the internals."),
+                    rationale: "Lowest migration risk.",
+                    recommended: true,
+                    execution: .manualOnly,
+                    requestID: "req-7"
+                ),
+            ]
+        )
+        let understanding = TerminalUnderstanding.preview(
+            terminalID: "term-1",
+            state: .waiting,
+            shortExplanation: "Codex is waiting for a reply.",
+            lastMeaningfulEvent: "Should I preserve the API?",
+            importantDetails: [],
+            suggestedNextActions: [],
+            agentIdentity: .codex,
+            agentInteractionState: .waitingText,
+            workerSnapshot: workerSnapshot
+        )
+
+        let attention = try await agent.draftPendingAttention(
+            for: AgentNeedsAttentionEvent(
+                terminalID: "term-1",
+                agentIdentity: .codex,
+                interactionState: .waitingText,
+                deltaText: "Should I preserve the API?",
+                timestamp: Date(timeIntervalSince1970: 11),
+                fingerprint: "term-1|codex|waitingText|complete-authoritative"
+            ),
+            observedContext: ForemanObservedTerminalContext(
+                terminals: [snapshot],
+                understandings: [understanding],
+                workerSnapshots: ["term-1": workerSnapshot]
+            ),
+            captureSnapshots: { [snapshot] }
+        )
+
+        let signature = try #require(pendingAttentionSignature(attention))
+        #expect(signature.title == "Goal complete")
+        #expect(signature.description.contains("continue") == true)
+        #expect(signature.description.contains("close") == true)
+        #expect(signature.detail?.contains("/goal reopen") == true)
+        #expect(signature.detail?.contains("/goal clear") == true)
+        #expect(signature.actions.isEmpty == true)
+        let draftCalls = await client.replyDraftCallCount()
+        #expect(draftCalls == 0)
+    }
+
+    @Test
+    func draftPendingAttentionAskHumanKeepsGoalActiveAndStoresEvidenceAcrossLaunchPaths() async throws {
+        let cases: [(terminalID: String, snapshots: [TerminalSnapshot])] = [
+            ("codex-blocked-existing", codexReplySnapshots(terminalID: "codex-blocked-existing", title: "shell", isFocused: true)),
+            ("codex-blocked-new-tab", codexReplySnapshots(terminalID: "codex-blocked-new-tab", title: "nambouchara@Nams-MacBook-Pro:~")),
+            ("codex-blocked-managed", codexReplySnapshots(terminalID: "codex-blocked-managed", title: "OpenAI Codex")),
+        ]
+        let projectGoal = "Coordinate the next goal-runtime slice."
+        let runtime = ForemanProjectGoalRuntime()
+        await runtime.saveGoal(projectGoal, for: "/tmp/project")
+
+        var signatures: [PendingAttentionSignature] = []
+
+        for entry in cases {
+            let result = try await draftPendingAttentionCase(
+                snapshots: entry.snapshots,
+                event: AgentNeedsAttentionEvent(
+                    terminalID: entry.terminalID,
+                    agentIdentity: .codex,
+                    interactionState: .waitingText,
+                    deltaText: "What should I work on next?",
+                    timestamp: Date(timeIntervalSince1970: 1),
+                    fingerprint: "\(entry.terminalID)|codex|waitingText|blocked"
+                ),
+                replyDraft: nil,
                 goalRuntime: runtime
             )
 
             signatures.append(try #require(result.signature))
         }
 
+        let goal = await runtime.goal(for: "/tmp/project")
+
         #expect(signatures.dropFirst().allSatisfy { $0 == signatures.first })
         #expect(signatures.first?.title == "Needs direction")
-        #expect(signatures.first?.description == "What should Codex do in this project?")
-        #expect(signatures.first?.detail == "Codex is asking for the next task and Foreman has no active user goal.")
-        #expect(signatures.first?.actions.first?.title == "Ask Codex to recommend next step")
-        #expect(signatures.first?.actions.first?.payload == goalAwareRecommendNextStepPrompt(goal: projectGoal))
+        #expect(signatures.first?.description == "• Hello. What do you want to work on in ghostty?")
+        #expect(signatures.first?.actions.isEmpty == true)
+        #expect(goal?.status == .active)
+        #expect(goal?.completedAt == nil)
+        #expect(goal?.lastEvaluatedAt != nil)
+        #expect(goal?.lastEvidenceSnapshot?.contains("waiting for direction") == true)
     }
 
     @Test
-    func draftPendingAttentionForClaudeAskHumanUsesSavedProjectGoalAcrossLaunchPaths() async throws {
+    func draftPendingAttentionForClaudeAuthoritativeReplyEscalatesWithoutLLMDraftAcrossLaunchPaths() async throws {
         let cases: [(terminalID: String, snapshots: [TerminalSnapshot])] = [
             ("claude-existing", claudeReplySnapshots(terminalID: "claude-existing", title: "shell", isFocused: true)),
             ("claude-new-tab", claudeReplySnapshots(terminalID: "claude-new-tab", title: "nambouchara@Nams-MacBook-Pro:~")),
             ("claude-managed", claudeReplySnapshots(terminalID: "claude-managed", title: "Claude Code")),
         ]
-        let projectGoal = "Coordinate the next Foreman goal-runtime slice across agent terminals."
-        let runtime = ForemanProjectGoalRuntime()
-        await runtime.saveGoal(projectGoal, for: "/tmp/project")
 
         var signatures: [PendingAttentionSignature] = []
+        var draftCallCounts: [Int] = []
 
         for entry in cases {
             let result = try await draftPendingAttentionCase(
@@ -1505,31 +1957,23 @@ struct ForemanAgentTests {
                     timestamp: Date(timeIntervalSince1970: 1),
                     fingerprint: "\(entry.terminalID)|claude|waitingText|next"
                 ),
-                replyDraft: try makeReplyDraftResponse(
-                    thought: "The agent needs a goal from the human.",
-                    suggestion: .askHuman(
-                        terminalID: entry.terminalID,
-                        message: "What should Claude Code do in this project?",
-                        reason: "Claude Code is asking for the next task and Foreman has no active user goal.",
-                        confidence: 1.0
-                    )
-                ),
-                goalRuntime: runtime
+                replyDraft: nil
             )
 
             signatures.append(try #require(result.signature))
+            draftCallCounts.append(result.replyDraftCallCount)
         }
 
         #expect(signatures.dropFirst().allSatisfy { $0 == signatures.first })
+        #expect(draftCallCounts.allSatisfy { $0 == 0 })
         #expect(signatures.first?.title == "Needs direction")
-        #expect(signatures.first?.description == "What should Claude Code do in this project?")
-        #expect(signatures.first?.detail == "Claude Code is asking for the next task and Foreman has no active user goal.")
-        #expect(signatures.first?.actions.first?.title == "Ask Claude Code to recommend next step")
-        #expect(signatures.first?.actions.first?.payload == goalAwareRecommendNextStepPrompt(goal: projectGoal))
+        #expect(signatures.first?.description == "What should I do next?")
+        #expect(signatures.first?.detail == nil)
+        #expect(signatures.first?.actions.isEmpty == true)
     }
 
     @Test
-    func draftPendingAttentionForCodexRepliesSharesParityAcrossLaunchPaths() async throws {
+    func draftPendingAttentionForCodexFirstClassRepliesDoNotInventSuggestedResponseAcrossLaunchPaths() async throws {
         let cases: [(terminalID: String, snapshots: [TerminalSnapshot])] = [
             ("codex-existing", codexReplySnapshots(terminalID: "codex-existing", title: "shell", isFocused: true)),
             ("codex-new-tab", codexReplySnapshots(terminalID: "codex-new-tab", title: "nambouchara@Nams-MacBook-Pro:~")),
@@ -1537,7 +1981,7 @@ struct ForemanAgentTests {
         ]
 
         var signatures: [PendingAttentionSignature] = []
-        var forwardedUnderstandings: [UnderstandingSignature] = []
+        var draftCallCounts: [Int] = []
 
         for entry in cases {
             let result = try await draftPendingAttentionCase(
@@ -1549,47 +1993,23 @@ struct ForemanAgentTests {
                     deltaText: "What should I work on next?",
                     timestamp: Date(timeIntervalSince1970: 1),
                     fingerprint: "\(entry.terminalID)|codex|waitingText|next"
-                ),
-                replyDraft: try makeReplyDraftResponse(
-                    thought: "Codex is asking what to work on next.",
-                    suggestion: .replyToAgent(
-                        terminalID: entry.terminalID,
-                        message: "Inspect the current files and summarize the next useful change.",
-                        reason: "Codex is asking for the next concrete task in this project.",
-                        confidence: 1.0
-                    )
                 )
             )
 
             signatures.append(try #require(result.signature))
-            forwardedUnderstandings.append(try #require(result.understanding))
+            draftCallCounts.append(result.replyDraftCallCount)
         }
 
         #expect(signatures.dropFirst().allSatisfy { $0 == signatures.first })
-        #expect(forwardedUnderstandings.dropFirst().allSatisfy { $0 == forwardedUnderstandings.first })
-        #expect(signatures.first?.title == "Suggested reply")
-        #expect(signatures.first?.description == "Codex is asking for the next concrete task in this project.")
-        #expect(signatures.first?.detail == "What should I work on next?")
-        #expect(signatures.first?.actions.first?.title == "Inspect the current files and summarize the next useful change.")
-        #expect(forwardedUnderstandings.first?.interactionState == .waitingText)
-        #expect(forwardedUnderstandings.first?.interactionContext == .waitingText(question: "• Hello. What do you want to work on in ghostty?"))
+        #expect(draftCallCounts.allSatisfy { $0 == 0 })
+        #expect(signatures.first?.title == "Needs direction")
+        #expect(signatures.first?.description == "• Hello. What do you want to work on in ghostty?")
+        #expect(signatures.first?.detail == nil)
+        #expect(signatures.first?.actions.isEmpty == true)
     }
 
     @Test
-    func reactiveIterationUsesSuppliedObservedContext() async throws {
-        let conversation = await MainActor.run { ForemanConversation() }
-        let client = ScriptedForemanClient(responses: [
-            try makeStepResponse(
-                thought: "The question is already clear from the structured context.",
-                action: .respond(message: "Use the structured waiting question.")
-            ),
-        ])
-        let commandRecorder = CommandRecorder()
-        let agent = makeAgent(
-            conversation: conversation,
-            client: client,
-            commandRecorder: commandRecorder
-        )
+    func reactiveIterationUsesSuppliedObservedContextToPauseFirstClassWaitingWorker() async throws {
         let snapshots = kimiInputChromeSnapshots(
             terminalID: "kimi-reactive",
             title: "Kimi Code",
@@ -1607,27 +2027,26 @@ struct ForemanAgentTests {
             timestamp: Date(timeIntervalSince1970: 1),
             fingerprint: "kimi-reactive|kimi|waitingText|wire"
         )
-
-        await agent.react(
-            to: event,
+        let result = try await reactiveObservedContextPauseCase(
+            snapshots: snapshots,
             observedContext: observedContext,
-            captureSnapshots: { snapshots }
+            event: event,
+            response: try makeStepResponse(
+                thought: "Foreman should not plan this structured first-class wait.",
+                action: .respond(message: "This should never be used.")
+            )
         )
 
-        try await waitFor {
-            await MainActor.run { conversation.messages.contains { $0.content == "Use the structured waiting question." } }
-        }
-
-        let payloads = await client.recordedUnderstandings()
-        let forwarded = try #require(payloads.first?.first)
-        #expect(forwarded.agentInteractionContext == .waitingText(question: "What should I do here?"))
-        #expect(forwarded.lastMeaningfulEvent == "What should I do here?")
-        let lastUnderstandings = await MainActor.run { conversation.lastUnderstandings }
-        #expect(lastUnderstandings.first?.agentInteractionContext == .waitingText(question: "What should I do here?"))
+        let understanding = try #require(result.understanding)
+        #expect(result.stepCallCount == 0)
+        #expect(result.status == .waitingForUser)
+        #expect(result.agentMessage == "Needs direction\n\nWhat should I do here?")
+        #expect(understanding.interactionContext == .waitingText(question: "What should I do here?"))
+        #expect(understanding.lastMeaningfulEvent == "What should I do here?")
     }
 
     @Test
-    func reactiveObservedContextKeepsLaunchPathParity() async throws {
+    func reactiveObservedContextKeepsFirstClassPauseParity() async throws {
         let cases: [(terminalID: String, title: String, isFocused: Bool)] = [
             ("kimi-reactive-existing", "shell", true),
             ("kimi-reactive-new-tab", "nambouchara@Nams-MacBook-Pro:~", false),
@@ -1635,6 +2054,8 @@ struct ForemanAgentTests {
         ]
 
         var forwardedUnderstandings: [UnderstandingSignature] = []
+        var agentMessages: [String] = []
+        var stepCallCounts: [Int] = []
 
         for entry in cases {
             let snapshots = kimiInputChromeSnapshots(
@@ -1646,7 +2067,7 @@ struct ForemanAgentTests {
                 terminalID: entry.terminalID,
                 snapshots: snapshots
             )
-            let result = try await reactiveIterationCase(
+            let result = try await reactiveObservedContextPauseCase(
                 snapshots: snapshots,
                 observedContext: observedContext,
                 event: AgentNeedsAttentionEvent(
@@ -1658,17 +2079,22 @@ struct ForemanAgentTests {
                     fingerprint: "\(entry.terminalID)|kimi|waitingText|wire"
                 ),
                 response: try makeStepResponse(
-                    thought: "The question is already clear from the structured context.",
-                    action: .respond(message: "Use the structured waiting question.")
+                    thought: "Foreman should not plan this structured first-class wait.",
+                    action: .respond(message: "This should never be used.")
                 )
             )
 
             forwardedUnderstandings.append(try #require(result.understanding))
+            agentMessages.append(try #require(result.agentMessage))
+            stepCallCounts.append(result.stepCallCount)
         }
 
         #expect(forwardedUnderstandings.dropFirst().allSatisfy { $0 == forwardedUnderstandings.first })
+        #expect(agentMessages.dropFirst().allSatisfy { $0 == agentMessages.first })
+        #expect(stepCallCounts.allSatisfy { $0 == 0 })
         #expect(forwardedUnderstandings.first?.interactionContext == .waitingText(question: "What should I do here?"))
         #expect(forwardedUnderstandings.first?.lastMeaningfulEvent == "What should I do here?")
+        #expect(agentMessages.first == "Needs direction\n\nWhat should I do here?")
     }
 
     @Test
@@ -1710,6 +2136,448 @@ struct ForemanAgentTests {
     }
 
     @Test
+    func reactAutonomousModePausesWhenWorkerSnapshotIsPlanning() async throws {
+        let conversation = await MainActor.run {
+            let c = ForemanConversation()
+            c.mode = .autonomous
+            return c
+        }
+        let client = ScriptedForemanClient(responses: [
+            try makeStepResponse(
+                thought: "Kimi already suggested the safest option.",
+                action: AgentAction.sendCommand(
+                    terminalID: "term-1",
+                    command: "1",
+                    reason: "Choose Keep current API."
+                )
+            ),
+        ])
+        let commandRecorder = CommandRecorder()
+        let agent = makeAgent(
+            conversation: conversation,
+            client: client,
+            commandRecorder: commandRecorder
+        )
+        let observedContext = choiceObservedContext(
+            isPlanning: true,
+            execution: .autonomousOK
+        )
+        let event = AgentNeedsAttentionEvent(
+            terminalID: "term-1",
+            agentIdentity: .kimi,
+            interactionState: .waitingChoice,
+            deltaText: "Which direction should I take?",
+            timestamp: Date()
+        )
+
+        await agent.react(
+            to: event,
+            observedContext: observedContext,
+            captureSnapshots: { observedContext.terminals }
+        )
+
+        try await waitForStatus(.waitingForUser, in: conversation)
+
+        let commands = await commandRecorder.recordedCommands()
+        #expect(commands.isEmpty)
+
+        let messages = await MainActor.run { conversation.messages }
+        #expect(messages.contains { $0.role == .agent && $0.content == ForemanRuntimePolicy.planModeMessage })
+    }
+
+    @Test
+    func reactAutonomousModePausesWhenWorkerSuggestionNeedsManualReview() async throws {
+        let conversation = await MainActor.run {
+            let c = ForemanConversation()
+            c.mode = .autonomous
+            return c
+        }
+        let client = ScriptedForemanClient(responses: [
+            try makeStepResponse(
+                thought: "Kimi suggested the safest option.",
+                action: AgentAction.sendCommand(
+                    terminalID: "term-1",
+                    command: "1",
+                    reason: "Choose Keep current API."
+                )
+            ),
+        ])
+        let commandRecorder = CommandRecorder()
+        let agent = makeAgent(
+            conversation: conversation,
+            client: client,
+            commandRecorder: commandRecorder
+        )
+        let observedContext = choiceObservedContext(
+            isPlanning: false,
+            execution: .manualOnly
+        )
+        let event = AgentNeedsAttentionEvent(
+            terminalID: "term-1",
+            agentIdentity: .kimi,
+            interactionState: .waitingChoice,
+            deltaText: "Which direction should I take?",
+            timestamp: Date()
+        )
+
+        await agent.react(
+            to: event,
+            observedContext: observedContext,
+            captureSnapshots: { observedContext.terminals }
+        )
+
+        try await waitForStatus(.waitingForUser, in: conversation)
+
+        let commands = await commandRecorder.recordedCommands()
+        #expect(commands.isEmpty)
+
+        let messages = await MainActor.run { conversation.messages }
+        #expect(messages.contains { $0.role == .agent && $0.content == ForemanRuntimePolicy.manualReviewMessage })
+    }
+
+    @Test
+    func reactAutonomousModeExecutesWorkerAuthorizedSuggestion() async throws {
+        let conversation = await MainActor.run {
+            let c = ForemanConversation()
+            c.mode = .autonomous
+            return c
+        }
+        let client = ScriptedForemanClient(responses: [
+            try makeStepResponse(
+                thought: "Kimi already suggested the safest option.",
+                action: AgentAction.sendCommand(
+                    terminalID: "term-1",
+                    command: "1",
+                    reason: "Choose Keep current API."
+                )
+            ),
+        ])
+        let commandRecorder = CommandRecorder()
+        let agent = makeAgent(
+            conversation: conversation,
+            client: client,
+            commandRecorder: commandRecorder
+        )
+        let observedContext = choiceObservedContext(
+            isPlanning: false,
+            execution: .autonomousOK
+        )
+        let event = AgentNeedsAttentionEvent(
+            terminalID: "term-1",
+            agentIdentity: .kimi,
+            interactionState: .waitingChoice,
+            deltaText: "Which direction should I take?",
+            timestamp: Date()
+        )
+
+        await agent.react(
+            to: event,
+            observedContext: observedContext,
+            captureSnapshots: { observedContext.terminals }
+        )
+
+        try await waitFor {
+            let commands = await commandRecorder.recordedCommands()
+            return commands.contains { $0.terminalID == "term-1" && $0.command == "1" }
+        }
+
+        let messages = await MainActor.run { conversation.messages }
+        #expect(messages.contains { $0.role == .agent && $0.content == "▶️ Sent: 1" })
+    }
+
+    @Test
+    func startInteractiveModeUsesWorkerSuggestionWithoutPlannerCall() async throws {
+        let conversation = await MainActor.run { ForemanConversation() }
+        let client = ScriptedForemanClient(responses: [
+            try makeStepResponse(
+                thought: "Foreman should not need to plan this.",
+                action: AgentAction.sendCommand(
+                    terminalID: "term-1",
+                    command: "1",
+                    reason: "Choose Keep current API."
+                )
+            ),
+        ])
+        let commandRecorder = CommandRecorder()
+        let agent = makeAgent(
+            conversation: conversation,
+            client: client,
+            commandRecorder: commandRecorder
+        )
+        let observedContext = choiceObservedContext(
+            isPlanning: false,
+            execution: .manualOnly
+        )
+
+        await agent.start(
+            goal: "Continue the worker.",
+            mode: .interactive,
+            captureSnapshots: { observedContext.terminals },
+            captureObservedContext: { observedContext }
+        )
+
+        try await waitForStatus(.waitingForUser, in: conversation)
+
+        let commands = await commandRecorder.recordedCommands()
+        #expect(commands.isEmpty)
+        #expect(await client.agentStepCallCount() == 0)
+    }
+
+    @Test
+    func startInteractiveModeUsesWorkerSuggestionWithoutSynthesizingForemanAction() async throws {
+        let conversation = await MainActor.run { ForemanConversation() }
+        let client = ScriptedForemanClient(responses: [
+            try makeStepResponse(
+                thought: "Foreman should not need to plan this.",
+                action: AgentAction.sendCommand(
+                    terminalID: "term-1",
+                    command: "1",
+                    reason: "Choose Keep current API."
+                )
+            ),
+        ])
+        let commandRecorder = CommandRecorder()
+        let actionRecorder = ActionRecorder()
+        let observedContext = choiceObservedContext(
+            isPlanning: false,
+            execution: .manualOnly
+        )
+        let service = ForemanService(client: client)
+        let agent = ForemanAgent(
+            conversation: conversation,
+            foremanService: service,
+            goalRuntime: ForemanProjectGoalRuntime(),
+            onSendCommand: { terminalID, command in
+                await commandRecorder.record(terminalID: terminalID, command: command)
+                return true
+            },
+            onStatusChange: { _ in },
+            onAction: { action, thought in
+                Task {
+                    await actionRecorder.record(action: action, thought: thought)
+                }
+            }
+        )
+
+        await agent.start(
+            goal: "Continue the worker.",
+            mode: .interactive,
+            captureSnapshots: { observedContext.terminals },
+            captureObservedContext: { observedContext }
+        )
+
+        try await waitForStatus(.waitingForUser, in: conversation)
+
+        let commands = await commandRecorder.recordedCommands()
+        #expect(commands.isEmpty)
+        #expect(await client.agentStepCallCount() == 0)
+        #expect(await actionRecorder.recordedActions().isEmpty)
+    }
+
+    @Test
+    func startAutonomousModeUsesWorkerSuggestionWithoutPlannerCall() async throws {
+        let conversation = await MainActor.run { ForemanConversation() }
+        let client = ScriptedForemanClient(responses: [
+            try makeStepResponse(
+                thought: "Foreman should not need to plan this.",
+                action: AgentAction.sendCommand(
+                    terminalID: "term-1",
+                    command: "1",
+                    reason: "Choose Keep current API."
+                )
+            ),
+        ])
+        let commandRecorder = CommandRecorder()
+        let initialContext = choiceObservedContext(
+            isPlanning: false,
+            execution: .autonomousOK
+        )
+        let followupContext = runningObservedContextAfterSuggestedChoice()
+        let contextSource = await MainActor.run {
+            MutableObservedContextSource(initialContext)
+        }
+        let service = ForemanService(client: client)
+        let agent = ForemanAgent(
+            conversation: conversation,
+            foremanService: service,
+            goalRuntime: ForemanProjectGoalRuntime(),
+            onSendCommand: { terminalID, command in
+                await commandRecorder.record(terminalID: terminalID, command: command)
+                contextSource.current = followupContext
+                return true
+            },
+            onStatusChange: { _ in },
+            onAction: { _, _ in }
+        )
+
+        await agent.start(
+            goal: "Continue the worker.",
+            mode: .autonomous,
+            captureSnapshots: { contextSource.current.terminals },
+            captureObservedContext: { contextSource.current }
+        )
+
+        try await waitFor {
+            let commands = await commandRecorder.recordedCommands()
+            let isRunning = await MainActor.run { conversation.isRunning }
+            return commands.contains { $0.terminalID == "term-1" && $0.command == "1" } && !isRunning
+        }
+
+        #expect(await client.agentStepCallCount() == 0)
+    }
+
+    @Test
+    func startAutonomousModeUsesWorkerSuggestionWithoutSynthesizingForemanAction() async throws {
+        let conversation = await MainActor.run { ForemanConversation() }
+        let client = ScriptedForemanClient(responses: [
+            try makeStepResponse(
+                thought: "Foreman should not need to plan this.",
+                action: AgentAction.sendCommand(
+                    terminalID: "term-1",
+                    command: "1",
+                    reason: "Choose Keep current API."
+                )
+            ),
+        ])
+        let commandRecorder = CommandRecorder()
+        let actionRecorder = ActionRecorder()
+        let initialContext = choiceObservedContext(
+            isPlanning: false,
+            execution: .autonomousOK
+        )
+        let followupContext = runningObservedContextAfterSuggestedChoice()
+        let contextSource = await MainActor.run {
+            MutableObservedContextSource(initialContext)
+        }
+        let service = ForemanService(client: client)
+        let agent = ForemanAgent(
+            conversation: conversation,
+            foremanService: service,
+            goalRuntime: ForemanProjectGoalRuntime(),
+            onSendCommand: { terminalID, command in
+                await commandRecorder.record(terminalID: terminalID, command: command)
+                contextSource.current = followupContext
+                return true
+            },
+            onStatusChange: { _ in },
+            onAction: { action, thought in
+                Task {
+                    await actionRecorder.record(action: action, thought: thought)
+                }
+            }
+        )
+
+        await agent.start(
+            goal: "Continue the worker.",
+            mode: .autonomous,
+            captureSnapshots: { contextSource.current.terminals },
+            captureObservedContext: { contextSource.current }
+        )
+
+        try await waitFor {
+            let commands = await commandRecorder.recordedCommands()
+            let isRunning = await MainActor.run { conversation.isRunning }
+            return commands.contains { $0.terminalID == "term-1" && $0.command == "1" } && !isRunning
+        }
+
+        #expect(await client.agentStepCallCount() == 0)
+        #expect(await actionRecorder.recordedActions().isEmpty)
+    }
+
+    @Test
+    func startAutonomousModePausesForAuthoritativeWorkerQuestionWithoutPlannerCall() async throws {
+        let conversation = await MainActor.run { ForemanConversation() }
+        let client = ScriptedForemanClient(responses: [
+            try makeStepResponse(
+                thought: "Foreman should not need to plan this blocked worker.",
+                action: .respond(message: "Planner path should be skipped.")
+            ),
+        ])
+        let commandRecorder = CommandRecorder()
+        let agent = makeAgent(
+            conversation: conversation,
+            client: client,
+            commandRecorder: commandRecorder
+        )
+        let snapshots = codexReplySnapshots(
+            terminalID: "term-1",
+            title: "OpenAI Codex",
+            isFocused: true
+        )
+        let observedContext = ForemanObservedContextBuilder()
+            .build(snapshots: snapshots)
+            .context
+
+        await agent.start(
+            goal: "Continue the worker.",
+            mode: .autonomous,
+            captureSnapshots: { observedContext.terminals },
+            captureObservedContext: { observedContext }
+        )
+
+        try await waitForStatus(.waitingForUser, in: conversation)
+
+        let commands = await commandRecorder.recordedCommands()
+        let messages = await MainActor.run { conversation.messages }
+        let isRunning = await MainActor.run { conversation.isRunning }
+
+        #expect(commands.isEmpty)
+        #expect(await client.agentStepCallCount() == 0)
+        #expect(isRunning == false)
+        #expect(messages.contains { $0.role == .agent && $0.content.contains("Needs direction") })
+        #expect(messages.contains { $0.role == .agent && $0.content.contains("What do you want to work on in ghostty?") })
+    }
+
+    @Test
+    func reactPausesForAuthoritativeWorkerQuestionWithoutPlannerCall() async throws {
+        let conversation = await MainActor.run { ForemanConversation() }
+        let client = ScriptedForemanClient(responses: [
+            try makeStepResponse(
+                thought: "Foreman should not need to plan this blocked worker.",
+                action: .respond(message: "Planner path should be skipped.")
+            ),
+        ])
+        let commandRecorder = CommandRecorder()
+        let agent = makeAgent(
+            conversation: conversation,
+            client: client,
+            commandRecorder: commandRecorder
+        )
+        let snapshots = codexReplySnapshots(
+            terminalID: "term-1",
+            title: "OpenAI Codex",
+            isFocused: true
+        )
+        let observedContext = ForemanObservedContextBuilder()
+            .build(snapshots: snapshots)
+            .context
+        let event = AgentNeedsAttentionEvent(
+            terminalID: "term-1",
+            agentIdentity: .codex,
+            interactionState: .waitingText,
+            deltaText: "What should I work on next?",
+            timestamp: Date(timeIntervalSince1970: 1),
+            fingerprint: "term-1|codex|waitingText|blocked-react"
+        )
+
+        await agent.react(
+            to: event,
+            observedContext: observedContext,
+            captureSnapshots: { observedContext.terminals }
+        )
+
+        try await waitForStatus(.waitingForUser, in: conversation)
+
+        let commands = await commandRecorder.recordedCommands()
+        let messages = await MainActor.run { conversation.messages }
+
+        #expect(commands.isEmpty)
+        #expect(await client.agentStepCallCount() == 0)
+        #expect(messages.contains { $0.role == .agent && $0.content.contains("Needs direction") })
+        #expect(messages.contains { $0.role == .agent && $0.content.contains("What do you want to work on in ghostty?") })
+    }
+
+    @Test
     func reactInteractiveModePausesForApproval() async throws {
         let conversation = await MainActor.run { ForemanConversation() }
         let client = ScriptedForemanClient(responses: [
@@ -1742,6 +2610,202 @@ struct ForemanAgentTests {
         let messages = await MainActor.run { conversation.messages }
         #expect(messages.contains { $0.role == .agent && $0.content == "Approve Kimi's edit." })
         #expect(messages.first { $0.content == "Approve Kimi's edit." }?.terminalID == "term-1")
+    }
+
+    @Test
+    func genericUserMessageDoesNotReopenCompletedGoal() async throws {
+        let runtime = ForemanProjectGoalRuntime()
+        await runtime.saveGoal("Ship the evaluator slice.", for: "/tmp/project")
+        await runtime.recordEvaluation(
+            .init(
+                progress: .completed,
+                evidenceSnapshot: "The evaluator is already complete.",
+                evaluatedAt: Date(timeIntervalSince1970: 20)
+            ),
+            for: "/tmp/project"
+        )
+        let completedGoal = try #require(await runtime.goal(for: "/tmp/project"))
+        let conversation = await MainActor.run {
+            let c = ForemanConversation()
+            c.goal = completedGoal.goalText
+            c.setActiveProjectGoal(completedGoal)
+            return c
+        }
+        let client = ScriptedForemanClient()
+        let commandRecorder = CommandRecorder()
+        let agent = makeAgent(
+            conversation: conversation,
+            client: client,
+            commandRecorder: commandRecorder,
+            goalRuntime: runtime
+        )
+
+        await agent.receiveUserMessage("continue")
+
+        let persistedGoal = await runtime.goal(for: "/tmp/project")
+        #expect(persistedGoal?.status == .completed)
+        let runtimeState = await MainActor.run { conversation.runtimeState }
+        #expect(await MainActor.run { runtimeState.activeProjectGoal?.status } == .completed)
+    }
+
+    @Test
+    func userMessageResumesLoopFromActiveProjectGoalWhenConversationGoalIsNil() async throws {
+        let conversation = await MainActor.run { ForemanConversation() }
+        let client = ScriptedForemanClient(responses: [
+            try makeStepResponse(
+                thought: "Initial observation complete.",
+                action: .respond(message: "Initial pass complete.")
+            ),
+            try makeStepResponse(
+                thought: "Saved project goal is still active.",
+                action: .respond(message: "Resumed from the saved goal.")
+            ),
+        ])
+        let commandRecorder = CommandRecorder()
+        let agent = makeAgent(
+            conversation: conversation,
+            client: client,
+            commandRecorder: commandRecorder
+        )
+
+        await agent.start(
+            goal: "Initial goal",
+            mode: .interactive,
+            captureSnapshots: sampleSnapshots
+        )
+
+        try await waitFor {
+            await MainActor.run {
+                conversation.messages.contains { $0.content == "Initial pass complete." } &&
+                conversation.isRunning == false
+            }
+        }
+
+        await MainActor.run {
+            conversation.goal = nil
+            conversation.runtimeState.setActiveProjectGoal(
+                ForemanProjectGoal(
+                    projectID: "/tmp/project",
+                    objective: "Resume from the saved goal."
+                )
+            )
+        }
+
+        await agent.receiveUserMessage("continue")
+
+        try await waitFor {
+            await MainActor.run {
+                conversation.messages.contains { $0.content == "Resumed from the saved goal." } &&
+                conversation.isRunning == false
+            }
+        }
+
+        let stepCalls = await client.agentStepCallCount()
+        let messages = await MainActor.run { conversation.messages }
+
+        #expect(stepCalls == 2)
+        #expect(messages.contains { $0.role == .agent && $0.content == "Resumed from the saved goal." })
+    }
+
+    @Test
+    func draftPendingAttentionUsesWorkerSuggestionBeforeLLMReplyDraft() async throws {
+        let conversation = await MainActor.run { ForemanConversation() }
+        let client = FastPathRecordingForemanClient()
+        let service = ForemanService(client: client)
+        let commandRecorder = CommandRecorder()
+        let runtime = ForemanProjectGoalRuntime()
+        let agent = ForemanAgent(
+            conversation: conversation,
+            foremanService: service,
+            goalRuntime: runtime,
+            preferredTerminalID: "term-1",
+            onSendCommand: { terminalID, command in
+                await commandRecorder.record(terminalID: terminalID, command: command)
+                return true
+            },
+            onStatusChange: { _ in },
+            onAction: { _, _ in }
+        )
+
+        let event = AgentNeedsAttentionEvent(
+            terminalID: "term-1",
+            agentIdentity: .codex,
+            interactionState: .waitingText,
+            deltaText: "Should I preserve the API?",
+            timestamp: Date(),
+            fingerprint: "codex-session-1|7|req-7"
+        )
+        let terminalSnapshot = TerminalSnapshot.makePreview(
+            terminalID: "term-1",
+            windowID: "win-1",
+            tabID: "tab-1",
+            title: "Codex",
+            cwd: "/tmp/repo",
+            isFocused: true,
+            visibleText: "Should I preserve the API?",
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessName: "codex"
+        )
+        let workerSnapshot = TerminalWorkerSnapshot(
+            schemaVersion: 1,
+            terminalID: "term-1",
+            workerSessionID: "codex-session-1",
+            revision: 7,
+            observedAt: Date(timeIntervalSince1970: 1_748_444_444),
+            ttlMilliseconds: 15_000,
+            workerGoal: "stabilize the API",
+            agent: .init(identity: .codex),
+            state: .init(
+                lifecycle: .running,
+                attention: .replyRequired,
+                summary: "Codex is waiting for a reply.",
+                details: ["Asked whether the API should stay stable."],
+                runtimeFlags: []
+            ),
+            request: .init(
+                id: "req-7",
+                kind: .reply,
+                prompt: "Should I preserve the API?",
+                options: []
+            ),
+            suggestions: [
+                .init(
+                    id: "preserve-api",
+                    kind: .reply,
+                    title: "Preserve the API",
+                    payload: .text("Preserve the current API and adapt the internals."),
+                    rationale: "Lowest migration risk.",
+                    recommended: true,
+                    execution: .manualOnly,
+                    requestID: "req-7"
+                ),
+            ]
+        )
+        let understanding = TerminalUnderstanding.preview(
+            terminalID: "term-1",
+            state: .waiting,
+            shortExplanation: "Codex is waiting for a reply.",
+            lastMeaningfulEvent: "Should I preserve the API?",
+            importantDetails: [],
+            suggestedNextActions: [],
+            agentIdentity: .codex,
+            agentInteractionState: .waitingText,
+            workerSnapshot: workerSnapshot
+        )
+
+        let attention = try await agent.draftPendingAttention(
+            for: event,
+            observedContext: ForemanObservedTerminalContext(
+                terminals: [terminalSnapshot],
+                understandings: [understanding],
+                workerSnapshots: ["term-1": workerSnapshot]
+            ),
+            captureSnapshots: { [terminalSnapshot] }
+        )
+
+        #expect(attention?.actions.first?.title == "Preserve the API")
+        #expect(await client.draftReplyCallCount == 0)
     }
 }
 
@@ -1930,6 +2994,23 @@ private actor CommandRecorder {
     }
 }
 
+private actor ActionRecorder {
+    struct RecordedAction: Equatable, Sendable {
+        let action: AgentAction
+        let thought: String
+    }
+
+    private var actions: [RecordedAction] = []
+
+    func record(action: AgentAction, thought: String) {
+        actions.append(.init(action: action, thought: thought))
+    }
+
+    func recordedActions() -> [RecordedAction] {
+        actions
+    }
+}
+
 private func pendingAttentionSignature(_ attention: PendingAgentAttention?) -> ForemanAgentTests.PendingAttentionSignature? {
     guard let attention else { return nil }
     return .init(
@@ -1963,14 +3044,15 @@ private func draftPendingAttentionCase(
     snapshots: [TerminalSnapshot],
     observedContext: ForemanObservedTerminalContext? = nil,
     event: AgentNeedsAttentionEvent,
-    replyDraft: AgentReplyDraftResponse,
+    replyDraft: AgentReplyDraftResponse? = nil,
     goalRuntime: ForemanProjectGoalRuntime = ForemanProjectGoalRuntime()
 ) async throws -> (
     signature: ForemanAgentTests.PendingAttentionSignature?,
-    understanding: ForemanAgentTests.UnderstandingSignature?
+    understanding: ForemanAgentTests.UnderstandingSignature?,
+    replyDraftCallCount: Int
 ) {
     let conversation = await MainActor.run { ForemanConversation() }
-    let client = ScriptedForemanClient(replyDrafts: [replyDraft])
+    let client = ScriptedForemanClient(replyDrafts: replyDraft.map { [$0] } ?? [])
     let commandRecorder = CommandRecorder()
     let agent = makeAgent(
         conversation: conversation,
@@ -1988,11 +3070,15 @@ private func draftPendingAttentionCase(
 
     let commands = await commandRecorder.recordedCommands()
     #expect(commands.isEmpty)
-    let understandings = await client.recordedUnderstandings()
+    let recordedUnderstandings = await client.recordedUnderstandings()
+    let runtimeUnderstandings = await MainActor.run { conversation.runtimeState.lastUnderstandings }
+    let replyDraftCallCount = await client.replyDraftCallCount()
+    let understanding = recordedUnderstandings.first?.first ?? runtimeUnderstandings.first
 
     return (
         signature: pendingAttentionSignature(attention),
-        understanding: understandingSignature(understandings.first?.first)
+        understanding: understandingSignature(understanding),
+        replyDraftCallCount: replyDraftCallCount
     )
 }
 
@@ -2033,6 +3119,56 @@ private func reactiveIterationCase(
     return (
         understanding: understandingSignature(understandings.first?.first),
         messages: messages
+    )
+}
+
+private func reactiveObservedContextPauseCase(
+    snapshots: [TerminalSnapshot],
+    observedContext: ForemanObservedTerminalContext,
+    event: AgentNeedsAttentionEvent,
+    response: AgentStepResponse
+) async throws -> (
+    understanding: ForemanAgentTests.UnderstandingSignature?,
+    agentMessage: String?,
+    status: AgentStatus,
+    stepCallCount: Int
+) {
+    let conversation = await MainActor.run { ForemanConversation() }
+    let client = ScriptedForemanClient(responses: [response])
+    let commandRecorder = CommandRecorder()
+    let agent = makeAgent(
+        conversation: conversation,
+        client: client,
+        commandRecorder: commandRecorder
+    )
+
+    await agent.react(
+        to: event,
+        observedContext: observedContext,
+        captureSnapshots: { snapshots }
+    )
+
+    try await waitFor {
+        let stepCallCount = await client.agentStepCallCount()
+        return await MainActor.run {
+            (conversation.status == .waitingForUser && conversation.isRunning == false) ||
+            (stepCallCount > 0 && conversation.isRunning == false)
+        }
+    }
+
+    let commands = await commandRecorder.recordedCommands()
+    #expect(commands.isEmpty)
+
+    let runtimeState = await MainActor.run { conversation.runtimeState }
+    let status = await MainActor.run { conversation.status }
+    let lastUnderstandings = await MainActor.run { runtimeState.lastUnderstandings }
+    let messages = await MainActor.run { conversation.messages }
+
+    return (
+        understanding: understandingSignature(lastUnderstandings.first),
+        agentMessage: messages.last(where: { $0.role == .agent })?.content,
+        status: status,
+        stepCallCount: await client.agentStepCallCount()
     )
 }
 
@@ -2077,12 +3213,63 @@ private func startWithObservedContextCase(
     )
 }
 
+private func startWithObservedContextPauseCase(
+    snapshots: [TerminalSnapshot],
+    observedContext: ForemanObservedTerminalContext,
+    response: AgentStepResponse
+) async throws -> (
+    understanding: ForemanAgentTests.UnderstandingSignature?,
+    agentMessage: String?,
+    status: AgentStatus,
+    stepCallCount: Int
+) {
+    let conversation = await MainActor.run { ForemanConversation() }
+    let client = ScriptedForemanClient(responses: [response])
+    let commandRecorder = CommandRecorder()
+    let agent = makeAgent(
+        conversation: conversation,
+        client: client,
+        commandRecorder: commandRecorder
+    )
+
+    await agent.start(
+        goal: "use structured context",
+        mode: .interactive,
+        captureSnapshots: { snapshots },
+        captureObservedContext: { observedContext }
+    )
+
+    try await waitFor {
+        let stepCallCount = await client.agentStepCallCount()
+        return await MainActor.run {
+            (conversation.status == .waitingForUser && conversation.isRunning == false) ||
+            (stepCallCount > 0 && conversation.isRunning == false)
+        }
+    }
+
+    let commands = await commandRecorder.recordedCommands()
+    #expect(commands.isEmpty)
+
+    let runtimeState = await MainActor.run { conversation.runtimeState }
+    let status = await MainActor.run { conversation.status }
+    let lastUnderstandings = await MainActor.run { runtimeState.lastUnderstandings }
+    let messages = await MainActor.run { conversation.messages }
+
+    return (
+        understanding: understandingSignature(lastUnderstandings.first),
+        agentMessage: messages.last(where: { $0.role == .agent })?.content,
+        status: status,
+        stepCallCount: await client.agentStepCallCount()
+    )
+}
+
 private actor ScriptedForemanClient: ForemanLLMClient {
     private var responses: [AgentStepResponse]
     private var replyDrafts: [AgentReplyDraftResponse]
     private var understandingsLog: [[TerminalUnderstanding]] = []
     private var overviewsLog: [TerminalOverview] = []
     private var stepCallCount = 0
+    private var replyDraftCount = 0
 
     init(
         responses: [AgentStepResponse] = [],
@@ -2101,7 +3288,7 @@ private actor ScriptedForemanClient: ForemanLLMClient {
     }
 
     func agentStep(
-        conversation: ForemanConversation,
+        narrationContext: ForemanNarrationContext,
         terminals: [TerminalSnapshot],
         understandings: [TerminalUnderstanding],
         overview: TerminalOverview,
@@ -2117,7 +3304,7 @@ private actor ScriptedForemanClient: ForemanLLMClient {
     }
 
     func agentStep(
-        conversation: ForemanConversation,
+        narrationContext: ForemanNarrationContext,
         terminals: [TerminalSnapshot],
         lastOutcome: TerminalOutcomeReport?
     ) async throws -> AgentStepResponse {
@@ -2129,13 +3316,14 @@ private actor ScriptedForemanClient: ForemanLLMClient {
     }
 
     func draftAgentReply(
-        conversation: ForemanConversation,
+        narrationContext: ForemanNarrationContext,
         event: AgentNeedsAttentionEvent,
         terminals: [TerminalSnapshot],
         understandings: [TerminalUnderstanding],
         overview: TerminalOverview,
         lastOutcome: TerminalOutcomeReport?
     ) async throws -> AgentReplyDraftResponse {
+        replyDraftCount += 1
         understandingsLog.append(understandings)
         overviewsLog.append(overview)
         guard !replyDrafts.isEmpty else {
@@ -2154,6 +3342,19 @@ private actor ScriptedForemanClient: ForemanLLMClient {
 
     func agentStepCallCount() -> Int {
         stepCallCount
+    }
+
+    func replyDraftCallCount() -> Int {
+        replyDraftCount
+    }
+}
+
+@MainActor
+private final class MutableObservedContextSource {
+    var current: ForemanObservedTerminalContext
+
+    init(_ current: ForemanObservedTerminalContext) {
+        self.current = current
     }
 }
 
@@ -2255,7 +3456,487 @@ private func kimiObservedWaitingTextContext(
                 evidence: [.init(source: .wireSignal, detail: "Wire record: QuestionRequest", confidence: 0.98)],
                 agentInteractionContext: .waitingText(question: "What should I do here?")
             ),
+        ],
+        workerSnapshots: [:]
+    )
+}
+
+private func authoritativeCommandObservedContextWithoutPayload() -> ForemanObservedTerminalContext {
+    let snapshots = [
+        TerminalSnapshot.makePreview(
+            terminalID: "term-1",
+            windowID: "win-1",
+            tabID: "tab-1",
+            title: "Codex",
+            cwd: "/tmp/project",
+            isFocused: true,
+            visibleText: "Should I run the migration now?",
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessName: "codex",
+            cursorIsAtPrompt: true,
+            usingAlternateScreen: true
+        ),
+    ]
+    let workerSnapshot = TerminalWorkerSnapshot(
+        schemaVersion: 1,
+        terminalID: "term-1",
+        workerSessionID: "codex-session-52",
+        revision: 52,
+        observedAt: Date(timeIntervalSince1970: 1_748_222_230),
+        ttlMilliseconds: 15_000,
+        workerGoal: "prepare the migration",
+        agent: .init(identity: .codex),
+        state: .init(
+            lifecycle: .running,
+            attention: .replyRequired,
+            summary: "Codex is waiting for command guidance.",
+            details: ["The worker needs direction before running the migration."],
+            runtimeFlags: []
+        ),
+        request: .init(
+            id: "req-52",
+            kind: .command,
+            prompt: "Should I run the migration now?",
+            options: []
+        ),
+        suggestions: []
+    )
+    let understanding = TerminalUnderstanding.preview(
+        terminalID: "term-1",
+        state: .waiting,
+        shortExplanation: "Codex is waiting for command guidance.",
+        lastMeaningfulEvent: "Should I run the migration now?",
+        importantDetails: ["The worker needs direction before running the migration."],
+        suggestedNextActions: [],
+        agentIdentity: .codex,
+        agentInteractionState: .waitingText,
+        supportLevel: .firstClass,
+        evidence: [.init(source: .runtime, detail: "authoritative_worker_snapshot", confidence: 1.0)],
+        agentInteractionContext: .waitingText(
+            question: "Should I run the migration now?",
+            requestID: "req-52",
+            sessionID: "codex-session-52",
+            revision: 52,
+            isPlanning: false
+        ),
+        workerSnapshot: workerSnapshot
+    )
+
+    return ForemanObservedTerminalContext(
+        terminals: snapshots,
+        understandings: [understanding],
+        workerSnapshots: ["term-1": workerSnapshot]
+    )
+}
+
+private func ambiguousAuthoritativeWorkerObservedContext() -> ForemanObservedTerminalContext {
+    let snapshots = [
+        TerminalSnapshot.makePreview(
+            terminalID: "term-1",
+            windowID: "win-1",
+            tabID: "tab-1",
+            title: "Kimi Code",
+            cwd: "/tmp/project",
+            isFocused: true,
+            visibleText: "What should I do here?",
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessName: "kimi",
+            cursorIsAtPrompt: true,
+            usingAlternateScreen: true
+        ),
+        TerminalSnapshot.makePreview(
+            terminalID: "term-2",
+            windowID: "win-1",
+            tabID: "tab-1",
+            title: "Codex",
+            cwd: "/tmp/project",
+            isFocused: false,
+            visibleText: "Which direction should I take?",
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessName: "codex",
+            cursorIsAtPrompt: true,
+            usingAlternateScreen: true
+        ),
+    ]
+
+    let workerOne = TerminalWorkerSnapshot(
+        schemaVersion: 1,
+        terminalID: "term-1",
+        workerSessionID: "kimi-session-41",
+        revision: 41,
+        observedAt: Date(timeIntervalSince1970: 1_748_333_341),
+        ttlMilliseconds: 15_000,
+        workerGoal: "inspect the project",
+        agent: .init(identity: .kimi),
+        state: .init(
+            lifecycle: .running,
+            attention: .replyRequired,
+            summary: "Kimi is waiting for a reply.",
+            details: ["The worker asked what to do next."],
+            runtimeFlags: []
+        ),
+        request: .init(
+            id: "req-41",
+            kind: .reply,
+            prompt: "What should I do here?",
+            options: []
+        ),
+        suggestions: [
+            .init(
+                id: "reply-kimi",
+                kind: .reply,
+                title: "Inspect the auth flow",
+                payload: .text("Inspect the auth flow"),
+                rationale: "Reply with the next task for Kimi.",
+                recommended: true,
+                execution: .manualOnly,
+                requestID: "req-41"
+            ),
         ]
+    )
+    let workerTwo = TerminalWorkerSnapshot(
+        schemaVersion: 1,
+        terminalID: "term-2",
+        workerSessionID: "codex-session-17",
+        revision: 17,
+        observedAt: Date(timeIntervalSince1970: 1_748_333_342),
+        ttlMilliseconds: 15_000,
+        workerGoal: "choose an implementation path",
+        agent: .init(identity: .codex),
+        state: .init(
+            lifecycle: .running,
+            attention: .choiceRequired,
+            summary: "Codex is waiting for a choice.",
+            details: ["Two implementation paths are available."],
+            runtimeFlags: []
+        ),
+        request: .init(
+            id: "req-17",
+            kind: .choice,
+            prompt: "Which direction should I take?",
+            options: [
+                .init(id: "1", label: "Safe refactor", recommended: true),
+                .init(id: "2", label: "Fast patch", recommended: false),
+            ]
+        ),
+        suggestions: [
+            .init(
+                id: "choice-codex",
+                kind: .choice,
+                title: "Safe refactor",
+                payload: .option("1"),
+                rationale: "Choose the lower-risk implementation path.",
+                recommended: true,
+                execution: .manualOnly,
+                requestID: "req-17"
+            ),
+        ]
+    )
+
+    let understandings = [
+        TerminalUnderstanding.preview(
+            terminalID: "term-1",
+            state: .waiting,
+            shortExplanation: "Kimi is waiting for your response.",
+            lastMeaningfulEvent: "What should I do here?",
+            importantDetails: ["The worker asked what to do next."],
+            suggestedNextActions: [
+                .init(
+                    title: "Inspect the auth flow",
+                    command: nil,
+                    reason: "Reply with the next task for Kimi.",
+                    isRecommended: true
+                ),
+            ],
+            agentIdentity: .kimi,
+            agentInteractionState: .waitingText,
+            supportLevel: .firstClass,
+            evidence: [.init(source: .runtime, detail: "authoritative_worker_snapshot", confidence: 1.0)],
+            agentInteractionContext: .waitingText(
+                question: "What should I do here?",
+                requestID: "req-41",
+                sessionID: "kimi-session-41",
+                revision: 41,
+                isPlanning: false
+            ),
+            workerSnapshot: workerOne
+        ),
+        TerminalUnderstanding.preview(
+            terminalID: "term-2",
+            state: .waiting,
+            shortExplanation: "Codex is waiting for a choice.",
+            lastMeaningfulEvent: "Which direction should I take?",
+            importantDetails: ["Two implementation paths are available."],
+            suggestedNextActions: [
+                .init(
+                    title: "Safe refactor",
+                    command: nil,
+                    reason: "Choose the lower-risk implementation path.",
+                    isRecommended: true
+                ),
+            ],
+            agentIdentity: .codex,
+            agentInteractionState: .waitingChoice,
+            supportLevel: .firstClass,
+            evidence: [.init(source: .runtime, detail: "authoritative_worker_snapshot", confidence: 1.0)],
+            agentInteractionContext: .waitingChoice(
+                question: "Which direction should I take?",
+                options: ["Safe refactor", "Fast patch"],
+                requestID: "req-17",
+                sessionID: "codex-session-17",
+                revision: 17,
+                isPlanning: false
+            ),
+            workerSnapshot: workerTwo
+        ),
+    ]
+
+    return ForemanObservedTerminalContext(
+        terminals: snapshots,
+        understandings: understandings,
+        workerSnapshots: [
+            "term-1": workerOne,
+            "term-2": workerTwo,
+        ]
+    )
+}
+
+private func ambiguousFirstClassWaitingObservedContextWithoutSnapshots() -> ForemanObservedTerminalContext {
+    let snapshots = [
+        TerminalSnapshot.makePreview(
+            terminalID: "term-1",
+            windowID: "win-1",
+            tabID: "tab-1",
+            title: "Kimi Code",
+            cwd: "/tmp/project",
+            isFocused: true,
+            visibleText: "What should I do here?",
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessName: "kimi",
+            cursorIsAtPrompt: true,
+            usingAlternateScreen: true
+        ),
+        TerminalSnapshot.makePreview(
+            terminalID: "term-2",
+            windowID: "win-1",
+            tabID: "tab-1",
+            title: "Codex",
+            cwd: "/tmp/project",
+            isFocused: false,
+            visibleText: "What should I do on terminal two?",
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessName: "codex",
+            cursorIsAtPrompt: true,
+            usingAlternateScreen: true
+        ),
+    ]
+
+    return ForemanObservedTerminalContext(
+        terminals: snapshots,
+        understandings: [
+            .preview(
+                terminalID: "term-1",
+                state: .waiting,
+                shortExplanation: "Kimi is waiting for your response.",
+                lastMeaningfulEvent: "What should I do here?",
+                importantDetails: ["What should I do here?"],
+                suggestedNextActions: [
+                    .init(
+                        title: "Reply to Kimi",
+                        command: nil,
+                        reason: "What should I do here?",
+                        isRecommended: true
+                    ),
+                ],
+                agentIdentity: .kimi,
+                agentInteractionState: .waitingText,
+                supportLevel: .firstClass,
+                evidence: [.init(source: .wireSignal, detail: "Wire record: QuestionRequest", confidence: 0.98)],
+                agentInteractionContext: .waitingText(question: "What should I do here?")
+            ),
+            .preview(
+                terminalID: "term-2",
+                state: .waiting,
+                shortExplanation: "Codex is waiting for your response.",
+                lastMeaningfulEvent: "What should I do on terminal two?",
+                importantDetails: ["What should I do on terminal two?"],
+                suggestedNextActions: [
+                    .init(
+                        title: "Reply to Codex",
+                        command: nil,
+                        reason: "What should I do on terminal two?",
+                        isRecommended: true
+                    ),
+                ],
+                agentIdentity: .codex,
+                agentInteractionState: .waitingText,
+                supportLevel: .firstClass,
+                evidence: [.init(source: .wireSignal, detail: "Wire record: waitingText", confidence: 0.95)],
+                agentInteractionContext: .waitingText(question: "What should I do on terminal two?")
+            ),
+        ],
+        workerSnapshots: [:]
+    )
+}
+
+private func choiceObservedContext(
+    isPlanning: Bool,
+    execution: TerminalWorkerSuggestionExecution
+) -> ForemanObservedTerminalContext {
+    let snapshots = [
+        TerminalSnapshot.makePreview(
+            terminalID: "term-1",
+            windowID: "win-1",
+            tabID: "tab-1",
+            title: "Kimi Code",
+            cwd: "/tmp/project",
+            isFocused: true,
+            visibleText: "Which direction should I take?",
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessName: "kimi",
+            cursorIsAtPrompt: true,
+            usingAlternateScreen: true
+        ),
+    ]
+    let workerSnapshot = TerminalWorkerSnapshot(
+        schemaVersion: 1,
+        terminalID: "term-1",
+        workerSessionID: "kimi-session-12",
+        revision: 12,
+        observedAt: Date(timeIntervalSince1970: 1_748_333_333),
+        ttlMilliseconds: 15_000,
+        workerGoal: "compare API directions",
+        agent: .init(identity: .kimi),
+        state: .init(
+            lifecycle: .running,
+            attention: .choiceRequired,
+            summary: isPlanning ? "Kimi is waiting in plan mode." : "Kimi suggested the safest option.",
+            details: ["Two API directions are available."],
+            runtimeFlags: isPlanning ? [.planning] : []
+        ),
+        request: .init(
+            id: "req-12",
+            kind: .choice,
+            prompt: "Which direction should I take?",
+            options: [
+                .init(id: "1", label: "Keep current API", recommended: true),
+                .init(id: "2", label: "Allow breaking change", recommended: false),
+            ]
+        ),
+        suggestions: [
+            .init(
+                id: "keep-api",
+                kind: .choice,
+                title: "Keep current API",
+                payload: .option("1"),
+                rationale: "Lowest migration risk.",
+                recommended: true,
+                execution: execution,
+                requestID: "req-12"
+            ),
+        ]
+    )
+    let understanding = TerminalUnderstanding.preview(
+        terminalID: "term-1",
+        state: .waiting,
+        shortExplanation: isPlanning ? "Kimi is waiting in plan mode." : "Kimi suggested the safest option.",
+        lastMeaningfulEvent: "Which direction should I take?",
+        importantDetails: ["Two API directions are available."],
+        suggestedNextActions: [
+            .init(
+                title: "Keep current API",
+                command: nil,
+                reason: "Lowest migration risk.",
+                isRecommended: true
+            ),
+        ],
+        agentIdentity: .kimi,
+        agentInteractionState: .waitingChoice,
+        supportLevel: .firstClass,
+        evidence: [.init(source: .runtime, detail: "authoritative_worker_snapshot", confidence: 1.0)],
+        agentInteractionContext: .waitingChoice(
+            question: "Which direction should I take?",
+            options: ["Keep current API", "Allow breaking change"],
+            requestID: "req-12",
+            sessionID: "kimi-session-12",
+            revision: 12,
+            isPlanning: isPlanning
+        ),
+        workerSnapshot: workerSnapshot
+    )
+
+    return ForemanObservedTerminalContext(
+        terminals: snapshots,
+        understandings: [understanding],
+        workerSnapshots: ["term-1": workerSnapshot]
+    )
+}
+
+private func runningObservedContextAfterSuggestedChoice() -> ForemanObservedTerminalContext {
+    let snapshots = [
+        TerminalSnapshot.makePreview(
+            terminalID: "term-1",
+            windowID: "win-1",
+            tabID: "tab-1",
+            title: "Kimi Code",
+            cwd: "/tmp/project",
+            isFocused: true,
+            visibleText: "Applying the selected API direction.",
+            recentScrollbackLines: [],
+            lastInputPreview: "1",
+            foregroundProcessName: "kimi",
+            cursorIsAtPrompt: false,
+            usingAlternateScreen: true
+        ),
+    ]
+    let workerSnapshot = TerminalWorkerSnapshot(
+        schemaVersion: 1,
+        terminalID: "term-1",
+        workerSessionID: "kimi-session-12",
+        revision: 13,
+        observedAt: Date(timeIntervalSince1970: 1_748_333_334),
+        ttlMilliseconds: 15_000,
+        workerGoal: "compare API directions",
+        agent: .init(identity: .kimi),
+        state: .init(
+            lifecycle: .running,
+            attention: .none,
+            summary: "Kimi is applying the selected API direction.",
+            details: ["The worker is continuing with the approved choice."],
+            runtimeFlags: []
+        ),
+        request: nil,
+        suggestions: []
+    )
+    let understanding = TerminalUnderstanding.preview(
+        terminalID: "term-1",
+        state: .running,
+        shortExplanation: "Kimi is applying the selected API direction.",
+        lastMeaningfulEvent: "Applying the selected API direction.",
+        importantDetails: ["The worker is continuing with the approved choice."],
+        suggestedNextActions: [],
+        agentIdentity: .kimi,
+        agentInteractionState: .running,
+        supportLevel: .firstClass,
+        evidence: [.init(source: .runtime, detail: "authoritative_worker_snapshot", confidence: 1.0)],
+        agentInteractionContext: .running(
+            stepDescription: "Applying the selected API direction.",
+            sessionID: "kimi-session-12",
+            revision: 13
+        ),
+        workerSnapshot: workerSnapshot
+    )
+
+    return ForemanObservedTerminalContext(
+        terminals: snapshots,
+        understandings: [understanding],
+        workerSnapshots: ["term-1": workerSnapshot]
     )
 }
 
@@ -2459,13 +4140,49 @@ private func kimiQuestionRecord(question: String) -> KimiWireRecord {
     )
 }
 
-private func goalAwareRecommendNextStepPrompt(goal: String) -> String {
-    """
-    The saved project goal for this repository is:
-    \(goal)
+private actor FastPathRecordingForemanClient: ForemanLLMClient {
+    private(set) var draftReplyCallCount = 0
 
-    Please inspect the current project state and recommend the single most useful next step toward that goal. Explain why before making changes.
-    """
+    func summarize(snapshot: TerminalSnapshot) async throws -> TerminalSummary {
+        throw ScriptedForemanClientError.unexpectedCall
+    }
+
+    func planDispatch(instruction: String, summaries: [TerminalSummary]) async throws -> DispatchPlan {
+        throw ScriptedForemanClientError.unexpectedCall
+    }
+
+    func agentStep(
+        narrationContext: ForemanNarrationContext,
+        terminals: [TerminalSnapshot],
+        understandings: [TerminalUnderstanding],
+        overview: TerminalOverview,
+        lastOutcome: TerminalOutcomeReport?
+    ) async throws -> AgentStepResponse {
+        throw ScriptedForemanClientError.unexpectedCall
+    }
+
+    func agentStep(
+        narrationContext: ForemanNarrationContext,
+        terminals: [TerminalSnapshot],
+        lastOutcome: TerminalOutcomeReport?
+    ) async throws -> AgentStepResponse {
+        throw ScriptedForemanClientError.unexpectedCall
+    }
+
+    func draftAgentReply(
+        narrationContext: ForemanNarrationContext,
+        event: AgentNeedsAttentionEvent,
+        terminals: [TerminalSnapshot],
+        understandings: [TerminalUnderstanding],
+        overview: TerminalOverview,
+        lastOutcome: TerminalOutcomeReport?
+    ) async throws -> AgentReplyDraftResponse {
+        draftReplyCallCount += 1
+        return AgentReplyDraftResponse(
+            thought: "fallback",
+            suggestion: .noAction(reason: "should not be called", confidence: 0.0)
+        )
+    }
 }
 
 private enum ScriptedForemanClientError: Error {

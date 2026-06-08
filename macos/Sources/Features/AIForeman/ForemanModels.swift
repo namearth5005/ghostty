@@ -60,6 +60,11 @@ enum AgentStatus: String, Codable, Sendable, Equatable {
 struct AgentReplyDraftResponse: Codable, Equatable, Sendable {
     let thought: String
     let suggestion: AgentReplyDraftSuggestion
+
+    init(thought: String, suggestion: AgentReplyDraftSuggestion) {
+        self.thought = thought
+        self.suggestion = suggestion
+    }
 }
 
 enum AgentReplyDraftSuggestion: Codable, Equatable, Sendable {
@@ -250,17 +255,30 @@ enum AgentAction: Codable, Equatable, Sendable {
 
 enum ConversationUIPhase: Equatable {
     case readyToStart
+    case goalReady
     case processing
     case awaitingApproval(command: String)
     case awaitingReply
+    case choosingTarget(options: [ForemanTargetOption])
+    case goalCompleted
     case chatting
 
     static func resolve(
         goal: String?,
+        sessionGoal: String?,
         isRunning: Bool,
         status: AgentStatus,
-        lastAction: AgentAction?
+        lastAction: AgentAction?,
+        resolvedTarget: ForemanSidebarTarget? = nil
     ) -> Self {
+        if case .completedGoal = resolvedTarget {
+            return .goalCompleted
+        }
+
+        if case .ambiguous(let options) = resolvedTarget {
+            return .choosingTarget(options: options)
+        }
+
         if status == .waitingForUser {
             if case .sendCommand(_, let command, _) = lastAction {
                 return .awaitingApproval(command: command)
@@ -268,7 +286,15 @@ enum ConversationUIPhase: Equatable {
             return .awaitingReply
         }
 
+        if case .terminalReply = resolvedTarget {
+            return .awaitingReply
+        }
+
         guard goal != nil else { return .readyToStart }
+
+        if sessionGoal == nil && !isRunning {
+            return .goalReady
+        }
 
         if isRunning {
             switch status {
@@ -298,8 +324,14 @@ enum ConversationStatusDisplay: Equatable {
         switch phase {
         case .awaitingApproval:
             return .awaitingApproval
+        case .choosingTarget:
+            return .awaitingReply
         case .awaitingReply:
             return .awaitingReply
+        case .goalCompleted:
+            return .complete
+        case .goalReady:
+            return .idle
         case .chatting:
             return .chatting
         case .readyToStart:
@@ -341,6 +373,11 @@ struct AgentStepResponse: Codable, Equatable, Sendable {
     enum CodingKeys: String, CodingKey {
         case thought
         case action
+    }
+
+    init(thought: String, action: AgentAction) {
+        self.thought = thought
+        self.action = action
     }
 
     init(from decoder: Decoder) throws {

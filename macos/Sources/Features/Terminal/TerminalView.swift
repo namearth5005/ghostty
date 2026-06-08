@@ -39,6 +39,9 @@ protocol TerminalViewModel: ObservableObject {
     /// The AI foreman sidebar store for this terminal window.
     var foremanSidebarStore: ForemanSidebarStore { get }
 
+    /// The proposal store for this terminal window.
+    var proposalStore: ProposalStore { get }
+
     /// Whether this controller should offer the AI foreman sidebar.
     var supportsForemanSidebar: Bool { get }
 }
@@ -148,7 +151,7 @@ struct TerminalView<ViewModel: TerminalViewModel>: View {
                 if foremanSidebarIsAvailable && viewModel.foremanSidebarStore.isSidebarVisible {
                     Divider()
 
-                    ForemanChatView(store: viewModel.foremanSidebarStore)
+                    ProposalCardView(store: viewModel.proposalStore)
                 }
             }
             .frame(maxWidth: .greatestFiniteMagnitude, maxHeight: .greatestFiniteMagnitude)

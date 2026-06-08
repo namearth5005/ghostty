@@ -70,13 +70,19 @@ struct AgentInteractionContextResolver {
         _ context: AgentInteractionContext,
         from wireRecords: [KimiWireRecord]
     ) -> AgentInteractionContext {
-        guard case .waitingText(let question) = context,
+        guard case .waitingText(let question, let requestID, let sessionID, let revision, let isPlanning) = context,
               question?.isEmpty ?? true,
               let wireQuestion = latestKimiTextQuestion(from: wireRecords) else {
             return context
         }
 
-        return .waitingText(question: wireQuestion)
+        return .waitingText(
+            question: wireQuestion,
+            requestID: requestID,
+            sessionID: sessionID,
+            revision: revision,
+            isPlanning: isPlanning
+        )
     }
 
     private func latestKimiTextQuestion(from wireRecords: [KimiWireRecord]) -> String? {

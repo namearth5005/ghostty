@@ -55,6 +55,7 @@ class BaseTerminalController: NSWindowController,
     @Published private(set) var bell: Bool = false
 
     let foremanSidebarStore = ForemanSidebarStore()
+    let proposalStore = ProposalStore()
     var supportsForemanSidebar: Bool { true }
 
     /// Whether the terminal surface should focus when the mouse is over it.
@@ -163,15 +164,24 @@ class BaseTerminalController: NSWindowController,
             guard let self else { return }
             (NSApp.delegate as? AppDelegate)?.sendChatMessage(text, store: self.foremanSidebarStore)
         }
+        foremanSidebarStore.onDispatchSidebarIntent = { [weak self] intent in
+            guard let self else { return }
+            (NSApp.delegate as? AppDelegate)?.dispatchForemanSidebarIntent(
+                intent,
+                store: self.foremanSidebarStore
+            )
+        }
         foremanSidebarStore.onStopAgent = { [weak self] in
             guard let self else { return }
             (NSApp.delegate as? AppDelegate)?.stopForemanAgent(store: self.foremanSidebarStore)
         }
-        foremanSidebarStore.onApproveAction = {
-            (NSApp.delegate as? AppDelegate)?.approveForemanAction()
+        foremanSidebarStore.onApproveAction = { [weak self] in
+            guard let self else { return }
+            (NSApp.delegate as? AppDelegate)?.approveForemanAction(store: self.foremanSidebarStore)
         }
-        foremanSidebarStore.onSkipAction = {
-            (NSApp.delegate as? AppDelegate)?.skipForemanAction()
+        foremanSidebarStore.onSkipAction = { [weak self] in
+            guard let self else { return }
+            (NSApp.delegate as? AppDelegate)?.skipForemanAction(store: self.foremanSidebarStore)
         }
         foremanSidebarStore.onLaunchAgent = Self.makeManagedAgentLaunchHandler(
             currentWorkingDirectory: { [weak self] in self?.focusedSurface?.pwd },
@@ -180,12 +190,6 @@ class BaseTerminalController: NSWindowController,
                 (NSApp.delegate as? AppDelegate)?.launchManagedAgent(request)
             }
         )
-        foremanSidebarStore.onExecuteSuggestion = { terminalID, command in
-            (NSApp.delegate as? AppDelegate)?.executeSuggestedAction(
-                terminalID: terminalID,
-                command: command
-            )
-        }
         foremanSidebarStore.onExecutePendingAttentionAction = { [weak self] attention, action in
             guard let self else { return }
             (NSApp.delegate as? AppDelegate)?.executePendingAttentionAction(

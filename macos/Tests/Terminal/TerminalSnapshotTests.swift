@@ -74,6 +74,31 @@ struct TerminalSnapshotTests {
     }
 
     @Test
+    func snapshotDoesNotTreatDebugBuildBannerAsLongRunningWork() {
+        let snapshot = TerminalSnapshot.makePreview(
+            terminalID: "term-debug",
+            windowID: "win-debug",
+            tabID: "tab-debug",
+            title: "OpenAI Codex",
+            cwd: "/tmp/project",
+            isFocused: true,
+            visibleText: """
+            You're running a debug build of Ghostty! Performance will be degraded.
+
+            gpt-5.4 medium · ~/tmp/project
+            """,
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessName: "codex",
+            cursorIsAtPrompt: true,
+            usingAlternateScreen: true
+        )
+
+        #expect(snapshot.signals.likelyWaitingForInput == true)
+        #expect(snapshot.signals.likelyLongRunning == false)
+    }
+
+    @Test
     func snapshotDetectsVariousShellPrompts() {
         let prompts = ["$", "%", "#", ">", "λ", "❯", "➜"]
         for prompt in prompts {

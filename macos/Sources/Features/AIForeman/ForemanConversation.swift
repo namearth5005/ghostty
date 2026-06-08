@@ -34,6 +34,8 @@ struct ConversationMessage: Identifiable, Codable, Equatable, Sendable {
 final class ForemanConversation: ObservableObject {
     private static let maxHiddenContextEntries = 8
 
+    let runtimeState: ForemanRuntimeState
+
     @Published var messages: [ConversationMessage] = []
     @Published var goal: String?
     @Published var mode: AgentMode = .interactive
@@ -41,12 +43,13 @@ final class ForemanConversation: ObservableObject {
     @Published var status: AgentStatus = .idle
     @Published var iterationCount: Int = 0
     @Published var errorMessage: String?
-    @Published var lastOverview: TerminalOverview?
-    @Published var lastUnderstandings: [TerminalUnderstanding] = []
     @Published private(set) var hiddenContext: [String] = []
-    @Published private(set) var activeProjectGoal: ForemanProjectGoal?
 
     let maxIterations = 20
+
+    init(runtimeState: ForemanRuntimeState? = nil) {
+        self.runtimeState = runtimeState ?? ForemanRuntimeState()
+    }
 
     func start(goal: String, mode: AgentMode = .interactive) {
         self.goal = goal
@@ -55,20 +58,17 @@ final class ForemanConversation: ObservableObject {
         self.status = .observing
         self.iterationCount = 0
         self.errorMessage = nil
-        self.lastOverview = nil
-        self.lastUnderstandings = []
+        runtimeState.setConversationGoal(goal)
+        runtimeState.resetForNewConversation()
         self.hiddenContext = []
-        self.activeProjectGoal = nil
         addMessage(role: .user, content: goal)
     }
 
     func stop() {
         isRunning = false
         status = .idle
-        lastOverview = nil
-        lastUnderstandings = []
+        runtimeState.resetObservedTerminalContext()
         hiddenContext = []
-        activeProjectGoal = nil
     }
 
     func addMessage(
@@ -111,26 +111,52 @@ final class ForemanConversation: ObservableObject {
 
     func updateTerminalContext(
         overview: TerminalOverview,
-        understandings: [TerminalUnderstanding]
+        understandings: [TerminalUnderstanding],
+        workerSnapshots: [String: TerminalWorkerSnapshot] = [:]
     ) {
-        self.lastOverview = overview
-        self.lastUnderstandings = understandings
+        runtimeState.updateTerminalContext(
+            overview: overview,
+            understandings: understandings,
+            workerSnapshots: workerSnapshots
+        )
     }
 
     func setActiveProjectGoal(_ goal: ForemanProjectGoal?) {
-        activeProjectGoal = goal
+        runtimeState.setActiveProjectGoal(goal)
     }
 
     var hasReachedMaxIterations: Bool {
         iterationCount >= maxIterations
     }
 
-    var effectiveGoal: String? {
-        if let activeProjectGoal, activeProjectGoal.status.isActive {
-            return activeProjectGoal.objective
-        }
+    var lastOverview: TerminalOverview? {
+        runtimeState.lastOverview
+    }
 
-        return goal
+    var lastUnderstandings: [TerminalUnderstanding] {
+        runtimeState.lastUnderstandings
+    }
+
+    var lastWorkerSnapshots: [String: TerminalWorkerSnapshot] {
+        runtimeState.lastWorkerSnapshots
+    }
+
+    var activeProjectGoal: ForemanProjectGoal? {
+        runtimeState.activeProjectGoal
+    }
+
+    var effectiveGoal: String? {
+        runtimeState.effectiveGoal()
+    }
+
+    var narrationContext: ForemanNarrationContext {
+        ForemanNarrationContext(
+            goal: effectiveGoal,
+            mode: mode,
+            iterationCount: iterationCount,
+            messages: messages,
+            hiddenContext: hiddenContext
+        )
     }
 
     var formattedHistory: String {

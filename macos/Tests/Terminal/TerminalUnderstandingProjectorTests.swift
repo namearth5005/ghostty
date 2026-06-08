@@ -57,6 +57,309 @@ struct TerminalUnderstandingProjectorTests {
     }
 
     @Test
+    func authoritativeWorkerSnapshotOverridesHeuristicProjection() {
+        let snapshot = TerminalSnapshot.makePreview(
+            terminalID: "codex-term",
+            windowID: "win-1",
+            tabID: "tab-1",
+            title: "shell",
+            cwd: "/tmp/project",
+            isFocused: true,
+            visibleText: "zsh: command not found: hfind",
+            recentScrollbackLines: ["zsh: command not found: hfind"],
+            lastInputPreview: "hfind . -print",
+            foregroundProcessName: "codex",
+            cursorIsAtPrompt: true,
+            usingAlternateScreen: true
+        )
+        let workerSnapshot = TerminalWorkerSnapshot(
+            schemaVersion: 1,
+            terminalID: "codex-term",
+            workerSessionID: "codex-session-41",
+            revision: 41,
+            observedAt: Date(timeIntervalSince1970: 1_748_222_222),
+            ttlMilliseconds: 15_000,
+            workerGoal: "stabilize the API",
+            agent: .init(identity: .codex),
+            state: .init(
+                lifecycle: .blocked,
+                attention: .replyRequired,
+                summary: "Codex is waiting for a reply.",
+                details: ["Asked whether the API should stay stable."],
+                runtimeFlags: []
+            ),
+            request: .init(
+                id: "req-41",
+                kind: .reply,
+                prompt: "Should I preserve the API?",
+                options: []
+            ),
+            suggestions: [
+                .init(
+                    id: "preserve-api",
+                    kind: .reply,
+                    title: "Preserve the API",
+                    payload: .text("Preserve the current API and adapt the internals."),
+                    rationale: "Lowest migration risk.",
+                    recommended: true,
+                    execution: .manualOnly,
+                    requestID: "req-41"
+                ),
+            ]
+        )
+
+        let understanding = projector.project(
+            current: snapshot,
+            classification: Optional<AgentMeaningDetector.Detection>.none,
+            lastOutcome: Optional<TerminalOutcomeReport>.none,
+            lastEvent: "zsh: command not found: hfind",
+            workerSnapshot: workerSnapshot
+        )
+
+        #expect(understanding.state == .waiting)
+        #expect(understanding.agentIdentity == .codex)
+        #expect(understanding.agentInteractionState == .waitingText)
+        #expect(understanding.shortExplanation == "Codex is waiting for a reply.")
+        #expect(understanding.suggestedNextActions.map(\.title) == ["Preserve the API"])
+        #expect(understanding.workerSnapshot == workerSnapshot)
+        #expect(
+            understanding.agentInteractionContext ==
+            .waitingText(
+                question: "Should I preserve the API?",
+                requestID: "req-41",
+                sessionID: "codex-session-41",
+                revision: 41,
+                isPlanning: false
+            )
+        )
+    }
+
+    @Test
+    func authoritativeCommandSuggestionPreservesFingerprint() {
+        let snapshot = TerminalSnapshot.makePreview(
+            terminalID: "codex-term",
+            windowID: "win-1",
+            tabID: "tab-1",
+            title: "shell",
+            cwd: "/tmp/project",
+            isFocused: true,
+            visibleText: "Should I inspect the TODO list?",
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessName: "codex",
+            cursorIsAtPrompt: true,
+            usingAlternateScreen: true
+        )
+        let workerSnapshot = TerminalWorkerSnapshot(
+            schemaVersion: 1,
+            terminalID: "codex-term",
+            workerSessionID: "codex-session-42",
+            revision: 42,
+            observedAt: Date(timeIntervalSince1970: 1_748_222_223),
+            ttlMilliseconds: 15_000,
+            workerGoal: "inspect the TODO list",
+            agent: .init(identity: .codex),
+            state: .init(
+                lifecycle: .blocked,
+                attention: .replyRequired,
+                summary: "Codex is waiting for a reply.",
+                details: ["Asked whether to inspect the TODO list."],
+                runtimeFlags: []
+            ),
+            request: .init(
+                id: "req-42",
+                kind: .reply,
+                prompt: "Should I inspect the TODO list?",
+                options: []
+            ),
+            suggestions: [
+                .init(
+                    id: "inspect-todo",
+                    kind: .command,
+                    title: "Inspect the TODO list",
+                    payload: .command("rg -n TODO ."),
+                    rationale: "Quickest way to find the remaining work items.",
+                    recommended: true,
+                    execution: .manualOnly,
+                    requestID: "req-42"
+                ),
+            ]
+        )
+
+        let understanding = projector.project(
+            current: snapshot,
+            classification: Optional<AgentMeaningDetector.Detection>.none,
+            lastOutcome: Optional<TerminalOutcomeReport>.none,
+            lastEvent: "Should I inspect the TODO list?",
+            workerSnapshot: workerSnapshot
+        )
+
+        let action = try! #require(understanding.suggestedNextActions.first)
+        #expect(action.command == "rg -n TODO .")
+        #expect(action.authoritativeFingerprint == workerSnapshot.attentionFingerprint)
+        #expect(action.authoritativePayload == nil)
+    }
+
+    @Test
+    func authoritativeProjectionIgnoresSuggestionsFromOlderRequests() {
+        let snapshot = TerminalSnapshot.makePreview(
+            terminalID: "codex-term",
+            windowID: "win-1",
+            tabID: "tab-1",
+            title: "shell",
+            cwd: "/tmp/project",
+            isFocused: true,
+            visibleText: "What should I do next?",
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessName: "codex",
+            cursorIsAtPrompt: true,
+            usingAlternateScreen: true
+        )
+        let workerSnapshot = TerminalWorkerSnapshot(
+            schemaVersion: 1,
+            terminalID: "codex-term",
+            workerSessionID: "codex-session-55",
+            revision: 55,
+            observedAt: Date(timeIntervalSince1970: 1_748_333_334),
+            ttlMilliseconds: 15_000,
+            workerGoal: "answer the latest question",
+            agent: .init(identity: .codex),
+            state: .init(
+                lifecycle: .blocked,
+                attention: .replyRequired,
+                summary: "Codex is waiting for a reply.",
+                details: ["A stale recommendation should not be rendered."],
+                runtimeFlags: []
+            ),
+            request: .init(
+                id: "req-current",
+                kind: .reply,
+                prompt: "What should I do next?",
+                options: []
+            ),
+            suggestions: [
+                .init(
+                    id: "stale",
+                    kind: .reply,
+                    title: "Follow the old plan",
+                    payload: .text("Use the previous migration path."),
+                    rationale: "This suggestion belongs to the old request.",
+                    recommended: true,
+                    execution: .manualOnly,
+                    requestID: "req-old"
+                ),
+                .init(
+                    id: "current",
+                    kind: .reply,
+                    title: "Answer the current question",
+                    payload: .text("Use the current migration path."),
+                    rationale: "This matches the live request.",
+                    recommended: false,
+                    execution: .manualOnly,
+                    requestID: "req-current"
+                ),
+            ]
+        )
+
+        let understanding = projector.project(
+            current: snapshot,
+            classification: Optional<AgentMeaningDetector.Detection>.none,
+            lastOutcome: Optional<TerminalOutcomeReport>.none,
+            lastEvent: "What should I do next?",
+            workerSnapshot: workerSnapshot
+        )
+
+        #expect(understanding.suggestedNextActions.map(\.title) == ["Answer the current question"])
+        #expect(understanding.suggestedNextActions.first?.authoritativePayload == "Use the current migration path.")
+    }
+
+    @Test
+    func authoritativeWorkerLifecycleMapsToInteractionStateWhenAttentionIsNone() {
+        let snapshot = TerminalSnapshot.makePreview(
+            terminalID: "kimi-term",
+            windowID: "win-1",
+            tabID: "tab-1",
+            title: "Kimi Code",
+            cwd: "/tmp/project",
+            isFocused: true,
+            visibleText: "Kimi is applying the selected API direction.",
+            recentScrollbackLines: [],
+            lastInputPreview: nil,
+            foregroundProcessName: "kimi",
+            cursorIsAtPrompt: false,
+            usingAlternateScreen: true
+        )
+
+        let runningSnapshot = TerminalWorkerSnapshot(
+            schemaVersion: 1,
+            terminalID: "kimi-term",
+            workerSessionID: "kimi-session-12",
+            revision: 12,
+            observedAt: Date(timeIntervalSince1970: 1_748_333_334),
+            ttlMilliseconds: 15_000,
+            workerGoal: "compare API directions",
+            agent: .init(identity: .kimi),
+            state: .init(
+                lifecycle: .running,
+                attention: .none,
+                summary: "Kimi is applying the selected API direction.",
+                details: ["The worker is continuing with the approved choice."],
+                runtimeFlags: []
+            ),
+            request: nil,
+            suggestions: []
+        )
+        let completedSnapshot = TerminalWorkerSnapshot(
+            schemaVersion: 1,
+            terminalID: "kimi-term",
+            workerSessionID: "kimi-session-13",
+            revision: 13,
+            observedAt: Date(timeIntervalSince1970: 1_748_333_335),
+            ttlMilliseconds: 15_000,
+            workerGoal: "compare API directions",
+            agent: .init(identity: .kimi),
+            state: .init(
+                lifecycle: .completed,
+                attention: .none,
+                summary: "Kimi completed the API comparison.",
+                details: ["A recommended direction is ready."],
+                runtimeFlags: []
+            ),
+            request: nil,
+            suggestions: []
+        )
+
+        let runningUnderstanding = projector.project(
+            current: snapshot,
+            classification: Optional<AgentMeaningDetector.Detection>.none,
+            lastOutcome: Optional<TerminalOutcomeReport>.none,
+            lastEvent: "Kimi is applying the selected API direction.",
+            workerSnapshot: runningSnapshot
+        )
+        let completedUnderstanding = projector.project(
+            current: snapshot,
+            classification: Optional<AgentMeaningDetector.Detection>.none,
+            lastOutcome: Optional<TerminalOutcomeReport>.none,
+            lastEvent: "Kimi completed the API comparison.",
+            workerSnapshot: completedSnapshot
+        )
+
+        #expect(runningUnderstanding.agentInteractionState == .running)
+        #expect(runningUnderstanding.agentInteractionContext == .running(
+            stepDescription: "Kimi is applying the selected API direction.",
+            sessionID: "kimi-session-12",
+            revision: 12
+        ))
+        #expect(completedUnderstanding.agentInteractionState == .completed)
+        #expect(completedUnderstanding.agentInteractionContext == .completed(
+            summary: "Kimi completed the API comparison.",
+            sessionID: "kimi-session-13",
+            revision: 13
+        ))
+    }
+
+    @Test
     func codexWaitingTextProjectionKeepsManagedLaunchParity() {
         let question = "• Hello. What do you want to work on in ghostty?"
         let classification = AgentMeaningDetector.Detection(

@@ -3,6 +3,7 @@ import Foundation
 enum ForemanReactiveEventRouter {
     enum InitialDecision: Equatable {
         case showPendingAttention(PendingAgentAttention)
+        case autoDispatchPendingAttention(PendingAgentAttention, PendingAgentAction)
         case draftWaitingText
         case react
     }
@@ -15,9 +16,22 @@ enum ForemanReactiveEventRouter {
 
     static func initialDecision(
         for event: AgentNeedsAttentionEvent,
-        understanding: TerminalUnderstanding?
+        understanding: TerminalUnderstanding?,
+        mode: AgentMode = .interactive,
+        activeGoalStatus: ForemanProjectGoalStatus? = nil,
+        runtimePolicy: ForemanRuntimePolicy = .init()
     ) -> InitialDecision {
         if let attention = PendingAgentAttentionFactory.make(from: event, understanding: understanding) {
+            if let autoDispatch = authoritativeAutonomousDecision(
+                for: event,
+                understanding: understanding,
+                attention: attention,
+                mode: mode,
+                activeGoalStatus: activeGoalStatus,
+                runtimePolicy: runtimePolicy
+            ) {
+                return autoDispatch
+            }
             return .showPendingAttention(attention)
         }
 
@@ -26,6 +40,50 @@ enum ForemanReactiveEventRouter {
         }
 
         return .react
+    }
+
+    private static func authoritativeAutonomousDecision(
+        for event: AgentNeedsAttentionEvent,
+        understanding: TerminalUnderstanding?,
+        attention: PendingAgentAttention,
+        mode: AgentMode,
+        activeGoalStatus: ForemanProjectGoalStatus?,
+        runtimePolicy: ForemanRuntimePolicy
+    ) -> InitialDecision? {
+        guard let snapshot = understanding?.workerSnapshot,
+              snapshot.request != nil else {
+            return nil
+        }
+
+        let requestSuggestions = snapshot.requestSuggestions
+        guard let suggestion = requestSuggestions.first(where: \.recommended) ?? requestSuggestions.first else {
+            return nil
+        }
+
+        if case .foremanPrompt = suggestion.payload {
+            return nil
+        }
+
+        guard let action = attention.actions.first(where: { $0.id == suggestion.id }) else {
+            return nil
+        }
+
+        let decision = runtimePolicy.continuationDecision(
+            mode: mode,
+            activeGoalStatus: activeGoalStatus,
+            resolvedTarget: .terminalReply(
+                terminalID: event.terminalID,
+                fingerprint: event.fingerprint
+            ),
+            selectedSnapshot: snapshot,
+            proposedPayload: action.payload
+        )
+
+        guard decision == .allowAutonomousDispatch else {
+            return nil
+        }
+
+        return .autoDispatchPendingAttention(attention, action)
     }
 
     static func decisionAfterDraft(

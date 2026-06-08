@@ -135,8 +135,6 @@ class AppDelegate: NSObject,
 
         return nil
     }()
-    var foremanAgent: ForemanAgent?
-    private weak var foremanAgentStore: ForemanSidebarStore?
     lazy var dispatchQueueCoordinator = DispatchQueueCoordinator()
     let storeManager = StoreManager.shared
     let foremanNotifier = ForemanNotifier.shared
@@ -194,11 +192,12 @@ class AppDelegate: NSObject,
     private let aiForemanObservedContextBuilder = ForemanObservedContextBuilder()
     private var aiForemanCurrentSnapshots: [TerminalSnapshot] = []
     private var aiForemanCurrentUnderstandings: [TerminalUnderstanding] = []
+    private var aiForemanCurrentWorkerSnapshots: [String: TerminalWorkerSnapshot] = [:]
     private var aiForemanObservedOutcomeTracker = ForemanObservedOutcomeTracker()
     private var aiForemanPreviousSnapshots: [String: TerminalSnapshot] = [:]
     private var aiForemanPreviousUnderstandings: [String: TerminalUnderstanding] = [:]
     private let agentStateMonitor = AgentStateMonitor()
-    private let foremanProjectGoalRuntime = ForemanProjectGoalRuntime()
+    private var foremanProjectGoalRuntime = ForemanProjectGoalRuntime(loadPersistedGoals: true)
     private var kimiWireMonitors: [String: KimiWireSessionMonitor] = [:]
     private var codexWireMonitors: [String: CodexSessionMonitor] = [:]
     private var claudeWireMonitors: [String: ClaudeSessionMonitor] = [:]
@@ -334,63 +333,34 @@ class AppDelegate: NSObject,
                 let understanding = self.aiForemanPreviousUnderstandings[event.terminalID]
                 let observedContext = self.aiForemanCurrentSnapshots.isEmpty ? nil : ForemanObservedTerminalContext(
                     terminals: self.aiForemanCurrentSnapshots,
-                    understandings: self.aiForemanCurrentUnderstandings
+                    understandings: self.aiForemanCurrentUnderstandings,
+                    workerSnapshots: self.aiForemanCurrentWorkerSnapshots
                 )
                 let initialDecision = ForemanReactiveEventRouter.initialDecision(
                     for: event,
-                    understanding: understanding
+                    understanding: understanding,
+                    mode: store.conversation.mode,
+                    activeGoalStatus: store.runtimeState.activeProjectGoal?.status
                 )
 
-                if case .showPendingAttention(let attention) = initialDecision {
-                    store.upsertPendingAttention(attention)
+                if self.handleReactiveInitialDecision(initialDecision, store: store) {
                     return
                 }
 
-                let needsAgentForStore = self.foremanAgentStore.map { $0 !== store } ?? true
-
-                // Ensure an agent exists for this sidebar store — create one on demand if needed.
-                if self.foremanAgent == nil || needsAgentForStore {
-                    guard let foremanService = self.foremanService else { return }
-                    if self.foremanAgent != nil {
-                        await self.foremanAgent?.stop()
-                    }
-                    self.foremanAgent = ForemanAgent(
-                        conversation: store.conversation,
-                        foremanService: foremanService,
-                        goalRuntime: self.foremanProjectGoalRuntime,
-                        preferredTerminalID: event.terminalID,
-                        onSendCommand: { [weak self] terminalID, command in
-                            guard let self else { return false }
-                            guard let controller = self.terminalController(for: terminalID) else { return false }
-                            let item = DispatchQueueItem(terminalID: terminalID, message: command)
-                            guard self.dispatchQueueCoordinator.send(item, through: controller) else { return false }
-                            self.registerTerminalOutcomeTracking(terminalID: terminalID, sentCommand: command)
-                            return true
-                        },
-                        onStatusChange: { _ in },
-                        onAction: { _, _ in }
-                    )
-                    self.foremanAgentStore = store
+                guard self.bindForemanSidebarSessionIfNeeded(to: store),
+                      let session = store.sidebarSession else {
+                    return
                 }
 
                 // Notify monitor that Foreman is about to react, preventing spam loops
                 self.agentStateMonitor.notifyForemanReacted(terminalID: event.terminalID, state: event.interactionState)
 
-                let snapshotProvider: @MainActor () -> [TerminalSnapshot] = {
-                    var allSnapshots: [TerminalSnapshot] = []
-                    for controller in TerminalController.all {
-                        allSnapshots.append(contentsOf: controller.captureTerminalSnapshots())
-                    }
-                    return allSnapshots
-                }
-
                 if case .draftWaitingText = initialDecision {
                     do {
                         DebugLogger.log("[AppDelegate] drafting waitingText attention terminal=\(event.terminalID.prefix(8)) fingerprint='\(event.fingerprint)'")
-                        let draftedAttention = try await self.foremanAgent?.draftPendingAttention(
+                        let draftedAttention = try await session.draftPendingAttention(
                             for: event,
-                            observedContext: observedContext,
-                            captureSnapshots: snapshotProvider
+                            observedContext: observedContext
                         )
 
                         switch ForemanReactiveEventRouter.decisionAfterDraft(
@@ -417,10 +387,9 @@ class AppDelegate: NSObject,
 
                 }
 
-                await self.foremanAgent?.react(
+                await session.react(
                     to: event,
-                    observedContext: observedContext,
-                    captureSnapshots: snapshotProvider
+                    observedContext: observedContext
                 )
             }
         }
@@ -1364,13 +1333,16 @@ extension AppDelegate {
             }
         }
 
-        // Forward to agent if running
-        Task {
-            await foremanAgent?.receiveOutcome(report)
-        }
+        let owningStore = terminalController(for: report.terminalID)?.foremanSidebarStore
+
+        // Forward to the sidebar session that owns this terminal.
+        owningStore?.sidebarSession?.receiveOutcome(report)
 
         // Notify user of outcome change
-        foremanNotifier.observe(report: report)
+        foremanNotifier.observe(
+            report: report,
+            summaryOverride: owningStore?.rollupStatusText
+        )
 
         // Store in memory
         Task {
@@ -1495,8 +1467,57 @@ extension AppDelegate {
     }
 
     @MainActor
-    func startForemanAgent(goal: String, mode: AgentMode, store: ForemanSidebarStore) {
+    private func captureAllTerminalSnapshots() -> [TerminalSnapshot] {
+        var allSnapshots: [TerminalSnapshot] = []
+        for controller in TerminalController.all {
+            allSnapshots.append(contentsOf: controller.captureTerminalSnapshots())
+        }
+        return allSnapshots
+    }
+
+    @MainActor
+    private func sendForemanCommandToTerminal(terminalID: String, command: String) -> Bool {
+        guard let controller = terminalController(for: terminalID) else { return false }
+        let item = DispatchQueueItem(terminalID: terminalID, message: command)
+        guard dispatchQueueCoordinator.send(item, through: controller) else { return false }
+        registerTerminalOutcomeTracking(terminalID: terminalID, sentCommand: command)
+        return true
+    }
+
+    @MainActor
+    private func bindForemanSidebarSessionIfNeeded(to store: ForemanSidebarStore) -> Bool {
+        if store.sidebarSession != nil {
+            return true
+        }
+
         guard let foremanService else {
+            return false
+        }
+
+        let session = ForemanSidebarSession(
+            conversation: store.conversation,
+            foremanService: foremanService,
+            goalRuntime: foremanProjectGoalRuntime,
+            preferredTerminalID: { [weak store] in
+                store?.selectedTerminalID
+            },
+            captureSnapshots: { [weak self] in
+                self?.captureAllTerminalSnapshots() ?? []
+            },
+            captureObservedContext: { [weak self] in
+                self?.captureAIForemanObservedContext().context
+            },
+            onSendCommand: { [weak self] terminalID, command in
+                self?.sendForemanCommandToTerminal(terminalID: terminalID, command: command) ?? false
+            }
+        )
+        store.attachSidebarSession(session)
+        return true
+    }
+
+    @MainActor
+    func startForemanAgent(goal: String, mode: AgentMode, store: ForemanSidebarStore) {
+        guard store.sidebarSession != nil || bindForemanSidebarSessionIfNeeded(to: store) else {
             store.conversation.errorMessage = missingForemanAPIKeyMessage
             return
         }
@@ -1508,97 +1529,185 @@ extension AppDelegate {
         }
         FeatureGate.recordBasicAIUsage()
 
-        // Cancel any existing agent.
-        let previousAgent = foremanAgent
-        Task {
-            await previousAgent?.stop()
-        }
-
-        let conversation = store.conversation
-        let agent = ForemanAgent(
-            conversation: conversation,
-            foremanService: foremanService,
-            goalRuntime: foremanProjectGoalRuntime,
-            preferredTerminalID: store.selectedTerminalID,
-            onSendCommand: { [weak self] terminalID, command in
-                guard let self else { return false }
-                guard let controller = self.terminalController(for: terminalID) else { return false }
-                let item = DispatchQueueItem(terminalID: terminalID, message: command)
-                guard self.dispatchQueueCoordinator.send(item, through: controller) else { return false }
-                self.registerTerminalOutcomeTracking(terminalID: terminalID, sentCommand: command)
-                return true
-            },
-            onStatusChange: { status in
-                // Status is published through conversation
-            },
-            onAction: { action, thought in
-                // Action is added to conversation by agent
-            }
-        )
-
-        self.foremanAgent = agent
-        self.foremanAgentStore = store
-
-        Task {
-            await agent.start(
-                goal: goal,
-                mode: mode,
-                captureSnapshots: {
-                    var allSnapshots: [TerminalSnapshot] = []
-                    for controller in TerminalController.all {
-                        allSnapshots.append(contentsOf: controller.captureTerminalSnapshots())
-                    }
-                    return allSnapshots
-                },
-                captureObservedContext: { [weak self] in
-                    guard let self else { return nil }
-                    return self.captureAIForemanObservedContext().context
-                }
-            )
-        }
+        store.sidebarSession?.start(goal: goal, mode: mode)
     }
 
     @MainActor
     func sendChatMessage(_ text: String, store: ForemanSidebarStore) {
-        Task {
-            await foremanAgent?.receiveUserMessage(text)
+        if let command = ForemanProjectGoalCommand.parse(text) {
+            handleForemanGoalCommand(command, store: store)
+            return
+        }
+
+        guard store.sidebarSession != nil || bindForemanSidebarSessionIfNeeded(to: store) else {
+            store.conversation.errorMessage = missingForemanAPIKeyMessage
+            return
+        }
+
+        store.sidebarSession?.receiveUserMessage(text)
+    }
+
+    @MainActor
+    func dispatchForemanSidebarIntent(_ intent: ForemanSidebarIntent, store: ForemanSidebarStore) {
+        switch intent {
+        case .guideForeman(let message):
+            guard store.sidebarSession != nil || bindForemanSidebarSessionIfNeeded(to: store) else {
+                store.conversation.errorMessage = missingForemanAPIKeyMessage
+                return
+            }
+
+            store.conversation.errorMessage = nil
+            store.sidebarSession?.receiveUserMessage(message)
+
+        case .guideForemanForTerminal(let terminalID, let fingerprint, let message):
+            guard store.sidebarSession != nil || bindForemanSidebarSessionIfNeeded(to: store) else {
+                store.conversation.errorMessage = missingForemanAPIKeyMessage
+                return
+            }
+
+            let currentAttention = store.pendingAttentionByTerminalID[terminalID]
+            let currentWorkerSnapshot = store.workerSnapshotsByTerminalID[terminalID]
+            let matchesPendingAttention = currentAttention?.fingerprint == fingerprint
+            let matchesWorkerSnapshot = currentWorkerSnapshot?.attentionFingerprint == fingerprint
+
+            guard matchesPendingAttention || matchesWorkerSnapshot else {
+                store.errorMessage = currentAttention == nil && currentWorkerSnapshot == nil
+                    ? "This terminal target is no longer available."
+                    : "The terminal target changed before Foreman could review it."
+                return
+            }
+
+            store.conversation.errorMessage = nil
+            store.sidebarSession?.receiveUserMessage(
+                message,
+                preferredTerminalID: terminalID,
+                bypassAuthoritativeWorker: true
+            )
+
+        case .sendTerminalReply(let terminalID, let fingerprint, let message):
+            executePendingAttentionPayload(
+                terminalID: terminalID,
+                fingerprint: fingerprint,
+                payload: message,
+                store: store,
+                failureMessage: "Unable to send this reply."
+            )
+
+        case .sendTerminalCommand(let terminalID, let command):
+            guard sendForemanCommandToTerminal(terminalID: terminalID, command: command) else {
+                store.errorMessage = "Unable to send this command."
+                return
+            }
+
+            store.errorMessage = nil
+
+        case .sendPendingAttentionAction(let terminalID, let fingerprint, let payload):
+            executePendingAttentionPayload(
+                terminalID: terminalID,
+                fingerprint: fingerprint,
+                payload: payload,
+                store: store,
+                failureMessage: "Unable to send this action."
+            )
+
+        case .reopenCompletedGoal(let projectID):
+            updateForemanGoal(
+                for: projectID,
+                store: store,
+                status: .active,
+                evidenceSnapshot: "Reopened from the Foreman sidebar.",
+                message: "Reopened the saved project goal."
+            )
+
+        case .extendGoal(let projectID, let text):
+            setForemanGoal(
+                for: projectID,
+                store: store,
+                goalText: text,
+                message: "Extended the saved project goal: \(text)"
+            )
+
+        case .clearGoal(let projectID):
+            clearForemanGoal(for: projectID, store: store)
         }
     }
 
     @MainActor
     func stopForemanAgent(store: ForemanSidebarStore) {
-        Task { [weak self] in
-            await self?.foremanAgent?.stop()
-            self?.foremanAgent = nil
-            self?.foremanAgentStore = nil
-        }
+        store.sidebarSession?.stop()
     }
 
     @MainActor
-    func approveForemanAction() {
+    private func handleForemanGoalCommand(_ command: ForemanProjectGoalCommand, store: ForemanSidebarStore) {
         Task { [weak self] in
             guard let self else { return }
-            await self.foremanAgent?.approvePendingAction(
-                captureSnapshots: {
-                    var allSnapshots: [TerminalSnapshot] = []
-                    for controller in TerminalController.all {
-                        allSnapshots.append(contentsOf: controller.captureTerminalSnapshots())
-                    }
-                    return allSnapshots
-                },
-                captureObservedContext: { [weak self] in
-                    guard let self else { return nil }
-                    return self.captureAIForemanObservedContext().context
+
+            let resolvedProjectID = await MainActor.run(resultType: String?.self) {
+                self.resolveForemanProjectID(for: store)
+            }
+            guard let projectID = resolvedProjectID else {
+                await MainActor.run {
+                    store.conversation.errorMessage = "Foreman could not resolve a project for that goal command."
                 }
-            )
+                return
+            }
+
+            let message: String
+            switch command {
+            case .help:
+                message = """
+                Goal commands:
+                /goal reopen
+                /goal complete
+                /goal clear
+                /goal set <new goal>
+                """
+
+            case .complete:
+                await foremanProjectGoalRuntime.setStatus(
+                    .completed,
+                    for: projectID,
+                    evidenceSnapshot: "Marked complete from the Foreman sidebar."
+                )
+                message = "Marked the saved project goal complete."
+
+            case .reopen:
+                await foremanProjectGoalRuntime.setStatus(
+                    .active,
+                    for: projectID,
+                    evidenceSnapshot: "Reopened from the Foreman sidebar."
+                )
+                message = "Reopened the saved project goal."
+
+            case .clear:
+                await foremanProjectGoalRuntime.clearGoal(for: projectID)
+                message = "Cleared the saved project goal."
+
+            case .set(let newGoal):
+                await foremanProjectGoalRuntime.saveGoal(newGoal, for: projectID)
+                message = "Saved a new project goal: \(newGoal)"
+            }
+
+            let updatedGoal = await foremanProjectGoalRuntime.goal(for: projectID)
+            await MainActor.run {
+                store.conversation.errorMessage = nil
+                store.runtimeState.setActiveProjectGoal(updatedGoal)
+                store.conversation.addMessage(role: .agent, content: message)
+                if updatedGoal == nil {
+                    store.conversation.setStatus(.idle)
+                }
+            }
         }
     }
 
     @MainActor
-    func skipForemanAction() {
-        Task { [weak self] in
-            await self?.foremanAgent?.skipPendingAction()
-        }
+    func approveForemanAction(store: ForemanSidebarStore) {
+        store.sidebarSession?.approvePendingAction()
+    }
+
+    @MainActor
+    func skipForemanAction(store: ForemanSidebarStore) {
+        store.sidebarSession?.skipPendingAction()
     }
 
     @MainActor
@@ -1615,40 +1724,100 @@ extension AppDelegate {
         action: PendingAgentAction,
         store: ForemanSidebarStore
     ) {
-        store.markPendingAttentionSending(
+        executePendingAttentionPayload(
             terminalID: attention.terminalID,
-            fingerprint: attention.fingerprint
+            fingerprint: attention.fingerprint,
+            payload: action.payload,
+            store: store,
+            failureMessage: "Unable to send this action."
         )
+    }
 
-        guard let controller = terminalController(for: attention.terminalID) else {
-            store.markPendingAttentionFailed(
-                terminalID: attention.terminalID,
-                fingerprint: attention.fingerprint,
-                errorMessage: "This terminal is no longer available."
-            )
+    @MainActor
+    private func executePendingAttentionPayload(
+        terminalID: String,
+        fingerprint: String,
+        payload: String,
+        store: ForemanSidebarStore,
+        failureMessage: String
+    ) {
+        let currentAttention = store.pendingAttentionByTerminalID[terminalID]
+        let currentWorkerSnapshot = store.workerSnapshotsByTerminalID[terminalID]
+        let matchesPendingAttention = currentAttention?.fingerprint == fingerprint
+        let matchesWorkerSnapshot = currentWorkerSnapshot?.attentionFingerprint == fingerprint
+
+        guard matchesPendingAttention || matchesWorkerSnapshot else {
+            store.errorMessage = currentAttention == nil && currentWorkerSnapshot == nil
+                ? "This terminal target is no longer available."
+                : "The terminal target changed before the message was sent."
             return
         }
 
-        let item = DispatchQueueItem(terminalID: attention.terminalID, message: action.payload)
+        if matchesPendingAttention {
+            store.markPendingAttentionSending(
+                terminalID: terminalID,
+                fingerprint: fingerprint
+            )
+        }
+
+        guard let controller = terminalController(for: terminalID) else {
+            if matchesPendingAttention {
+                store.markPendingAttentionFailed(
+                    terminalID: terminalID,
+                    fingerprint: fingerprint,
+                    errorMessage: "This terminal is no longer available."
+                )
+            } else {
+                store.errorMessage = "This terminal is no longer available."
+            }
+            return
+        }
+
+        let item = DispatchQueueItem(terminalID: terminalID, message: payload)
         guard dispatchQueueCoordinator.send(item, through: controller) else {
-            store.markPendingAttentionFailed(
-                terminalID: attention.terminalID,
-                fingerprint: attention.fingerprint,
-                errorMessage: "Unable to send this action."
-            )
+            if matchesPendingAttention {
+                store.markPendingAttentionFailed(
+                    terminalID: terminalID,
+                    fingerprint: fingerprint,
+                    errorMessage: failureMessage
+                )
+            } else {
+                store.errorMessage = failureMessage
+            }
             return
         }
 
-        registerTerminalOutcomeTracking(terminalID: attention.terminalID, sentCommand: action.payload)
+        registerTerminalOutcomeTracking(terminalID: terminalID, sentCommand: payload)
         agentStateMonitor.resolve(
-            terminalID: attention.terminalID,
-            fingerprint: attention.fingerprint
+            terminalID: terminalID,
+            fingerprint: fingerprint
         )
-        store.resolvePendingAttention(
-            terminalID: attention.terminalID,
-            fingerprint: attention.fingerprint
-        )
+        if matchesPendingAttention {
+            store.resolvePendingAttention(
+                terminalID: terminalID,
+                fingerprint: fingerprint
+            )
+        }
+        store.errorMessage = nil
         refreshAIForemanSidebar()
+    }
+
+    @MainActor
+    func handleReactiveInitialDecision(
+        _ decision: ForemanReactiveEventRouter.InitialDecision,
+        store: ForemanSidebarStore
+    ) -> Bool {
+        switch decision {
+        case .showPendingAttention(let attention):
+            store.upsertPendingAttention(attention)
+            return true
+        case .autoDispatchPendingAttention(let attention, let action):
+            store.upsertPendingAttention(attention)
+            store.executePendingAttentionAction(attention, action: action)
+            return true
+        case .draftWaitingText, .react:
+            return false
+        }
     }
 
     @MainActor
@@ -1846,6 +2015,7 @@ extension AppDelegate {
 
         aiForemanCurrentSnapshots = allSnapshots
         aiForemanCurrentUnderstandings = understandings
+        aiForemanCurrentWorkerSnapshots = observedContext.context.workerSnapshots
         aiForemanPreviousUnderstandings = understandingsByTerminalID
         aiForemanPreviousSnapshots = Dictionary(
             uniqueKeysWithValues: allSnapshots.map { ($0.terminalID, $0) }
@@ -1853,10 +2023,7 @@ extension AppDelegate {
 
         return (
             snapshotsByController: snapshotsByController,
-            context: ForemanObservedTerminalContext(
-                terminals: allSnapshots,
-                understandings: understandings
-            ),
+            context: observedContext.context,
             understandingsByTerminalID: understandingsByTerminalID
         )
     }
@@ -1874,6 +2041,103 @@ extension AppDelegate {
                 summariesByTerminalID: currentAISummaries(for: snapshots),
                 understandingsByTerminalID: observation.understandingsByTerminalID
             )
+            updateProposal(
+                for: controller,
+                snapshots: snapshots,
+                understandingsByTerminalID: observation.understandingsByTerminalID
+            )
+        }
+    }
+
+    @MainActor
+    private func updateProposal(
+        for controller: TerminalController,
+        snapshots: [TerminalSnapshot],
+        understandingsByTerminalID: [String: TerminalUnderstanding]
+    ) {
+        // v1: single-terminal — use the focused terminal, else the first.
+        guard let snapshot = snapshots.first(where: { $0.isFocused }) ?? snapshots.first,
+              let understanding = understandingsByTerminalID[snapshot.terminalID] else {
+            return
+        }
+
+        guard ForemanProposer.needsAttention(understanding.agentInteractionState) else {
+            controller.proposalStore.clear(terminalID: snapshot.terminalID)
+            return
+        }
+
+        let summarize = makeProposalSummarizer()
+        Task { @MainActor in
+            guard let proposal = await ForemanProposer(summarize: summarize)
+                .makeProposal(understanding: understanding, snapshot: snapshot) else {
+                controller.proposalStore.clear(terminalID: snapshot.terminalID)
+                return
+            }
+            let isNew = controller.proposalStore.current?.id != proposal.id
+            bindProposalCallbacks(for: controller)
+            controller.proposalStore.present(proposal)
+            if isNew {
+                ForemanNotifier.shared.notifyProposal(
+                    terminalID: proposal.terminalID,
+                    summary: proposal.summary
+                )
+            }
+        }
+    }
+
+    @MainActor
+    private func bindProposalCallbacks(for controller: TerminalController) {
+        guard controller.proposalStore.onApprove == nil else { return }
+        controller.proposalStore.onApprove = { [weak self, weak controller] proposal, payload in
+            guard let self, let controller else { return }
+            self.sendProposalReply(
+                terminalID: proposal.terminalID,
+                fingerprint: proposal.fingerprint,
+                payload: payload,
+                store: controller.proposalStore
+            )
+        }
+        controller.proposalStore.onReject = { proposal in
+            DebugLogger.log("[Foreman] proposal rejected for \(proposal.terminalID)")
+        }
+    }
+
+    @MainActor
+    func sendProposalReply(
+        terminalID: String,
+        fingerprint: String,
+        payload: String,
+        store: ProposalStore
+    ) {
+        guard let controller = terminalController(for: terminalID) else {
+            store.errorMessage = "This terminal is no longer available."
+            return
+        }
+
+        let item = DispatchQueueItem(terminalID: terminalID, message: payload)
+        guard dispatchQueueCoordinator.send(item, through: controller) else {
+            store.errorMessage = "Couldn't send to the terminal. Try again."
+            return
+        }
+
+        registerTerminalOutcomeTracking(terminalID: terminalID, sentCommand: payload)
+        agentStateMonitor.resolve(terminalID: terminalID, fingerprint: fingerprint)
+        store.errorMessage = nil
+    }
+
+    /// An async summary source backed by the configured LLM, or one that always
+    /// returns nil when no key is set (the card then uses the heuristic summary).
+    @MainActor
+    private func makeProposalSummarizer() -> (TerminalSnapshot) async -> String? {
+        guard let foremanService else {
+            return { _ in nil }
+        }
+        return { snapshot in
+            do {
+                return try await foremanService.summarize(snapshot: snapshot).summary
+            } catch {
+                return nil
+            }
         }
     }
 
@@ -1888,6 +2152,92 @@ extension AppDelegate {
         TerminalController.all.first(where: { controller in
             controller.surfaceTree.contains(where: { $0.id.uuidString == terminalID })
         })
+    }
+
+    @MainActor
+    private func resolveForemanProjectID(for store: ForemanSidebarStore) -> String? {
+        if let projectID = store.runtimeState.activeProjectGoal?.projectID {
+            return projectID
+        }
+
+        let snapshots = TerminalController.all.flatMap { $0.captureTerminalSnapshots() }
+        if let selectedTerminalID = store.selectedTerminalID {
+            let snapshot = snapshots.first { $0.terminalID == selectedTerminalID }
+            return ForemanProjectPathResolver.projectPath(from: snapshot?.cwd)
+        }
+
+        if let focusedSnapshot = snapshots.first(where: \.isFocused) {
+            return ForemanProjectPathResolver.projectPath(from: focusedSnapshot.cwd)
+        }
+
+        return snapshots.lazy.compactMap { ForemanProjectPathResolver.projectPath(from: $0.cwd) }.first
+    }
+
+    @MainActor
+    private func updateForemanGoal(
+        for projectID: String,
+        store: ForemanSidebarStore,
+        status: ForemanProjectGoalStatus,
+        evidenceSnapshot: String,
+        message: String
+    ) {
+        Task { [weak self] in
+            guard let self else { return }
+
+            await foremanProjectGoalRuntime.setStatus(
+                status,
+                for: projectID,
+                evidenceSnapshot: evidenceSnapshot
+            )
+            let updatedGoal = await foremanProjectGoalRuntime.goal(for: projectID)
+            await MainActor.run {
+                self.applyUpdatedForemanGoal(updatedGoal, message: message, store: store)
+            }
+        }
+    }
+
+    @MainActor
+    private func setForemanGoal(
+        for projectID: String,
+        store: ForemanSidebarStore,
+        goalText: String,
+        message: String
+    ) {
+        Task { [weak self] in
+            guard let self else { return }
+
+            await foremanProjectGoalRuntime.saveGoal(goalText, for: projectID)
+            let updatedGoal = await foremanProjectGoalRuntime.goal(for: projectID)
+            await MainActor.run {
+                self.applyUpdatedForemanGoal(updatedGoal, message: message, store: store)
+            }
+        }
+    }
+
+    @MainActor
+    private func clearForemanGoal(for projectID: String, store: ForemanSidebarStore) {
+        Task { [weak self] in
+            guard let self else { return }
+
+            await foremanProjectGoalRuntime.clearGoal(for: projectID)
+            await MainActor.run {
+                self.applyUpdatedForemanGoal(nil, message: "Cleared the saved project goal.", store: store)
+            }
+        }
+    }
+
+    @MainActor
+    private func applyUpdatedForemanGoal(
+        _ updatedGoal: ForemanProjectGoal?,
+        message: String,
+        store: ForemanSidebarStore
+    ) {
+        store.conversation.errorMessage = nil
+        store.runtimeState.setActiveProjectGoal(updatedGoal)
+        store.conversation.addMessage(role: .agent, content: message)
+        if updatedGoal == nil {
+            store.conversation.setStatus(.idle)
+        }
     }
 
     @MainActor
@@ -1913,6 +2263,13 @@ extension AppDelegate {
         UserDefaults.ghostty.synchronize()
 #endif
     }
+
+#if DEBUG
+    @MainActor
+    func setForemanProjectGoalRuntimeForTests(_ runtime: ForemanProjectGoalRuntime) {
+        foremanProjectGoalRuntime = runtime
+    }
+#endif
 
     @MainActor
     func launchManagedAgent(_ request: ManagedAgentLaunchRequest) -> String? {

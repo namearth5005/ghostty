@@ -104,6 +104,88 @@ struct ForemanObservedContextBuilderTests {
     }
 
     @Test
+    func kimiPlanningQuestionBuildIncludesWorkerSnapshot() {
+        let snapshot = kimiInputSnapshot(
+            terminalID: "kimi-planning",
+            title: "Kimi Code",
+            isFocused: true
+        )
+        let records = [
+            KimiWireRecord(
+                timestamp: 1,
+                message: KimiWireMessage(
+                    type: "QuestionRequest",
+                    payload: KimiWirePayload(
+                        plan_mode: true,
+                        id: "req-12",
+                        questions: [
+                            QuestionItem(
+                                question: "Which direction should I take?",
+                                header: nil,
+                                options: [
+                                    .init(label: "Keep current API", description: nil),
+                                    .init(label: "Allow breaking change", description: nil),
+                                ],
+                                multi_select: nil
+                            ),
+                        ]
+                    )
+                )
+            ),
+        ]
+
+        let result = builder.build(
+            snapshots: [snapshot],
+            kimiWireRecordsByTerminalID: [snapshot.terminalID: records]
+        )
+        let workerSnapshot = result.context.workerSnapshots[snapshot.terminalID]
+
+        #expect(workerSnapshot?.agent.identity == .kimi)
+        #expect(workerSnapshot?.request?.id == "req-12")
+        #expect(workerSnapshot?.state.attention == .choiceRequired)
+        #expect(workerSnapshot?.state.runtimeFlags == [.planning])
+        #expect(workerSnapshot?.workerSessionID == "kimi-\(snapshot.terminalID)")
+    }
+
+    @Test
+    func kimiRunningWireBuildKeepsAuthoritativeRunningInteractionState() {
+        let snapshot = kimiInputSnapshot(
+            terminalID: "kimi-running",
+            title: "Kimi Code",
+            isFocused: true
+        )
+        let records = [
+            KimiWireRecord(
+                timestamp: 1,
+                message: KimiWireMessage(
+                    type: "StepBegin",
+                    payload: KimiWirePayload()
+                )
+            ),
+        ]
+
+        let result = builder.build(
+            snapshots: [snapshot],
+            kimiWireRecordsByTerminalID: [snapshot.terminalID: records]
+        )
+        let understanding = try! #require(result.context.understandings.first)
+        let workerSnapshot = try! #require(result.context.workerSnapshots[snapshot.terminalID])
+
+        #expect(workerSnapshot.state.lifecycle == .running)
+        #expect(workerSnapshot.state.attention == .none)
+        #expect(understanding.agentIdentity == .kimi)
+        #expect(understanding.agentInteractionState == .running)
+        #expect(
+            understanding.agentInteractionContext ==
+            .running(
+                stepDescription: "Kimi is actively working.",
+                sessionID: "kimi-\(snapshot.terminalID)",
+                revision: 0
+            )
+        )
+    }
+
+    @Test
     func codexPromptParitySurvivesObservedContextBuild() {
         let visibleText = """
         • Hello. What do you want to work on in ghostty?

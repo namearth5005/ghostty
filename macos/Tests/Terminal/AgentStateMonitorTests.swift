@@ -486,6 +486,59 @@ struct AgentStateMonitorTests {
     }
 
     @Test
+    func changedApprovalRequestIDFiresAgainEvenWhenPromptIsUnchanged() {
+        let monitor = AgentStateMonitor()
+        var capturedEvents: [AgentNeedsAttentionEvent] = []
+        monitor.onEvent = { event in
+            capturedEvents.append(event)
+        }
+
+        monitor.observe(understandings: [
+            TerminalUnderstanding.preview(
+                terminalID: "term-1",
+                state: .waiting,
+                shortExplanation: "Codex is waiting for approval.",
+                lastMeaningfulEvent: "Codex wants to run the suggested command.",
+                importantDetails: ["Codex wants to run the suggested command."],
+                suggestedNextActions: [],
+                agentIdentity: .codex,
+                agentInteractionState: .waitingApproval,
+                agentInteractionContext: .waitingApproval(description: "Codex wants to run the suggested command.", tool: "Shell"),
+                workerSnapshot: makeWorkerSnapshot(
+                    terminalID: "term-1",
+                    sessionID: "codex-session-41",
+                    revision: 41,
+                    requestID: "req-41"
+                )
+            )
+        ])
+        monitor.observe(understandings: [
+            TerminalUnderstanding.preview(
+                terminalID: "term-1",
+                state: .waiting,
+                shortExplanation: "Codex is waiting for approval.",
+                lastMeaningfulEvent: "Codex wants to run the suggested command.",
+                importantDetails: ["Codex wants to run the suggested command."],
+                suggestedNextActions: [],
+                agentIdentity: .codex,
+                agentInteractionState: .waitingApproval,
+                agentInteractionContext: .waitingApproval(description: "Codex wants to run the suggested command.", tool: "Shell"),
+                workerSnapshot: makeWorkerSnapshot(
+                    terminalID: "term-1",
+                    sessionID: "codex-session-41",
+                    revision: 42,
+                    requestID: "req-42"
+                )
+            )
+        ])
+
+        #expect(capturedEvents.count == 2)
+        #expect(capturedEvents[0].deltaText == "Codex wants to run the suggested command.")
+        #expect(capturedEvents[1].deltaText == "Codex wants to run the suggested command.")
+        #expect(capturedEvents[0].fingerprint != capturedEvents[1].fingerprint)
+    }
+
+    @Test
     func sameApprovalFingerprintFiresIndependentlyForDifferentTerminals() {
         let monitor = AgentStateMonitor()
         var capturedEvents: [AgentNeedsAttentionEvent] = []
@@ -1287,6 +1340,38 @@ private func makeUnderstanding(
         suggestedNextActions: [],
         agentIdentity: identity,
         agentInteractionState: interactionState
+    )
+}
+
+private func makeWorkerSnapshot(
+    terminalID: String,
+    sessionID: String,
+    revision: Int,
+    requestID: String
+) -> TerminalWorkerSnapshot {
+    TerminalWorkerSnapshot(
+        schemaVersion: 1,
+        terminalID: terminalID,
+        workerSessionID: sessionID,
+        revision: revision,
+        observedAt: Date(timeIntervalSince1970: 1_748_333_333),
+        ttlMilliseconds: 15_000,
+        workerGoal: "run the suggested command",
+        agent: .init(identity: .codex),
+        state: .init(
+            lifecycle: .blocked,
+            attention: .approvalRequired,
+            summary: "Codex is waiting for approval.",
+            details: ["Shell"],
+            runtimeFlags: []
+        ),
+        request: .init(
+            id: requestID,
+            kind: .approval,
+            prompt: "Codex wants to run the suggested command.",
+            options: [.init(id: "shell", label: "Shell", recommended: false)]
+        ),
+        suggestions: []
     )
 }
 

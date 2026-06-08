@@ -107,23 +107,25 @@ struct AnthropicClient: ForemanLLMClient, Sendable {
     }
 
     func agentStep(
-        conversation: ForemanConversation,
+        narrationContext: ForemanNarrationContext,
         terminals: [TerminalSnapshot],
         understandings: [TerminalUnderstanding],
+        workerSnapshots: [String: TerminalWorkerSnapshot],
         overview: TerminalOverview,
         lastOutcome: TerminalOutcomeReport?
     ) async throws -> AgentStepResponse {
-        let goal = await MainActor.run { conversation.effectiveGoal ?? "" }
-        let mode = await MainActor.run { conversation.mode.rawValue }
-        let iterationCount = await MainActor.run { conversation.iterationCount }
-        let messages = await MainActor.run { conversation.messages }
-        let hiddenContext = await MainActor.run { conversation.hiddenContext }
+        let goal = narrationContext.goal ?? ""
+        let mode = narrationContext.mode.rawValue
+        let iterationCount = narrationContext.iterationCount
+        let messages = narrationContext.messages
+        let hiddenContext = narrationContext.hiddenContext
+        let stepPolicy = narrationContext.stepPolicy
         let latestUserMessage = messages.last(where: { $0.role == .user })?.content ?? goal
         let activeTurn = latestUserMessage.isEmpty ? hiddenContext.last ?? "" : latestUserMessage
 
         let request = Request(
             model: plannerModel,
-            system: Self.makeAgentStepInstructions(),
+            system: Self.makeAgentStepInstructions(stepPolicy: stepPolicy),
             maxTokens: 1200,
             messages: [.user(Self.agentStepPrompt(
                 goal: goal,
@@ -133,7 +135,9 @@ struct AnthropicClient: ForemanLLMClient, Sendable {
                 iterationCount: iterationCount,
                 messages: messages,
                 hiddenContext: hiddenContext,
+                stepPolicy: stepPolicy,
                 understandings: understandings,
+                workerSnapshots: workerSnapshots,
                 overview: overview,
                 terminals: terminals,
                 lastOutcome: lastOutcome,
@@ -146,16 +150,17 @@ struct AnthropicClient: ForemanLLMClient, Sendable {
     }
 
     func draftAgentReply(
-        conversation: ForemanConversation,
+        narrationContext: ForemanNarrationContext,
         event: AgentNeedsAttentionEvent,
         terminals: [TerminalSnapshot],
         understandings: [TerminalUnderstanding],
+        workerSnapshots: [String: TerminalWorkerSnapshot],
         overview: TerminalOverview,
         lastOutcome: TerminalOutcomeReport?
     ) async throws -> AgentReplyDraftResponse {
-        let goal = await MainActor.run { conversation.effectiveGoal ?? "" }
-        let messages = await MainActor.run { conversation.messages }
-        let hiddenContext = await MainActor.run { conversation.hiddenContext }
+        let goal = narrationContext.goal ?? ""
+        let messages = narrationContext.messages
+        let hiddenContext = narrationContext.hiddenContext
 
         let request = Request(
             model: plannerModel,
@@ -167,6 +172,7 @@ struct AnthropicClient: ForemanLLMClient, Sendable {
                 hiddenContext: hiddenContext,
                 event: event,
                 understandings: understandings,
+                workerSnapshots: workerSnapshots,
                 overview: overview,
                 terminals: terminals,
                 lastOutcome: lastOutcome,
@@ -179,17 +185,16 @@ struct AnthropicClient: ForemanLLMClient, Sendable {
     }
 
     func agentStep(
-        conversation: ForemanConversation,
+        narrationContext: ForemanNarrationContext,
         terminals: [TerminalSnapshot],
         lastOutcome: TerminalOutcomeReport?
     ) async throws -> AgentStepResponse {
-        let overview = await MainActor.run { conversation.lastOverview } ?? Self.fallbackOverview(for: terminals)
-        let understandings = await MainActor.run { conversation.lastUnderstandings }
         return try await agentStep(
-            conversation: conversation,
+            narrationContext: narrationContext,
             terminals: terminals,
-            understandings: understandings,
-            overview: overview,
+            understandings: [],
+            workerSnapshots: [:],
+            overview: Self.fallbackOverview(for: terminals),
             lastOutcome: lastOutcome
         )
     }
@@ -220,25 +225,46 @@ extension AnthropicClient {
     Return JSON only. Only draft messages for terminals that need a next step.
     """
 
-    private static func makeAgentStepInstructions() -> String {
-        """
-        You are an autonomous terminal foreman. You observe terminal state, think step by step, and choose exactly ONE action.
+    private static func makeAgentStepInstructions(stepPolicy: ForemanStepPolicy) -> String {
+        let availableActions: String
+        let stepPolicyRule: String
+        let sendCommandRules: String
+
+        switch stepPolicy {
+        case .standard:
+            availableActions = "respond, send_command, ask_user, declare_complete, declare_stuck."
+            stepPolicyRule = ""
+            sendCommandRules = """
+            For send_command, terminal_id must exactly match one of the terminal_id values from Terminal snapshots.
+            When sending commands, prefer non-interactive flags (e.g., -y, --no-pager, --batch-mode) to avoid hanging.
+            IMPORTANT: Some terminals are running AI agents (Kimi, Claude Code, Codex), not shell prompts.
+            When an AI agent is waiting for text input (waitingText), send_command sends a raw message to the agent — NOT a shell command.
+            Do NOT wrap agent messages in printf, echo, or any shell syntax. Send the raw text only.
+            Do NOT echo text you see in the terminal output back to the agent.
+            When an AI agent is waiting for text input, read the terminal history only to understand the worker's immediate request, current options, and what has already been said.
+            """
+        case .guidanceOnly:
+            availableActions = "respond, ask_user, declare_complete, declare_stuck."
+            stepPolicyRule = "Guidance-only turn: do not use send_command."
+            sendCommandRules = ""
+        }
+
+        return """
+        You are a terminal foreman narrator and router. You do not replace an active terminal-local worker's plan.
         Return JSON only. Do not wrap the JSON in markdown code blocks.
-        Available action types (use exact snake_case strings): respond, send_command, ask_user, declare_complete, declare_stuck.
+        Available action types (use exact snake_case strings): \(availableActions)
         Treat the latest user message as the active turn. Earlier goal text is session context only and may be superseded by a follow-up.
         Use structured terminal understanding as your primary context. Use raw terminal snapshots only as supporting evidence.
+        If a terminal-local worker already supplied a structured next-step suggestion, do not invent a competing suggestion.
+        If a structured worker snapshot is waiting for direction but provides no suggested payload, do not invent one. Ask the user or give project-level guidance instead.
+        Prefer summarizing progress, asking the user to resolve ambiguity, or giving project-level guidance.
         Treat Active turn as the current task. If Active turn is a reactive terminal event, handle that event as the current task.
         Use respond for plain conversational replies that do not require terminal actions or a blocking follow-up.
         Use ask_user only when you genuinely need information from the user before you can continue a task.
-        For send_command, terminal_id must exactly match one of the terminal_id values from Terminal snapshots.
-        When sending commands, prefer non-interactive flags (e.g., -y, --no-pager, --batch-mode) to avoid hanging.
-        IMPORTANT: Some terminals are running AI agents (Kimi, Claude Code, Codex), not shell prompts.
-        When an AI agent is waiting for text input (waitingText), send_command sends a raw message to the agent — NOT a shell command.
-        Do NOT wrap agent messages in printf, echo, or any shell syntax. Send the raw text only.
-        Do NOT echo text you see in the terminal output back to the agent.
-        When an AI agent is waiting for text input, read the full terminal output to understand the conversation history and infer the user's goal.
-        If the context is clear from the terminal history, generate an appropriate response directly.
-        Only ask the user if the terminal history does not provide enough context to determine what to send next.
+        \(stepPolicyRule)
+        \(sendCommandRules)
+        Do not infer or replace the user's broader goal from terminal history alone.
+        If a structured worker snapshot does not include a sendable payload, ask the user or give project-level guidance instead of drafting a worker-local reply.
         """
     }
 
@@ -246,6 +272,8 @@ extension AnthropicClient {
     You draft the next interactive reply for a human supervising AI agent terminals.
     Return JSON only. Do not wrap the JSON in markdown code blocks.
     Choose exactly one suggestion type: reply_to_agent, ask_human, or no_action.
+    If a structured worker snapshot already includes a matching suggested reply or choice, follow that suggestion instead of inventing a competing one.
+    If a structured worker snapshot asks for a reply or choice but provides no suggested payload, use ask_human instead of inventing one.
     Use reply_to_agent when terminal history gives enough context to send a useful raw message to the AI agent.
     Use ask_human when the AI agent needs a real goal or choice that is absent from terminal history.
     Use no_action only when the waiting text is duplicate, cosmetic, or not actionable.
@@ -254,7 +282,7 @@ extension AnthropicClient {
     """
 
     private static func summaryPrompt(for snapshot: TerminalSnapshot, using encoder: JSONEncoder) -> String {
-        """
+        return """
         Return one JSON object with this exact shape:
         {
           "terminal_id": "string",
@@ -275,7 +303,7 @@ extension AnthropicClient {
         summaries: [TerminalSummary],
         using encoder: JSONEncoder
     ) -> String {
-        """
+        return """
         Return one JSON object with this exact shape:
         {
           "plan_summary": "string",
@@ -304,17 +332,18 @@ extension AnthropicClient {
         iterationCount: Int,
         messages: [ConversationMessage],
         hiddenContext: [String],
+        stepPolicy: ForemanStepPolicy,
         understandings: [TerminalUnderstanding],
+        workerSnapshots: [String: TerminalWorkerSnapshot],
         overview: TerminalOverview,
         terminals: [TerminalSnapshot],
         lastOutcome: TerminalOutcomeReport?,
         using encoder: JSONEncoder
     ) -> String {
-        """
-        Return one JSON object with this exact shape:
-        {
-          "thought": "string",
-          "action": {
+        let actionSchema: String
+        switch stepPolicy {
+        case .standard:
+            actionSchema = """
             "type": "respond|send_command|ask_user|declare_complete|declare_stuck",
             "message": "string (for respond)",
             "terminal_id": "string (for send_command)",
@@ -323,6 +352,23 @@ extension AnthropicClient {
             "question": "string (for ask_user)",
             "summary": "string (for declare_complete)",
             "reason_stuck": "string (for declare_stuck)"
+            """
+        case .guidanceOnly:
+            actionSchema = """
+            "type": "respond|ask_user|declare_complete|declare_stuck",
+            "message": "string (for respond)",
+            "question": "string (for ask_user)",
+            "summary": "string (for declare_complete)",
+            "reason_stuck": "string (for declare_stuck)"
+            """
+        }
+
+        return """
+        Return one JSON object with this exact shape:
+        {
+          "thought": "string",
+          "action": {
+            \(actionSchema)
           }
         }
 
@@ -345,6 +391,9 @@ extension AnthropicClient {
         Structured terminal understandings:
         \(encode(understandings, using: encoder))
 
+        Structured worker snapshots:
+        \(encode(workerSnapshots, using: encoder))
+
         Terminal snapshots:
         \(encode(terminals, using: encoder))
 
@@ -359,6 +408,7 @@ extension AnthropicClient {
         hiddenContext: [String],
         event: AgentNeedsAttentionEvent,
         understandings: [TerminalUnderstanding],
+        workerSnapshots: [String: TerminalWorkerSnapshot],
         overview: TerminalOverview,
         terminals: [TerminalSnapshot],
         lastOutcome: TerminalOutcomeReport?,
@@ -393,6 +443,9 @@ extension AnthropicClient {
 
         Structured terminal understandings:
         \(encode(understandings, using: encoder))
+
+        Structured worker snapshots:
+        \(encode(workerSnapshots, using: encoder))
 
         Terminal snapshots:
         \(encode(terminals, using: encoder))
