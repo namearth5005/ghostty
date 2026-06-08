@@ -2041,6 +2041,55 @@ extension AppDelegate {
                 summariesByTerminalID: currentAISummaries(for: snapshots),
                 understandingsByTerminalID: observation.understandingsByTerminalID
             )
+            updateProposal(
+                for: controller,
+                snapshots: snapshots,
+                understandingsByTerminalID: observation.understandingsByTerminalID
+            )
+        }
+    }
+
+    @MainActor
+    private func updateProposal(
+        for controller: TerminalController,
+        snapshots: [TerminalSnapshot],
+        understandingsByTerminalID: [String: TerminalUnderstanding]
+    ) {
+        // v1: single-terminal — use the focused terminal, else the first.
+        guard let snapshot = snapshots.first(where: { $0.isFocused }) ?? snapshots.first,
+              let understanding = understandingsByTerminalID[snapshot.terminalID] else {
+            return
+        }
+
+        guard ForemanProposer.needsAttention(understanding.agentInteractionState) else {
+            controller.proposalStore.clear(terminalID: snapshot.terminalID)
+            return
+        }
+
+        let summarize = makeProposalSummarizer()
+        Task { @MainActor in
+            guard let proposal = await ForemanProposer(summarize: summarize)
+                .makeProposal(understanding: understanding, snapshot: snapshot) else {
+                controller.proposalStore.clear(terminalID: snapshot.terminalID)
+                return
+            }
+            controller.proposalStore.present(proposal)
+        }
+    }
+
+    /// An async summary source backed by the configured LLM, or one that always
+    /// returns nil when no key is set (the card then uses the heuristic summary).
+    @MainActor
+    private func makeProposalSummarizer() -> (TerminalSnapshot) async -> String? {
+        guard let foremanService else {
+            return { _ in nil }
+        }
+        return { snapshot in
+            do {
+                return try await foremanService.summarize(snapshot: snapshot).summary
+            } catch {
+                return nil
+            }
         }
     }
 

@@ -55,6 +55,7 @@ class BaseTerminalController: NSWindowController,
     @Published private(set) var bell: Bool = false
 
     let foremanSidebarStore = ForemanSidebarStore()
+    let proposalStore = ProposalStore()
     var supportsForemanSidebar: Bool { true }
 
     /// Whether the terminal surface should focus when the mouse is over it.
